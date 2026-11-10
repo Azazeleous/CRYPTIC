@@ -1,0 +1,19 @@
+{
+  "suite_id": "CRYPTIC-PQ-2026-01",
+  "status": "adopted-design-provider-not-yet-integrated",
+  "key_encapsulation": "ML-KEM-768",
+  "primary_signature": "ML-DSA-65",
+  "optional_signature": "SLH-DSA",
+  "key_derivation": "HKDF-SHA-256",
+  "authenticated_encryption": "ChaCha20-Poly1305",
+  "content_digest": "BLAKE2b-256",
+  "requirements": {
+    "vetted_provider_required": true,
+    "official_known_answer_tests_required": true,
+    "per_lane_identity_required": true,
+    "authenticated_kem_key_binding_required": true,
+    "unique_aead_nonce_per_key_required": true,
+    "transcript_bound_key_derivation_required": true,
+    "private_material_in_repository_forbidden": true
+  }
+}
