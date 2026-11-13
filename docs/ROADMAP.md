@@ -43,4 +43,22 @@
 - Scoped network, BLE, and home-automation bridges.
 - Per-device policy, consent, revocation, and audit.
 
+## Phase 7 — Four-lane mining
+- Reference SHA-256 candidate miner and independent verifier.
+- Four disjoint nonce lanes with forward/reverse traversal.
+- Reversible bit, byte, and lane framing transforms.
+- Chain-specific canonical header adapters and target validation.
+- Sequential-versus-parallel benchmark with verified hashes/second.
+- Authorized pool protocol adapter, reconnect, job rollover, and stale-share tests.
+- Signed batch/checkpoint records and Merkle integration.
+
+## Phase 8 — Post-quantum cryptography
+- Select and review a maintained provider for ML-KEM-768 and ML-DSA-65.
+- Implement authenticated KEM key binding and transcript-bound HKDF.
+- Implement per-lane identity registry, protected key storage, rotation, and revocation.
+- Add ChaCha20-Poly1305 message protection with strict nonce uniqueness.
+- Add ML-DSA signed checkpoint and batch envelopes.
+- Add optional SLH-DSA interoperability profile.
+- Pass official known-answer vectors, interoperability, replay, downgrade, and recovery tests.
+
 No phase is considered complete without tests and evidence in the capability ledger.
