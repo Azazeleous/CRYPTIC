@@ -20,6 +20,7 @@
 | Virtual computer/SOS | proposed | isolation and escape-resistance tests |
 | Device assistant | proposed | enrollment, scope, revoke, audit tests |
 | Local seed and Merkle ledger CLI | implemented (E2) | seven local unit tests pass; repository commit and runtime integration still require CI/integration evidence |
+| Crystalline admission lifecycle | proposed (E1) | schemas, deterministic ADAM policy evaluator, signed decisions, negative tests, independent verifier, external checkpoint |
 | BLE/home automation | proposed | device-specific authorization and safety tests |
 
 Update this ledger only with reproducible evidence. Never mark a feature complete because its directory, interface, or design document exists.
