@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Azazeleous/CRYPTIC/blob/main/schemas/crystalline/v1/tdoc-transition.schema.json",
+  "title": "CRYPTIC TDoc Admission Transition",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "tdoc_id",
+    "candidate_id",
+    "project_id",
+    "from_state",
+    "to_state",
+    "candidate_digest",
+    "parent_root",
+    "adam_decision_ref",
+    "actor",
+    "occurred_at",
+    "previous_event_hash",
+    "event_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cryptic-tdoc-transition/v1"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "tdoc_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "from_state": {
+      "type": "string",
+      "enum": [
+        "PUBLIC_DEVELOPMENT",
+        "CANDIDATE",
+        "INSPECTED",
+        "AUTHORIZED",
+        "MOLTEN_DIAMOND",
+        "CRYSTALLINE",
+        "CRYPT_ACCEPTED",
+        "DENIED",
+        "QUARANTINED",
+        "REVOKED"
+      ]
+    },
+    "to_state": {
+      "type": "string",
+      "enum": [
+        "CANDIDATE",
+        "INSPECTED",
+        "AUTHORIZED",
+        "MOLTEN_DIAMOND",
+        "CRYSTALLINE",
+        "CRYPT_ACCEPTED",
+        "DENIED",
+        "QUARANTINED",
+        "REVOKED"
+      ]
+    },
+    "candidate_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "parent_root": {
+      "$ref": "#/$defs/digest"
+    },
+    "adam_decision_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "key_id"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "execution_ticket": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "uniqueItems": true
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z0-9][A-Z0-9_]{0,95}$"
+      },
+      "uniqueItems": true
+    },
+    "occurred_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "previous_event_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "event_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "sha256",
+            "blake2b-256"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "key_id",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "value": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 80,
+          "maxLength": 100
+        }
+      }
+    }
+  }
+}

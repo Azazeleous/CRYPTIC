@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Azazeleous/CRYPTIC/blob/main/schemas/crystalline/v1/checkpoint.schema.json",
+  "title": "CRYPTIC Crystalline Checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "checkpoint_id",
+    "project_id",
+    "tier",
+    "tree_size",
+    "merkle_root",
+    "parent_checkpoint",
+    "adam_decision_ref",
+    "verifier",
+    "created_at",
+    "external_anchor",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cryptic-crystalline-checkpoint/v1"
+    },
+    "checkpoint_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "tier": {
+      "type": "string",
+      "enum": [
+        "C0",
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5"
+      ]
+    },
+    "tree_size": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "merkle_root": {
+      "$ref": "#/$defs/digest"
+    },
+    "parent_checkpoint": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "required": [
+        "checkpoint_id",
+        "digest"
+      ],
+      "properties": {
+        "checkpoint_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "adam_decision_ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "verifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "implementation_digest"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "implementation_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "external_anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "anchor_type",
+        "reference",
+        "anchored_at"
+      ],
+      "properties": {
+        "status": {
+          "const": "anchored"
+        },
+        "anchor_type": {
+          "type": "string",
+          "enum": [
+            "signed-release",
+            "transparency-log",
+            "independent-witness",
+            "immutable-backup"
+          ]
+        },
+        "reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "anchored_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "sha256",
+            "blake2b-256"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "key_id",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "value": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 80,
+          "maxLength": 100
+        }
+      }
+    }
+  }
+}
