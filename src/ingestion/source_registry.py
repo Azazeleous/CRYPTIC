@@ -169,10 +169,16 @@ class SourceRegistry:
         if not isinstance(descriptor, SourceDescriptor):
             raise SourceRegistryError("adapter must expose a SourceDescriptor")
         descriptor.validate()
-        if not callable(getattr(adapter, "health_check", None)) or not callable(
+        legacy_contract = callable(getattr(adapter, "health_check", None)) and callable(
             getattr(adapter, "fetch_page", None)
-        ):
-            raise SourceRegistryError("adapter does not implement the read-only contract")
+        )
+        deadline_contract = (
+            getattr(adapter, "deadline_enforced", False) is True
+            and callable(getattr(adapter, "health_check_until", None))
+            and callable(getattr(adapter, "fetch_page_until", None))
+        )
+        if not (legacy_contract or deadline_contract):
+            raise SourceRegistryError("adapter does not implement a supported read-only contract")
         if not isinstance(replace, bool):
             raise SourceRegistryError("replace must be boolean")
         with self._lock:
