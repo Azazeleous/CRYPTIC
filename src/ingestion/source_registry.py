@@ -51,11 +51,14 @@ class SourceDescriptor:
     def validate(self) -> None:
         if not isinstance(self.source_id, str) or not _SOURCE_ID.fullmatch(self.source_id):
             raise SourceRegistryError("source_id must be lowercase and URL-safe")
-        if self.source_kind not in _SOURCE_KINDS:
+        if not isinstance(self.source_kind, str) or self.source_kind not in _SOURCE_KINDS:
             raise SourceRegistryError("unsupported source_kind")
         if not isinstance(self.endpoint, str) or not self.endpoint.strip():
             raise SourceRegistryError("endpoint is required")
-        parsed = urlsplit(self.endpoint)
+        try:
+            parsed = urlsplit(self.endpoint)
+        except ValueError as exc:
+            raise SourceRegistryError("endpoint is malformed") from exc
         if parsed.scheme not in _ALLOWED_SCHEMES:
             raise SourceRegistryError("endpoint scheme is not supported")
         if parsed.username is not None or parsed.password is not None:
@@ -67,9 +70,9 @@ class SourceDescriptor:
                 raise SourceRegistryError("file endpoint requires a path")
         elif not parsed.netloc:
             raise SourceRegistryError("network endpoint requires a host")
-        if self.auth_mode not in _AUTH_MODES:
+        if not isinstance(self.auth_mode, str) or self.auth_mode not in _AUTH_MODES:
             raise SourceRegistryError("unsupported auth_mode")
-        if self.pagination_mode not in _PAGINATION_MODES:
+        if not isinstance(self.pagination_mode, str) or self.pagination_mode not in _PAGINATION_MODES:
             raise SourceRegistryError("unsupported pagination_mode")
         if isinstance(self.rate_limit_per_minute, bool) or not isinstance(
             self.rate_limit_per_minute, int
@@ -237,8 +240,9 @@ class SourceRegistry:
             not isinstance(cursor, str) or len(cursor) > 4096
         ):
             raise SourceRegistryError("cursor must be at most 4096 characters")
-        if descriptor.pagination_mode == "offset":
-            raise SourceRegistryError("offset pagination requires an explicit adapter extension")
+        if descriptor.pagination_mode == "offset" and cursor is not None:
+            if not isinstance(cursor, str) or not cursor.isdecimal() or int(cursor) > 2**63 - 1:
+                raise SourceRegistryError("offset cursor must be a non-negative 64-bit integer string")
         if filters is not None:
             if not isinstance(filters, Mapping):
                 raise SourceRegistryError("filters must be an object")
