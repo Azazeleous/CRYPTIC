@@ -102,10 +102,12 @@ class SupervisedHttpTransport:
         self._lock = threading.Lock()
         self._closed = False
         self._poisoned = False
+        self._started = False
         self._shared_closed = False
         self._next_id = 1
         try:
             self._process.start()
+            self._started = True
             child.close()
             if not parent.poll(float(startup_timeout_seconds)):
                 self._poisoned = True
@@ -118,6 +120,10 @@ class SupervisedHttpTransport:
                 raise SupervisedTransportError("worker_startup_failed")
         except Exception:
             self._poisoned = True
+            try:
+                child.close()
+            except OSError:
+                pass
             self._terminate()
             raise
 
@@ -139,12 +145,13 @@ class SupervisedHttpTransport:
 
     def _terminate(self) -> None:
         try:
-            if self._process.is_alive():
-                self._process.terminate()
-            self._process.join(timeout=0.25)
-            if self._process.is_alive():
-                self._process.kill()
+            if self._started:
+                if self._process.is_alive():
+                    self._process.terminate()
                 self._process.join(timeout=0.25)
+                if self._process.is_alive():
+                    self._process.kill()
+                    self._process.join(timeout=0.25)
         finally:
             try:
                 self._connection.close()
@@ -231,7 +238,7 @@ class SupervisedHttpTransport:
         if self._closed:
             return
         self._closed = True
-        if self._process.is_alive() and not self._poisoned:
+        if self._started and self._process.is_alive() and not self._poisoned:
             try:
                 self._connection.send(None)
             except (EOFError, OSError):
