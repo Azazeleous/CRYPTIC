@@ -237,6 +237,10 @@ _READ_ONLY_METHODS = _EVM_METHODS | _SOLANA_METHODS
 class EvmReadOnlyAdapter:
     """EVM chain identity and finalized-head observation; no write methods."""
 
+    # urllib's resolver can block outside the socket timeout. Do not advertise
+    # this adapter as runtime-deadline-enforced until resolver isolation exists.
+    deadline_enforced = False
+
     def __init__(
         self,
         endpoint: str,
@@ -310,17 +314,54 @@ class EvmReadOnlyAdapter:
             "timestamp": latest["timestamp"],
         }
 
-    def health_check(self) -> HealthReport:
+    def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
         try:
-            chain_id = self._hex_quantity(self.client.call("eth_chainId"), "chain_id")
+            chain_id = self._hex_quantity(
+                self.client.call_until("eth_chainId", deadline_monotonic=deadline_monotonic),
+                "chain_id",
+            )
             return HealthReport(
                 self.descriptor.source_id, True, int(time.time()),
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
                 reason=f"chain_id:{chain_id}",
             )
+        except JsonRpcDeadlineExceeded:
+            raise
         except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()), reason="rpc_unavailable")
+
+    def observe_until(self, *, deadline_monotonic: float) -> dict[str, Any]:
+        chain_id = self._hex_quantity(
+            self.client.call_until("eth_chainId", deadline_monotonic=deadline_monotonic),
+            "chain_id",
+        )
+        genesis = self._block_fields(
+            self.client.call_until("eth_getBlockByNumber", ["0x0", False],
+                                   deadline_monotonic=deadline_monotonic),
+            "genesis",
+        )
+        latest = self._block_fields(
+            self.client.call_until("eth_getBlockByNumber", ["latest", False],
+                                   deadline_monotonic=deadline_monotonic),
+            "latest",
+        )
+        if genesis["number"] != 0 or latest["number"] < genesis["number"]:
+            raise JsonRpcError("block_height_order_invalid")
+        return {
+            "chain_id": chain_id, "genesis_hash": genesis["hash"],
+            "block_number": latest["number"], "block_hash": latest["hash"],
+            "parent_hash": latest["parent_hash"], "timestamp": latest["timestamp"],
+        }
+
+    def fetch_page_until(self, *, limit: int, cursor: str | None = None,
+                         filters: Mapping[str, Any] | None = None,
+                         deadline_monotonic: float) -> SourcePage:
+        if limit != 1 or cursor is not None or filters:
+            raise SourceRegistryError("EVM identity adapter accepts one unfiltered observation")
+        observation = self.observe_until(deadline_monotonic=deadline_monotonic)
+        return SourcePage(self.descriptor.source_id, self.descriptor.schema_id,
+                          int(time.time()), (observation,), None)
 
     def fetch_page(self, *, limit: int, cursor: str | None = None, filters: Mapping[str, Any] | None = None) -> SourcePage:
         if limit != 1 or cursor is not None or filters:
@@ -334,6 +375,10 @@ class EvmReadOnlyAdapter:
 
 class SolanaReadOnlyAdapter:
     """Solana genesis identity and finalized head observation; no write methods."""
+
+    # urllib's resolver can block outside the socket timeout; remain ineligible
+    # for the coordinator until that boundary is isolated.
+    deadline_enforced = False
 
     def __init__(
         self,
@@ -367,10 +412,11 @@ class SolanaReadOnlyAdapter:
                 raise JsonRpcError(f"{name}_invalid")
         return {"genesis_hash": genesis_hash, "slot": slot, "block_height": block_height}
 
-    def health_check(self) -> HealthReport:
+    def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
         try:
-            genesis_hash = self.client.call("getGenesisHash")
+            genesis_hash = self.client.call_until("getGenesisHash",
+                                                  deadline_monotonic=deadline_monotonic)
             if not isinstance(genesis_hash, str) or not genesis_hash:
                 raise JsonRpcError("genesis_hash_invalid")
             return HealthReport(
@@ -378,8 +424,34 @@ class SolanaReadOnlyAdapter:
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
                 reason="genesis_identity_verified",
             )
+        except JsonRpcDeadlineExceeded:
+            raise
         except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()), reason="rpc_unavailable")
+
+    def observe_until(self, *, deadline_monotonic: float) -> dict[str, Any]:
+        options = [{"commitment": "finalized"}]
+        genesis_hash = self.client.call_until("getGenesisHash",
+                                              deadline_monotonic=deadline_monotonic)
+        slot = self.client.call_until("getSlot", options,
+                                      deadline_monotonic=deadline_monotonic)
+        block_height = self.client.call_until("getBlockHeight", options,
+                                              deadline_monotonic=deadline_monotonic)
+        if not isinstance(genesis_hash, str) or not genesis_hash:
+            raise JsonRpcError("genesis_hash_invalid")
+        for name, value in (("slot", slot), ("block_height", block_height)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise JsonRpcError(f"{name}_invalid")
+        return {"genesis_hash": genesis_hash, "slot": slot, "block_height": block_height}
+
+    def fetch_page_until(self, *, limit: int, cursor: str | None = None,
+                         filters: Mapping[str, Any] | None = None,
+                         deadline_monotonic: float) -> SourcePage:
+        if limit != 1 or cursor is not None or filters:
+            raise SourceRegistryError("Solana identity adapter accepts one unfiltered observation")
+        observation = self.observe_until(deadline_monotonic=deadline_monotonic)
+        return SourcePage(self.descriptor.source_id, self.descriptor.schema_id,
+                          int(time.time()), (observation,), None)
 
     def fetch_page(self, *, limit: int, cursor: str | None = None, filters: Mapping[str, Any] | None = None) -> SourcePage:
         if limit != 1 or cursor is not None or filters:
