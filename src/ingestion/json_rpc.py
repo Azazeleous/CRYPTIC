@@ -263,9 +263,8 @@ _READ_ONLY_METHODS = _EVM_METHODS | _SOLANA_METHODS
 class EvmReadOnlyAdapter:
     """EVM chain identity and finalized-head observation; no write methods."""
 
-    # urllib's resolver can block outside the socket timeout. Do not advertise
-    # this adapter as runtime-deadline-enforced until resolver isolation exists.
-    deadline_enforced = False
+    # All deadline-aware calls use the supervised whole-request process.
+    deadline_enforced = True
 
     def __init__(
         self,
@@ -421,9 +420,8 @@ class EvmReadOnlyAdapter:
 class SolanaReadOnlyAdapter:
     """Solana genesis identity and finalized head observation; no write methods."""
 
-    # urllib's resolver can block outside the socket timeout; remain ineligible
-    # for the coordinator until that boundary is isolated.
-    deadline_enforced = False
+    # All deadline-aware calls use the supervised whole-request process.
+    deadline_enforced = True
 
     def __init__(
         self,
