@@ -129,7 +129,9 @@ class SupervisedHttpTransport:
         if (isinstance(max_response_bytes, bool) or not isinstance(max_response_bytes, int)
                 or max_response_bytes < 1):
             raise SupervisedTransportError("response_limit_invalid")
-        if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
+        if (isinstance(deadline_monotonic, bool)
+                or not isinstance(deadline_monotonic, (int, float))
+                or not math.isfinite(deadline_monotonic)):
             raise SupervisedTransportError("deadline_invalid")
         remaining = float(deadline_monotonic) - time.monotonic()
         if remaining <= 0:
