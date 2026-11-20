@@ -11,7 +11,7 @@ import json
 import os
 import struct
 import time
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
@@ -36,6 +36,8 @@ class ScanResult:
     elapsed_seconds: float
     hashes_per_second: float
     workers: int
+    chunks_completed: int
+    final_chunk_size: int
     candidates: tuple[Candidate, ...]
 
     def to_dict(self) -> dict:
@@ -46,6 +48,8 @@ class ScanResult:
             "elapsed_seconds": self.elapsed_seconds,
             "hashes_per_second": self.hashes_per_second,
             "workers": self.workers,
+            "chunks_completed": self.chunks_completed,
+            "final_chunk_size": self.final_chunk_size,
             "candidates": [asdict(item) for item in self.candidates],
         }
 
@@ -140,6 +144,18 @@ def _scan_chunk(
     return candidates
 
 
+def _scan_chunk_timed(
+    header: bytes,
+    target: int,
+    start_nonce: int,
+    stop_nonce: int,
+    optimized: bool,
+) -> tuple[list[Candidate], float]:
+    started = time.perf_counter()
+    found = _scan_chunk(header, target, start_nonce, stop_nonce, optimized)
+    return found, max(time.perf_counter() - started, 1e-12)
+
+
 def scan_nonce_range(
     header: bytes,
     target: int,
@@ -149,8 +165,14 @@ def scan_nonce_range(
     workers: int = 1,
     chunk_size: int = 50_000,
     optimized: bool = True,
+    target_chunk_seconds: float = 0.05,
 ) -> ScanResult:
-    """Scan a finite half-open nonce range using bounded CPU workers."""
+    """Scan a finite half-open nonce range with bounded adaptive scheduling.
+
+    Parallel workers receive at most one outstanding chunk each. When a chunk
+    completes, the scheduler uses its measured processing time to resize the
+    next chunk toward target_chunk_seconds, within bounded size limits.
+    """
     header = _validate_header(header)
     target = _validate_target(target)
     _validate_range(start_nonce, stop_nonce)
@@ -158,6 +180,8 @@ def scan_nonce_range(
         raise ValueError("workers must be a positive integer")
     if isinstance(chunk_size, bool) or not isinstance(chunk_size, int) or chunk_size < 1:
         raise ValueError("chunk_size must be a positive integer")
+    if not isinstance(target_chunk_seconds, (int, float)) or target_chunk_seconds <= 0:
+        raise ValueError("target_chunk_seconds must be positive")
 
     cpu_count = max(1, os.cpu_count() or 1)
     worker_count = min(workers, cpu_count)
@@ -166,33 +190,67 @@ def scan_nonce_range(
 
     if attempts == 0:
         elapsed = max(time.perf_counter() - started, 1e-12)
-        return ScanResult(start_nonce, stop_nonce, 0, elapsed, 0.0, 0, ())
+        return ScanResult(start_nonce, stop_nonce, 0, elapsed, 0.0, 0, 0, chunk_size, ())
 
-    ranges = [
-        (left, min(left + chunk_size, stop_nonce))
-        for left in range(start_nonce, stop_nonce, chunk_size)
-    ]
+    candidates: list[Candidate] = []
+    chunks_completed = 0
+    final_chunk_size = chunk_size
 
-    if worker_count == 1 or len(ranges) == 1:
-        candidates: list[Candidate] = []
-        for left, right in ranges:
-            candidates.extend(_scan_chunk(header, target, left, right, optimized))
+    if worker_count == 1 or attempts <= chunk_size:
+        cursor = start_nonce
+        while cursor < stop_nonce:
+            right = min(cursor + chunk_size, stop_nonce)
+            candidates.extend(_scan_chunk(header, target, cursor, right, optimized))
+            chunks_completed += 1
+            cursor = right
         used_workers = 1
     else:
-        candidates = []
+        min_chunk_size = max(1, chunk_size // 4)
+        max_chunk_size = min(1_000_000, max(chunk_size, chunk_size * 8))
+        current_chunk_size = min(chunk_size, max_chunk_size)
+        cursor = start_nonce
+        pending = {}
+
         with ProcessPoolExecutor(max_workers=worker_count) as executor:
-            futures = [
-                executor.submit(_scan_chunk, header, target, left, right, optimized)
-                for left, right in ranges
-            ]
-            for future in futures:
-                candidates.extend(future.result())
+            while cursor < stop_nonce and len(pending) < worker_count:
+                right = min(cursor + current_chunk_size, stop_nonce)
+                future = executor.submit(
+                    _scan_chunk_timed, header, target, cursor, right, optimized
+                )
+                pending[future] = (cursor, right)
+                cursor = right
+
+            while pending:
+                completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in completed:
+                    pending.pop(future)
+                    found, chunk_elapsed = future.result()
+                    candidates.extend(found)
+                    chunks_completed += 1
+
+                    scale = float(target_chunk_seconds) / chunk_elapsed
+                    scale = max(0.5, min(2.0, scale))
+                    current_chunk_size = int(current_chunk_size * scale)
+                    current_chunk_size = max(
+                        min_chunk_size, min(max_chunk_size, current_chunk_size)
+                    )
+
+                    if cursor < stop_nonce:
+                        right = min(cursor + current_chunk_size, stop_nonce)
+                        next_future = executor.submit(
+                            _scan_chunk_timed, header, target, cursor, right, optimized
+                        )
+                        pending[next_future] = (cursor, right)
+                        cursor = right
+
+        final_chunk_size = current_chunk_size
         used_workers = worker_count
 
     elapsed = max(time.perf_counter() - started, 1e-12)
     return ScanResult(
         start_nonce, stop_nonce, attempts, elapsed, attempts / elapsed,
-        used_workers, tuple(sorted(candidates, key=lambda item: item.nonce))
+        used_workers, chunks_completed, final_chunk_size,
+        tuple(sorted(candidates, key=lambda item: item.nonce))
     )
 
 
