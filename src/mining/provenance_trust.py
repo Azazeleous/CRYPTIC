@@ -233,8 +233,6 @@ def revoke_trust_key(
             raise TrustLifecycleError("cannot modify a snapshot with an unverified history")
     effective_at = _timestamp(effective_at, "effective_at")
     created_at = _timestamp(created_at, "created_at")
-    if created_at < effective_at:
-        raise TrustLifecycleError("snapshot created_at cannot precede effective_at")
     rows = [dict(row) for row in snapshot["issuers"]]
     matches = [
         row for row in rows
@@ -345,6 +343,8 @@ def _verify_with_snapshot(
         row["revoked_at"] is not None and issued_at >= row["revoked_at"]
     ):
         return {"valid": False, "reason": "attestation_outside_key_validity"}
+    if not historical and row["valid_from"] > snapshot["created_at"]:
+        return {"valid": False, "reason": "issuer_key_not_yet_active"}
     if (not historical and row["revoked_at"] is not None
             and row["revoked_at"] <= snapshot["created_at"]):
         return {"valid": False, "reason": "issuer_key_revoked"}
