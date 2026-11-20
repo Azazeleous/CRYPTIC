@@ -29,6 +29,10 @@ class JsonRpcError(SourceAdapterError):
     """Sanitized JSON-RPC transport, protocol, or provider error."""
 
 
+class JsonRpcDeadlineExceeded(TimeoutError, JsonRpcError):
+    """The shared monotonic deadline expired during transport coordination."""
+
+
 class JsonRpcRemoteError(JsonRpcError):
     """Provider returned a JSON-RPC error object."""
 
@@ -66,13 +70,29 @@ class _RateGate:
         self._next_at = 0.0
         self._lock = Lock()
 
-    def wait(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            delay = self._next_at - now
-            if delay > 0:
-                time.sleep(delay)
-            self._next_at = max(time.monotonic(), self._next_at) + self._interval
+    def wait(self, *, deadline_monotonic: float | None = None) -> None:
+        if deadline_monotonic is None:
+            with self._lock:
+                delay = self._next_at - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                self._next_at = max(time.monotonic(), self._next_at) + self._interval
+            return
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0 or not self._lock.acquire(timeout=remaining):
+            raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+        try:
+            while True:
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+                delay = self._next_at - time.monotonic()
+                if delay <= 0:
+                    self._next_at = time.monotonic() + self._interval
+                    return
+                time.sleep(min(delay, remaining))
+        finally:
+            self._lock.release()
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -146,6 +166,18 @@ class JsonRpcClient:
         return document["result"]
 
     def call(self, method: str, params: list[Any] | None = None) -> Any:
+        return self._call(method, params, deadline_monotonic=None)
+
+    def call_until(self, method: str, params: list[Any] | None = None, *,
+                   deadline_monotonic: float) -> Any:
+        if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
+            raise JsonRpcError("rpc_deadline_invalid")
+        if deadline_monotonic <= time.monotonic():
+            raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+        return self._call(method, params, deadline_monotonic=float(deadline_monotonic))
+
+    def _call(self, method: str, params: list[Any] | None, *,
+              deadline_monotonic: float | None) -> Any:
         if not isinstance(method, str) or method not in self.allowed_methods:
             raise JsonRpcError("rpc_method_not_allowlisted")
         if params is None:
@@ -164,21 +196,36 @@ class JsonRpcClient:
             method="POST",
         )
         for attempt in range(self.policy.max_retries + 1):
-            self._rate_gate.wait()
+            self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
+            timeout = self.policy.timeout_seconds
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+                timeout = min(timeout, remaining)
             try:
                 opener = build_opener(_NoRedirect())
-                with opener.open(request, timeout=self.policy.timeout_seconds) as response:
+                with opener.open(request, timeout=timeout) as response:
                     payload = response.read(self.policy.max_response_bytes + 1)
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
             except HTTPError as exc:
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
                 if not retryable or attempt >= self.policy.max_retries:
                     raise JsonRpcError(f"http_status:{exc.code}") from None
             except (URLError, TimeoutError, OSError):
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded") from None
                 if attempt >= self.policy.max_retries:
                     raise JsonRpcError("transport_unavailable") from None
             if self.policy.retry_base_seconds:
-                time.sleep(self.policy.retry_base_seconds * (2 ** attempt))
+                delay = self.policy.retry_base_seconds * (2 ** attempt)
+                if deadline_monotonic is not None:
+                    remaining = deadline_monotonic - time.monotonic()
+                    if remaining <= 0 or delay >= remaining:
+                        raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+                time.sleep(delay)
         raise JsonRpcError("transport_retry_exhausted")
 
 
