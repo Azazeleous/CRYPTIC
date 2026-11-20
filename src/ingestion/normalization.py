@@ -224,6 +224,7 @@ def compare_chain_heads(
     skipped.sort(key=lambda item: item["network_identity"])
     report_body = {
         "schema": REPORT_SCHEMA,
+        "valid": True,
         "policy": {
             "max_observation_skew_seconds": skew_limit,
             "max_height_delta": height_limit,
@@ -233,6 +234,7 @@ def compare_chain_heads(
             "input_observations": len(rows),
             "network_groups": len(groups),
             "compared_groups": compared_groups,
+            "evidence_sufficient": compared_groups > 0,
             "discrepancy_count": len(discrepancies),
             "skipped_group_count": len(skipped),
             "consistent": not discrepancies,
