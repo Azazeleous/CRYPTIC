@@ -12,7 +12,7 @@ import time
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .source_registry import (
     HealthReport,
@@ -69,6 +69,11 @@ class _RateGate:
         if delay > 0:
             time.sleep(delay)
         self._next_at = max(now, self._next_at) + self._interval
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
 
 
 class JsonRpcClient:
@@ -136,7 +141,7 @@ class JsonRpcClient:
         return document["result"]
 
     def call(self, method: str, params: list[Any] | None = None) -> Any:
-        if method not in self.allowed_methods:
+        if not isinstance(method, str) or method not in self.allowed_methods:
             raise JsonRpcError("rpc_method_not_allowlisted")
         if params is None:
             params = []
@@ -156,7 +161,8 @@ class JsonRpcClient:
         for attempt in range(self.policy.max_retries + 1):
             self._rate_gate.wait()
             try:
-                with urlopen(request, timeout=self.policy.timeout_seconds) as response:
+                opener = build_opener(_NoRedirect())
+                with opener.open(request, timeout=self.policy.timeout_seconds) as response:
                     payload = response.read(self.policy.max_response_bytes + 1)
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
             except HTTPError as exc:
