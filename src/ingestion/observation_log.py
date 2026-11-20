@@ -157,7 +157,7 @@ def _audit_unlocked(path: Path, max_record_bytes: int) -> dict[str, Any]:
                     raise ObservationJournalError(f"line_{line_number}:observed_at_invalid")
                 if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):
                     raise ObservationJournalError(f"line_{line_number}:items_invalid")
-                if isinstance(item_count, bool) or item_count != len(items):
+                if isinstance(item_count, bool) or not isinstance(item_count, int) or item_count != len(items):
                     raise ObservationJournalError(f"line_{line_number}:item_count_mismatch")
                 _validate_json(items)
                 cursor_digest = record.get("next_cursor_sha256")
