@@ -14,7 +14,6 @@ from typing import Any, Mapping
 from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .supervised_http import (
     SupervisedHttpTransport,
@@ -99,11 +98,6 @@ class _RateGate:
                 time.sleep(min(delay, remaining))
         finally:
             self._lock.release()
-
-
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, response, code, message, headers, new_url):
-        return None
 
 
 class JsonRpcClient:
@@ -201,6 +195,8 @@ class JsonRpcClient:
 
     def _call(self, method: str, params: list[Any] | None, *,
               deadline_monotonic: float | None) -> Any:
+        if deadline_monotonic is None:
+            raise JsonRpcError("rpc_deadline_required")
         if not isinstance(method, str) or method not in self.allowed_methods:
             raise JsonRpcError("rpc_method_not_allowlisted")
         if params is None:
@@ -212,12 +208,6 @@ class JsonRpcClient:
             {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
             separators=(",", ":"),
         ).encode("utf-8")
-        request = Request(
-            self.endpoint,
-            data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
         for attempt in range(self.policy.max_retries + 1):
             self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
             timeout = self.policy.timeout_seconds
@@ -227,20 +217,15 @@ class JsonRpcClient:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 timeout = min(timeout, remaining)
             try:
-                if deadline_monotonic is not None:
-                    self.prepare()
-                    assert self._supervised_transport is not None
-                    status, payload = self._supervised_transport.request(
-                        self.endpoint, body, timeout_seconds=timeout,
-                        max_response_bytes=self.policy.max_response_bytes,
-                        deadline_monotonic=deadline_monotonic,
-                    )
-                    if status != 200:
-                        raise HTTPError(self.endpoint, status, "http_status", None, None)
-                else:
-                    opener = build_opener(_NoRedirect())
-                    with opener.open(request, timeout=timeout) as response:
-                        payload = response.read(self.policy.max_response_bytes + 1)
+                self.prepare()
+                assert self._supervised_transport is not None
+                status, payload = self._supervised_transport.request(
+                    self.endpoint, body, timeout_seconds=timeout,
+                    max_response_bytes=self.policy.max_response_bytes,
+                    deadline_monotonic=deadline_monotonic,
+                )
+                if status != 200:
+                    raise HTTPError(self.endpoint, status, "http_status", None, None)
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
