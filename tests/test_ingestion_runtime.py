@@ -125,6 +125,7 @@ class BoundedRuntimeTests(unittest.TestCase):
             report = runtime.run(self.journal, ["alpha"])
         self.assertLessEqual(report["journal"]["record_count"], 2)
         self.assertLessEqual(report["sources"][0]["observation_count"], 2)
+        self.assertEqual(report["sources"][0]["status"], "budget_exhausted")
 
     def test_credential_filters_are_rejected_before_adapter_dispatch(self):
         self.registry.register(DeadlineAdapter("alpha"))
