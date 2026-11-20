@@ -98,6 +98,7 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         self.assertEqual(result["version"], 3)
         self.assertEqual(result["snapshot_count"], 3)
         self.assertFalse(verify_trust_snapshot_chain([self.snapshot_v1, third])["valid"])
+        self.assertFalse(verify_trust_snapshot_chain([second, third])["valid"])
 
     def test_rotation_preserves_historical_signature_but_rejects_current(self):
         old_attestation = self._attestation("issuer-a", self.key_a, issued_at=150)
