@@ -164,9 +164,9 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
 class BoundedIngestionRuntime:
     """Bounded worker coordinator; only its caller thread writes the journal.
 
-    Python cannot forcibly terminate a blocked thread. This runtime requires
-    cooperative adapters whose transports bound rate waits, retries, DNS,
-    connect, and reads against the passed absolute monotonic deadline.
+    Python cannot forcibly terminate a blocked thread. Network adapters must
+    prepare a supervised transport before collection and enforce the shared
+    deadline at a process boundary for every blocking network operation.
     """
     def __init__(self, registry: SourceRegistry, policy: IngestionPolicy | None = None) -> None:
         if not isinstance(registry, SourceRegistry):
