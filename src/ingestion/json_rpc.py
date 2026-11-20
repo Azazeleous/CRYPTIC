@@ -327,21 +327,6 @@ class EvmReadOnlyAdapter:
             return HealthReport(self.descriptor.source_id, False, int(time.time()),
                                 reason="rpc_unavailable")
 
-    def health_check(self) -> HealthReport:
-        started = time.monotonic()
-        try:
-            genesis_hash = self.client.call("getGenesisHash")
-            if not isinstance(genesis_hash, str) or not genesis_hash:
-                raise JsonRpcError("genesis_hash_invalid")
-            return HealthReport(
-                self.descriptor.source_id, True, int(time.time()),
-                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
-                reason="genesis_identity_verified",
-            )
-        except Exception:
-            return HealthReport(self.descriptor.source_id, False, int(time.time()),
-                                reason="rpc_unavailable")
-
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
         try:
@@ -439,6 +424,21 @@ class SolanaReadOnlyAdapter:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise JsonRpcError(f"{name}_invalid")
         return {"genesis_hash": genesis_hash, "slot": slot, "block_height": block_height}
+
+    def health_check(self) -> HealthReport:
+        started = time.monotonic()
+        try:
+            genesis_hash = self.client.call("getGenesisHash")
+            if not isinstance(genesis_hash, str) or not genesis_hash:
+                raise JsonRpcError("genesis_hash_invalid")
+            return HealthReport(
+                self.descriptor.source_id, True, int(time.time()),
+                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                reason="genesis_identity_verified",
+            )
+        except Exception:
+            return HealthReport(self.descriptor.source_id, False, int(time.time()),
+                                reason="rpc_unavailable")
 
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
