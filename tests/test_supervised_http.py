@@ -164,7 +164,7 @@ class SupervisedHttpTests(unittest.TestCase):
                 self.send_response(200)
                 self.send_header("Transfer-Encoding", "chunked")
                 self.end_headers()
-                self.wfile.write(b"5\\r\\nabc")
+                self.wfile.write(b"5\r\nabc")
                 self.wfile.flush()
                 self.close_connection = True
             def log_message(self, *args):
