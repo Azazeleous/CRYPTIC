@@ -3,8 +3,7 @@ name: mining-engine-tests
 on:
   push:
     branches:
-      - feat/hccgn-adaptive-miner-v1
-      - feat/pow-receipt-wallet-bridge
+      - feat/**
   pull_request:
     branches:
       - main

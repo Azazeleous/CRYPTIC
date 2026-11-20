@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:cryptic:schema:provenance-index:v1",
+  "title": "CRYPTIC Provenance Index v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "policy", "summary", "checkpoint", "records", "issues"],
+  "properties": {
+    "schema": {"const": "cryptic.provenance-index.v1"},
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_of_truth", "proof_scope", "network_acceptance", "valuation", "transferability"],
+      "properties": {
+        "source_of_truth": {"const": "verified_receipt_and_matching_manifest"},
+        "proof_scope": {"const": "local_sha256d_verification"},
+        "network_acceptance": {"const": "not_claimed"},
+        "valuation": {"type": "null"},
+        "transferability": {"const": "not_defined"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wallet_records_read", "unique_valid_receipts", "indexed_records", "issue_count", "valid"],
+      "properties": {
+        "wallet_records_read": {"type": "integer", "minimum": 0},
+        "unique_valid_receipts": {"type": "integer", "minimum": 0},
+        "indexed_records": {"type": "integer", "minimum": 0},
+        "issue_count": {"type": "integer", "minimum": 0},
+        "valid": {"type": "boolean"}
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "record_count", "archive_root"],
+      "properties": {
+        "algorithm": {"const": "SHA-256"},
+        "record_count": {"type": "integer", "minimum": 0},
+        "archive_root": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["receipt_id", "work_id", "trophy_id", "manifest_hash", "wallet_id", "ruleset_id", "accepted_at", "algorithm", "proof_digest", "receipt_integrity", "proof_verification", "network_acceptance"],
+        "properties": {
+          "receipt_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "work_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "trophy_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "manifest_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "wallet_id": {"type": "string", "minLength": 1},
+          "ruleset_id": {"type": "string", "minLength": 1},
+          "accepted_at": {"type": "integer", "minimum": 0},
+          "algorithm": {"const": "SHA-256d"},
+          "proof_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "receipt_integrity": {"const": "verified"},
+          "proof_verification": {"const": "verified"},
+          "network_acceptance": {"const": "not_claimed"}
+        }
+      }
+    },
+    "issues": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["malformed_wallet_lines", "invalid_receipts", "duplicate_receipts", "missing_manifests", "manifest_conflicts", "orphaned_manifests"],
+      "properties": {
+        "malformed_wallet_lines": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "invalid_receipts": {"type": "array", "items": {"type": "object"}},
+        "duplicate_receipts": {"type": "array", "items": {"type": "object"}},
+        "missing_manifests": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+        "manifest_conflicts": {"type": "array", "items": {"type": "string"}},
+        "orphaned_manifests": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}
