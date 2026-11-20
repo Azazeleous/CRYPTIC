@@ -1,4 +1,4 @@
-"""Fixed-work benchmark comparing reference and optimized SHA-256d kernels."""
+"""Fixed-work benchmark comparing reference and adaptive SHA-256d kernels."""
 from __future__ import annotations
 
 import argparse
@@ -29,7 +29,7 @@ def main() -> int:
     configurations = [
         ("reference_single", 1, False),
         ("optimized_single", 1, True),
-        ("optimized_parallel", args.workers, True),
+        ("adaptive_parallel", args.workers, True),
     ]
     results = []
     for name, workers, optimized in configurations:
@@ -43,6 +43,8 @@ def main() -> int:
             "elapsed_seconds": run.elapsed_seconds,
             "hashes_per_second": run.hashes_per_second,
             "workers": run.workers,
+            "chunks_completed": run.chunks_completed,
+            "final_chunk_size": run.final_chunk_size,
             "candidate_count": len(run.candidates),
         })
 
