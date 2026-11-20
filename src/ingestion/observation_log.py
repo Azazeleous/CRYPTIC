@@ -103,6 +103,12 @@ def _exclusive_lock(lock_path: Path) -> Iterator[None]:
 
 
 def _audit_unlocked(path: Path, max_record_bytes: int) -> dict[str, Any]:
+    if path.is_symlink():
+        return {
+            "schema": AUDIT_SCHEMA, "valid": False, "record_count": 0,
+            "journal_root": _GENESIS, "last_sequence": 0,
+            "error": "journal_path_must_not_be_symlink",
+        }
     if not path.exists():
         return {
             "schema": AUDIT_SCHEMA, "valid": True, "record_count": 0,
@@ -298,10 +304,15 @@ def read_records(
     if not report["valid"]:
         raise ObservationJournalError(f"journal verification failed: {report['error']}")
     path = Path(journal_path).expanduser()
-    if not path.exists():
-        return ()
-    records: list[dict[str, Any]] = []
-    with path.open("rb") as stream:
-        for raw in stream:
-            records.append(json.loads(raw[:-1].decode("utf-8")))
-    return tuple(records)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _exclusive_lock(path.with_name(path.name + ".lock")):
+        report = _audit_unlocked(path, max_record_bytes)
+        if not report["valid"]:
+            raise ObservationJournalError(f"journal verification failed: {report['error']}")
+        if not path.exists():
+            return ()
+        records: list[dict[str, Any]] = []
+        with path.open("rb") as stream:
+            for raw in stream:
+                records.append(json.loads(raw[:-1].decode("utf-8")))
+        return tuple(records)
