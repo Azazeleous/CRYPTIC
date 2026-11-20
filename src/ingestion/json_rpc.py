@@ -214,6 +214,8 @@ class JsonRpcClient:
             {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
             separators=(",", ":"),
         ).encode("utf-8")
+        if len(body) > 65_536:
+            raise JsonRpcError("request_size_invalid")
         self.prepare()  # One worker lifecycle per client; never restart per retry.
         for attempt in range(self.policy.max_retries + 1):
             self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
