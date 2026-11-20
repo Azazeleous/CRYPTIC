@@ -1,5 +1,11 @@
 """Read-only ingestion source contracts."""
 
+from .observation_log import (
+    ObservationJournalError,
+    append_page,
+    audit_journal,
+    read_records,
+)
 from .json_rpc import (
     EvmReadOnlyAdapter,
     JsonRpcClient,
@@ -19,6 +25,10 @@ from .source_registry import (
 )
 
 __all__ = [
+    "ObservationJournalError",
+    "append_page",
+    "audit_journal",
+    "read_records",
     "EvmReadOnlyAdapter",
     "JsonRpcClient",
     "JsonRpcError",
