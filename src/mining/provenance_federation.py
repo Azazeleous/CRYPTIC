@@ -223,8 +223,16 @@ def export_federation(
             or summary.get("issue_count") != 0
             or not isinstance(sources, list)
             or not isinstance(records, list)
-            or not isinstance(issues, dict)):
+            or not isinstance(issues, dict)
+            or any(bool(value) for value in issues.values())):
         raise ValueError("refusing to export a federation with source issues")
+    if any(not isinstance(source, dict) or source.get("status") != "valid"
+           for source in sources):
+        raise ValueError("refusing to export a federation with non-valid sources")
+    if (summary.get("source_count") != len(sources)
+            or summary.get("indexed_occurrences") != len(records)
+            or summary.get("readable_sources") != len(sources)):
+        raise ValueError("federation summary does not match its contents")
     expected_root = _checkpoint_root(sources, records, issues)
     if (not isinstance(checkpoint, dict)
             or checkpoint.get("algorithm") != "SHA-256"
