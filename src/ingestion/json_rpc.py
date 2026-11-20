@@ -16,6 +16,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .supervised_http import SupervisedHttpTransport, SupervisedTransportError
+
 from .source_registry import (
     HealthReport,
     SourceAdapterError,
@@ -137,6 +139,19 @@ class JsonRpcClient:
         self.endpoint = endpoint
         self.allowed_methods = allowed_methods
         self._rate_gate = _RateGate(self.policy.rate_limit_per_minute)
+        self._supervised_transport: SupervisedHttpTransport | None = None
+
+    def prepare(self) -> None:
+        """Start the whole-request worker before the collection deadline."""
+        if self._supervised_transport is None:
+            self._supervised_transport = SupervisedHttpTransport()
+        if not self._supervised_transport.healthy:
+            raise SupervisedTransportError("worker_unavailable")
+
+    def close(self) -> None:
+        if self._supervised_transport is not None:
+            self._supervised_transport.close()
+            self._supervised_transport = None
 
     @staticmethod
     def parse_response(payload: bytes, expected_id: int, max_bytes: int) -> Any:
@@ -204,9 +219,20 @@ class JsonRpcClient:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 timeout = min(timeout, remaining)
             try:
-                opener = build_opener(_NoRedirect())
-                with opener.open(request, timeout=timeout) as response:
-                    payload = response.read(self.policy.max_response_bytes + 1)
+                if deadline_monotonic is not None:
+                    self.prepare()
+                    assert self._supervised_transport is not None
+                    status, payload = self._supervised_transport.request(
+                        self.endpoint, body, timeout_seconds=timeout,
+                        max_response_bytes=self.policy.max_response_bytes,
+                        deadline_monotonic=deadline_monotonic,
+                    )
+                    if status != 200:
+                        raise HTTPError(self.endpoint, status, "http_status", None, None)
+                else:
+                    opener = build_opener(_NoRedirect())
+                    with opener.open(request, timeout=timeout) as response:
+                        payload = response.read(self.policy.max_response_bytes + 1)
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
@@ -260,6 +286,12 @@ class EvmReadOnlyAdapter:
         )
         self.descriptor.validate()
         self.client = JsonRpcClient(endpoint, allowed_methods=_EVM_METHODS, policy=policy)
+
+    def prepare(self) -> None:
+        self.client.prepare()
+
+    def close(self) -> None:
+        self.client.close()
 
     @staticmethod
     def _hex_quantity(value: Any, field: str) -> int:
@@ -412,6 +444,12 @@ class SolanaReadOnlyAdapter:
         )
         self.descriptor.validate()
         self.client = JsonRpcClient(endpoint, allowed_methods=_SOLANA_METHODS, policy=policy)
+
+    def prepare(self) -> None:
+        self.client.prepare()
+
+    def close(self) -> None:
+        self.client.close()
 
     def observe(self) -> dict[str, Any]:
         options = [{"commitment": "finalized"}]
