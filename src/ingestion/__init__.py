@@ -1,6 +1,7 @@
 """Read-only ingestion source contracts."""
 
 from .replay import ReplayError, replay_journal
+from .runtime import (BoundedIngestionRuntime, DeadlineAwareAdapter, IngestionDeadlineExceeded, IngestionPolicy, IngestionRuntimeError)
 from .normalization import (
     NormalizationError,
     compare_chain_heads,
@@ -32,6 +33,11 @@ from .source_registry import (
 )
 
 __all__ = [
+    "BoundedIngestionRuntime",
+    "DeadlineAwareAdapter",
+    "IngestionDeadlineExceeded",
+    "IngestionPolicy",
+    "IngestionRuntimeError",
     "ReplayError",
     "replay_journal",
     "NormalizationError",
