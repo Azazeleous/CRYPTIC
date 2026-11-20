@@ -6,6 +6,7 @@ deadline timeout terminates and permanently poisons the worker.
 """
 from __future__ import annotations
 
+import math
 import multiprocessing
 import threading
 import time
@@ -121,6 +122,10 @@ class SupervisedHttpTransport:
             raise SupervisedTransportError("request_invalid")
         if len(body) > 1_048_576:
             raise SupervisedTransportError("request_size_invalid")
+        if (isinstance(timeout_seconds, bool)
+                or not isinstance(timeout_seconds, (int, float))
+                or not math.isfinite(timeout_seconds) or timeout_seconds <= 0):
+            raise SupervisedTransportError("timeout_invalid")
         if (isinstance(max_response_bytes, bool) or not isinstance(max_response_bytes, int)
                 or max_response_bytes < 1):
             raise SupervisedTransportError("response_limit_invalid")
