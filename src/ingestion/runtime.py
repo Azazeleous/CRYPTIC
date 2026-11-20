@@ -107,10 +107,12 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
         cursor: str | None = None
         seen: dict[str, int] = {}
         observations = 0
+        budget_exhausted = False
         for _ in range(page_quota):
             _remaining(deadline)
             remaining_observations = observation_quota - observations
             if remaining_observations <= 0:
+                budget_exhausted = cursor is not None
                 break
             limit = min(page_size, adapter.descriptor.max_page_size, remaining_observations)
             page = adapter.fetch_page_until(
@@ -124,6 +126,7 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
             pages.append(page)
             observations += len(page.items)
             if page.next_cursor is None or not page.items:
+                cursor = None
                 break
             if adapter.descriptor.pagination_mode == "none":
                 raise SourceAdapterError("cursor_not_supported")
@@ -136,8 +139,14 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
             if seen[page.next_cursor] > max_cursor_repeats:
                 raise SourceAdapterError("pagination_cursor_repeated")
             cursor = page.next_cursor
-        return _WorkerResult(source_id, health_data, tuple(pages), "complete", None,
-                             max(0, int((time.monotonic() - started) * 1000)))
+        if cursor is not None:
+            budget_exhausted = True
+        return _WorkerResult(
+            source_id, health_data, tuple(pages),
+            "budget_exhausted" if budget_exhausted else "complete",
+            "page_or_observation_budget_exhausted" if budget_exhausted else None,
+            max(0, int((time.monotonic() - started) * 1000)),
+        )
     except IngestionDeadlineExceeded:
         return _WorkerResult(source_id, {"healthy": False, "reason": "deadline_exceeded"},
                              tuple(pages), "timed_out", "deadline_exceeded",
