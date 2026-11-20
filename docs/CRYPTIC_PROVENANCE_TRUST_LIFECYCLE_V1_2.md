@@ -50,9 +50,12 @@ complete predecessor history and refuse to advance an unverified chain.
 Both operations reject unknown or ambiguous keys, duplicate new public keys,
 invalid timestamps, and invalid source snapshots.
 
-Revocation timestamps are policy data. They are not proof of when a real-world
-event occurred. Clock accuracy and the authority allowed to publish a trust
-snapshot remain governance responsibilities.
+Effective timestamps may be scheduled in the future relative to snapshot
+publication. Until the effective time, the old key remains active in the
+snapshot's current-policy state and a replacement key is not yet active.
+Revocation timestamps are policy data, not proof of when a real-world event
+occurred. Clock accuracy and the authority allowed to publish a trust snapshot
+remain governance responsibilities.
 
 ## Verification modes
 
