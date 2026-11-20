@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feat/hccgn-adaptive-miner-v1
+      - feat/pow-receipt-wallet-bridge
   pull_request:
     branches:
       - main
