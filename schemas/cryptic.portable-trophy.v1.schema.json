@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cryptic.example/schemas/cryptic.portable-trophy.v1.schema.json",
+  "title": "CRYPTIC Portable Trophy Manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "identity", "provenance", "verification", "representation", "integrity"],
+  "properties": {
+    "format": { "const": "cryptic.portable-trophy.v1" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["work_id", "trophy_id", "issuer"],
+      "properties": {
+        "work_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "trophy_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "issuer": { "const": "CRYPTIC" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_hash", "wallet_id", "ruleset_id", "accepted_at", "algorithm", "proof_digest"],
+      "properties": {
+        "receipt_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "wallet_id": { "type": "string", "minLength": 1 },
+        "ruleset_id": { "type": "string", "minLength": 1 },
+        "accepted_at": { "type": "integer", "minimum": 0 },
+        "algorithm": { "const": "SHA-256d" },
+        "proof_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receipt_integrity", "proof_verification", "network_acceptance", "verification_version"],
+      "properties": {
+        "receipt_integrity": { "const": "verified" },
+        "proof_verification": { "const": "verified" },
+        "network_acceptance": { "const": "not_claimed" },
+        "verification_version": { "const": "1.0" }
+      }
+    },
+    "representation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["asset_type", "transferability", "valuation"],
+      "properties": {
+        "asset_type": { "const": "proof_trophy" },
+        "transferability": { "const": "not_defined" },
+        "valuation": { "type": ["number", "null"] }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "manifest_hash"],
+      "properties": {
+        "algorithm": { "const": "SHA-256" },
+        "manifest_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}
