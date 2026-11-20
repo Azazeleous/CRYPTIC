@@ -34,13 +34,31 @@ class Sha256dMinerTests(unittest.TestCase):
         )
         self.assertEqual(optimized.attempts, 12)
 
+    def test_parallel_and_serial_results_match(self):
+        target = (1 << 256) - 1
+        serial = scan_nonce_range(
+            self.header, target, 0, 32, workers=1, chunk_size=5
+        )
+        parallel = scan_nonce_range(
+            self.header, target, 0, 32, workers=2, chunk_size=5
+        )
+        self.assertEqual(
+            [(x.nonce, x.digest_hex, x.hash_value) for x in serial.candidates],
+            [(x.nonce, x.digest_hex, x.hash_value) for x in parallel.candidates],
+        )
+        self.assertEqual(serial.attempts, parallel.attempts)
+
     def test_candidate_is_independently_verified(self):
         target = (1 << 256) - 1
         result = scan_nonce_range(self.header, target, 7, 8)
         self.assertEqual(len(result.candidates), 1)
         self.assertTrue(verify_candidate(self.header, result.candidates[0]))
-        altered = Candidate(result.candidates[0].nonce, "00" * 32,
-                            result.candidates[0].hash_value, target)
+        altered = Candidate(
+            result.candidates[0].nonce,
+            "00" * 32,
+            result.candidates[0].hash_value,
+            target,
+        )
         self.assertFalse(verify_candidate(self.header, altered))
 
     def test_empty_range_is_valid(self):
