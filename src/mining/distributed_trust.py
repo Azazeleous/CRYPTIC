@@ -157,6 +157,7 @@ def verify_distributed_trust_bundle(
         return fail("pinned_root_mismatch")
 
     current_root = dict(root)
+    root_chain = [dict(root)]
     for index, transition in enumerate(rotations):
         result = verify_root_rotation(
             transition, current_root,
@@ -166,6 +167,7 @@ def verify_distributed_trust_bundle(
             return {"valid": False, "reason": "root_rotation_invalid",
                     "rotation_index": index, "detail": result.get("reason")}
         current_root = dict(transition["new_root_manifest"])
+        root_chain.append(current_root)
 
     root_epoch = current_root["epoch"]
     root_fingerprint = current_root["root_fingerprint"]
@@ -174,6 +176,13 @@ def verify_distributed_trust_bundle(
     )
     if root_epoch < effective_min_root:
         return fail("root_epoch_rollback")
+    if prior:
+        prior_roots = [
+            item for item in root_chain
+            if item.get("epoch") == prior["root_epoch"]
+        ]
+        if not prior_roots or prior_roots[-1].get("root_fingerprint") != prior["root_fingerprint"]:
+            return fail("root_history_does_not_match_previous_state")
 
     snapshot = bundle.get("trust_snapshot")
     if not isinstance(snapshot, Mapping):
@@ -184,6 +193,11 @@ def verify_distributed_trust_bundle(
         return fail("trust_snapshot_chain_invalid")
     if not chain.get("valid"):
         return fail("trust_snapshot_chain_invalid")
+    if prior and prior["snapshot_digest"] not in {
+        item.get("snapshot_digest") for item in [*history, snapshot]
+        if isinstance(item, Mapping)
+    }:
+        return fail("snapshot_history_does_not_match_previous_state")
 
     policy = bundle.get("signed_policy")
     if not isinstance(policy, Mapping):
