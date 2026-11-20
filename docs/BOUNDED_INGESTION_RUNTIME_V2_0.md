@@ -32,3 +32,8 @@ Existing EVM and Solana adapters currently implement the legacy SourceAdapter
 surface. They are intentionally rejected by v2.0 until their JSON-RPC client
 and multi-call observation sequences consume a shared absolute deadline.
 This prevents falsely advertising a hard session boundary.
+
+
+## Deadline scope
+
+The monotonic session deadline bounds adapter health checks and page acquisition only. Journal append/fsync, journal audit, and deterministic replay are local filesystem work performed after collection and are not forcibly interruptible by this thread-based coordinator. Their duration is measured by the surrounding caller, not claimed to be inside a hard real-time cutoff. A strict end-to-end cutoff requires a separately supervised process boundary and an explicit storage-I/O policy; this version does not claim that stronger guarantee.
