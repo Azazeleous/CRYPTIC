@@ -116,6 +116,8 @@ def _quorum(payload, signatures, keys, threshold, domain):
         if not isinstance(fp, str) or fp not in trusted:
             rejected.append("untrusted_signer"); continue
         if fp in accepted: rejected.append("duplicate_signer"); continue
+        if not isinstance(item.get("signature"), str):
+            rejected.append("malformed_signature"); continue
         try:
             sig = base64.b64decode(item["signature"], validate=True)
             pub = _raw(trusted[fp], 32, "trusted_public_key")
