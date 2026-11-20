@@ -122,15 +122,14 @@ class IsolatedDnsResolver:
             raise DnsResolverError("port_invalid")
         if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
             raise DnsResolverError("deadline_invalid")
+        remaining = float(deadline_monotonic) - time.monotonic()
+        if remaining <= 0:
+            raise DnsResolverDeadlineExceeded("dns_deadline_exceeded")
         try:
             literal = ipaddress.ip_address(hostname)
             return ((socket.AF_INET6 if literal.version == 6 else socket.AF_INET, str(literal)),)
         except ValueError:
             pass
-
-        remaining = float(deadline_monotonic) - time.monotonic()
-        if remaining <= 0:
-            raise DnsResolverDeadlineExceeded("dns_deadline_exceeded")
         if not self._lock.acquire(timeout=remaining):
             raise DnsResolverDeadlineExceeded("dns_deadline_exceeded")
         try:
