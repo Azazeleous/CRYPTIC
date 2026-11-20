@@ -274,8 +274,6 @@ def rotate_trust_key(
             raise TrustLifecycleError("cannot rotate a snapshot with an unverified history")
     effective_at = _timestamp(effective_at, "effective_at")
     created_at = _timestamp(created_at, "created_at")
-    if created_at < effective_at:
-        raise TrustLifecycleError("snapshot created_at cannot precede effective_at")
     rows = [dict(row) for row in snapshot["issuers"]]
     matches = [
         row for row in rows
