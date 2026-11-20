@@ -83,6 +83,13 @@ class JsonRpcProtocolTests(unittest.TestCase):
                 deadline_monotonic=time.monotonic() + 2,
             )
 
+    def test_json_rpc_rejects_oversized_endpoint(self):
+        with self.assertRaisesRegex(SourceRegistryError, "maximum length"):
+            JsonRpcClient(
+                "https://rpc.example.org/" + ("x" * 2048),
+                allowed_methods=frozenset({"eth_chainId"}),
+            )
+
     def test_absolute_deadline_call_requires_prior_worker_preparation(self):
         client = JsonRpcClient(
             "https://rpc.example.org",
