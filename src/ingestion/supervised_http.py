@@ -119,6 +119,8 @@ class SupervisedHttpTransport:
     ) -> tuple[int, bytes]:
         if not isinstance(url, str) or not url or not isinstance(body, bytes):
             raise SupervisedTransportError("request_invalid")
+        if len(body) > 1_048_576:
+            raise SupervisedTransportError("request_size_invalid")
         if (isinstance(max_response_bytes, bool) or not isinstance(max_response_bytes, int)
                 or max_response_bytes < 1):
             raise SupervisedTransportError("response_limit_invalid")
