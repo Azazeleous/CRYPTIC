@@ -188,6 +188,8 @@ def verify_attestation(
         return failure("invalid_input")
     if attestation.get("schema") != SCHEMA or trust_store.get("schema") != TRUST_SCHEMA:
         return failure("unsupported_schema")
+    if set(attestation.keys()) != {"schema", "payload", "signature", "attestation_id"}:
+        return failure("malformed_attestation")
     payload = attestation.get("payload")
     signature_text = attestation.get("signature")
     attestation_id = attestation.get("attestation_id")
