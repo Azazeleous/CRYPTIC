@@ -280,7 +280,8 @@ def _verify_with_snapshot(
         row["revoked_at"] is not None and issued_at >= row["revoked_at"]
     ):
         return {"valid": False, "reason": "attestation_outside_key_validity"}
-    if not historical and row["revoked_at"] is not None:
+    if (not historical and row["revoked_at"] is not None
+            and row["revoked_at"] <= snapshot["created_at"]):
         return {"valid": False, "reason": "issuer_key_revoked"}
     active_entry = {
         "issuer_id": row["issuer_id"],
@@ -341,6 +342,7 @@ def verify_attestation_quorum(
     seen_issuers = set()
     seen_fingerprints = set()
     common_subject = None
+    common_purpose = None
     for index, item in enumerate(attestations):
         result = verify_one(item, snapshot)
         if not result.get("valid"):
@@ -355,6 +357,12 @@ def verify_attestation_quorum(
             common_subject = subject_key
         elif subject_key != common_subject:
             rejected.append({"index": index, "reason": "subject_mismatch"})
+            continue
+        purpose = result["purpose"]
+        if common_purpose is None:
+            common_purpose = purpose
+        elif purpose != common_purpose:
+            rejected.append({"index": index, "reason": "purpose_mismatch"})
             continue
         issuer = result["issuer_id"]
         fingerprint = result["key_fingerprint"]
@@ -382,6 +390,7 @@ def verify_attestation_quorum(
             "digest_algorithm": common_subject[2],
             "digest": common_subject[3],
         } if common_subject is not None else None),
+        "purpose": common_purpose,
         "historical_policy": historical,
         "trust_snapshot_digest": snapshot.get("snapshot_digest")
         if isinstance(snapshot, Mapping) else None,
