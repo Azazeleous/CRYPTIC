@@ -20,6 +20,7 @@ from src.mining.provenance_trust import (
     verify_attestation_historical,
     verify_attestation_quorum,
     verify_trust_snapshot,
+    verify_trust_snapshot_chain,
 )
 
 
@@ -67,15 +68,36 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
             effective_at=200,
             created_at=210,
         )
-        self.assertEqual(
-            verify_trust_snapshot(rotated)["reason"],
-            "previous_snapshot_required",
-        )
+        standalone = verify_trust_snapshot(rotated)
+        self.assertTrue(standalone["valid"])
+        self.assertFalse(standalone["chain_verified"])
         self.assertTrue(verify_trust_snapshot(rotated, self.snapshot_v1)["valid"])
         wrong_previous = copy.deepcopy(self.snapshot_v1)
         wrong_previous["created_at"] = 99
         wrong_previous["snapshot_digest"] = "f" * 64
         self.assertFalse(verify_trust_snapshot(rotated, wrong_previous)["valid"])
+
+    def test_three_version_snapshot_chain_verifies_sequentially(self):
+        second = revoke_trust_key(
+            self.snapshot_v1,
+            issuer_id="issuer-a",
+            key_fingerprint=self.key_a["key_fingerprint"],
+            effective_at=180,
+            created_at=190,
+        )
+        third = rotate_trust_key(
+            second,
+            issuer_id="issuer-b",
+            old_key_fingerprint=self.key_b["key_fingerprint"],
+            new_public_key_hex=self.key_c["public_key_hex"],
+            effective_at=220,
+            created_at=230,
+        )
+        result = verify_trust_snapshot_chain([self.snapshot_v1, second, third])
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["version"], 3)
+        self.assertEqual(result["snapshot_count"], 3)
+        self.assertFalse(verify_trust_snapshot_chain([self.snapshot_v1, third])["valid"])
 
     def test_rotation_preserves_historical_signature_but_rejects_current(self):
         old_attestation = self._attestation("issuer-a", self.key_a, issued_at=150)
