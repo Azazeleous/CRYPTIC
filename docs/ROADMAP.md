@@ -7,7 +7,7 @@
 - Establish CI, formatting, type checking, and test conventions.
 
 ## Phase 1 — Read-only source connectivity
-- Source registry and adapter interface.
+- Source registry and adapter interface — implemented and CI-verified in PR #11; provider-specific integrations remain open.
 - Public market-data catalogues and quotes.
 - EVM JSON-RPC and Solana RPC adapters.
 - Health probes, rate limits, reconnect, pagination, provenance.
