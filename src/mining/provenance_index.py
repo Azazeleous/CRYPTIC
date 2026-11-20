@@ -177,7 +177,7 @@ def verify_index(
         return False
     try:
         return index == build_index(wallet_file, manifest_dir)
-    except (OSError, TypeError, ValueError, KeyError):
+    except (OSError, TypeError, ValueError, KeyError, AttributeError):
         return False
 
 
@@ -214,13 +214,17 @@ def audit_index_file(
         with path.open("r", encoding="utf-8") as stream:
             index = json.load(stream)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        return {"valid": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"schema": "cryptic.provenance-index-audit.v1", "valid": False,
+                "error": f"{type(exc).__name__}: {exc}"}
+
     valid = verify_index(index, wallet_file, manifest_dir)
+    summary = index.get("summary") if isinstance(index, dict) else None
+    checkpoint = index.get("checkpoint") if isinstance(index, dict) else None
     return {
         "schema": "cryptic.provenance-index-audit.v1",
         "valid": valid,
-        "indexed_records": index.get("summary", {}).get("indexed_records") if isinstance(index, dict) else None,
-        "archive_root": index.get("checkpoint", {}).get("archive_root") if isinstance(index, dict) else None,
+        "indexed_records": summary.get("indexed_records") if isinstance(summary, dict) else None,
+        "archive_root": checkpoint.get("archive_root") if isinstance(checkpoint, dict) else None,
     }
 
 
@@ -241,7 +245,9 @@ def main(argv: list[str] | None = None) -> int:
             except (OSError, TypeError, ValueError) as exc:
                 parser.exit(2, f"index export error: {type(exc).__name__}: {exc}\n")
     print(json.dumps(report, sort_keys=True, indent=2))
-    return 0 if report.get("valid", report.get("summary", {}).get("valid", False)) else 2
+    if "valid" in report:
+        return 0 if report["valid"] else 2
+    return 0 if report.get("summary", {}).get("valid", False) else 2
 
 
 if __name__ == "__main__":
