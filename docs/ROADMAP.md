@@ -9,8 +9,8 @@
 ## Phase 1 — Read-only source connectivity
 - Source registry and adapter interface — implemented and CI-verified in PR #11; provider-specific integrations remain open.
 - Public market-data catalogues and quotes.
-- EVM JSON-RPC and Solana RPC adapters.
-- Health probes, rate limits, reconnect, pagination, provenance.
+- EVM and Solana read-only JSON-RPC identity adapters — implemented and CI-verified in PR #12; live endpoint verification, log/history pagination, and subscriptions remain open.
+- Health probes, rate limits, reconnect, pagination, provenance — transport timeout/retry and per-client request spacing are implemented; persistent health history, provider-level rate-limit coordination, and raw observation provenance remain open.
 - Canonical chain and asset identity; coverage reports.
 
 ## Phase 2 — Ingestion and verification
