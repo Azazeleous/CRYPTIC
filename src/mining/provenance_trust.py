@@ -302,11 +302,20 @@ def _verify_with_snapshot(
     snapshot: Mapping[str, Any],
     *,
     historical: bool,
+    snapshot_history: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     snapshot_result = verify_trust_snapshot(snapshot)
     if not snapshot_result["valid"]:
         return {"valid": False, "reason": "trust_snapshot_invalid",
                 "detail": snapshot_result["reason"]}
+    if snapshot.get("version", 0) > 1:
+        if snapshot_history is None:
+            return {"valid": False, "reason": "trust_snapshot_chain_unverified"}
+        chain_result = verify_trust_snapshot_chain([*snapshot_history, snapshot])
+        if not chain_result["valid"]:
+            return {"valid": False, "reason": "trust_snapshot_chain_invalid",
+                    "detail": chain_result["reason"]}
+
     payload = attestation.get("payload") if isinstance(attestation, Mapping) else None
     if not isinstance(payload, Mapping):
         return {"valid": False, "reason": "malformed_attestation"}
@@ -353,17 +362,25 @@ def _verify_with_snapshot(
 def verify_attestation_historical(
     attestation: Mapping[str, Any],
     snapshot: Mapping[str, Any],
+    *,
+    snapshot_history: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Verify a signature under the key policy valid at its signed issue time."""
-    return _verify_with_snapshot(attestation, snapshot, historical=True)
+    """Verify at issue time; v2+ snapshots require their ordered predecessor history."""
+    return _verify_with_snapshot(
+        attestation, snapshot, historical=True, snapshot_history=snapshot_history
+    )
 
 
 def verify_attestation_current(
     attestation: Mapping[str, Any],
     snapshot: Mapping[str, Any],
+    *,
+    snapshot_history: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Verify signature and require the issuer key to remain unrevoked now."""
-    return _verify_with_snapshot(attestation, snapshot, historical=False)
+    """Verify current snapshot policy; v2+ snapshots require predecessor history."""
+    return _verify_with_snapshot(
+        attestation, snapshot, historical=False, snapshot_history=snapshot_history
+    )
 
 
 def verify_attestation_quorum(
@@ -372,6 +389,7 @@ def verify_attestation_quorum(
     *,
     threshold: int,
     historical: bool = True,
+    snapshot_history: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Require threshold valid attestations from distinct trusted issuers.
 
@@ -391,7 +409,7 @@ def verify_attestation_quorum(
     common_subject = None
     common_purpose = None
     for index, item in enumerate(attestations):
-        result = verify_one(item, snapshot)
+        result = verify_one(item, snapshot, snapshot_history=snapshot_history)
         if not result.get("valid"):
             rejected.append({"index": index, "reason": result.get("reason")})
             continue
