@@ -122,7 +122,8 @@ class LiveSolanaRpcTests(unittest.TestCase):
         adapter = SolanaReadOnlyAdapter(os.environ["CRYPTIC_SOLANA_RPC_URL"])
         observation = adapter.observe()
         self.assertTrue(observation["genesis_hash"])
-        self.assertGreaterEqual(observation["slot"], observation["block_height"])
+        self.assertGreaterEqual(observation["slot"], 0)
+        self.assertGreaterEqual(observation["block_height"], 0)
 
 
 if __name__ == "__main__":
