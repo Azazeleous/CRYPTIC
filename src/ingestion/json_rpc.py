@@ -16,7 +16,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-from .supervised_http import SupervisedHttpTransport, SupervisedTransportError
+from .supervised_http import (
+    SupervisedHttpTransport,
+    SupervisedTransportDeadlineExceeded,
+    SupervisedTransportError,
+)
 
 from .source_registry import (
     HealthReport,
@@ -240,6 +244,8 @@ class JsonRpcClient:
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
+            except SupervisedTransportDeadlineExceeded:
+                raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded") from None
             except HTTPError as exc:
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
                 if not retryable or attempt >= self.policy.max_retries:
