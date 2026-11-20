@@ -1,5 +1,11 @@
 """Read-only ingestion source contracts."""
 
+from .normalization import (
+    NormalizationError,
+    compare_chain_heads,
+    normalize_chain_observation,
+    normalize_journal_record,
+)
 from .observation_log import (
     ObservationJournalError,
     append_page,
@@ -25,6 +31,10 @@ from .source_registry import (
 )
 
 __all__ = [
+    "NormalizationError",
+    "compare_chain_heads",
+    "normalize_chain_observation",
+    "normalize_journal_record",
     "ObservationJournalError",
     "append_page",
     "audit_journal",
