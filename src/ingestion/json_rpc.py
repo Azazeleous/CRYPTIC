@@ -10,6 +10,7 @@ import itertools
 import json
 import time
 from typing import Any, Mapping
+from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -62,13 +63,15 @@ class _RateGate:
     def __init__(self, per_minute: int) -> None:
         self._interval = 60.0 / per_minute
         self._next_at = 0.0
+        self._lock = Lock()
 
     def wait(self) -> None:
-        now = time.monotonic()
-        delay = self._next_at - now
-        if delay > 0:
-            time.sleep(delay)
-        self._next_at = max(now, self._next_at) + self._interval
+        with self._lock:
+            now = time.monotonic()
+            delay = self._next_at - now
+            if delay > 0:
+                time.sleep(delay)
+            self._next_at = max(time.monotonic(), self._next_at) + self._interval
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -106,9 +109,10 @@ class JsonRpcClient:
         if parsed.query or parsed.fragment:
             raise SourceRegistryError("JSON-RPC endpoint must not contain query or fragment")
         if not isinstance(allowed_methods, frozenset) or not allowed_methods or any(
-            not isinstance(method, str) or not method for method in allowed_methods
+            not isinstance(method, str) or method not in _READ_ONLY_METHODS
+            for method in allowed_methods
         ):
-            raise SourceRegistryError("allowed_methods must be a non-empty frozenset")
+            raise SourceRegistryError("allowed_methods must contain only approved read-only methods")
         self.endpoint = endpoint
         self.allowed_methods = allowed_methods
         self._rate_gate = _RateGate(self.policy.rate_limit_per_minute)
@@ -179,6 +183,7 @@ class JsonRpcClient:
 
 _EVM_METHODS = frozenset({"eth_chainId", "eth_blockNumber"})
 _SOLANA_METHODS = frozenset({"getGenesisHash", "getSlot", "getBlockHeight"})
+_READ_ONLY_METHODS = _EVM_METHODS | _SOLANA_METHODS
 
 
 class EvmReadOnlyAdapter:
