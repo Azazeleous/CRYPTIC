@@ -71,6 +71,16 @@ class JsonRpcProtocolTests(unittest.TestCase):
         with self.assertRaises(JsonRpcDeadlineExceeded):
             client.call_until("eth_chainId", deadline_monotonic=__import__("time").monotonic() - 1)
 
+    def test_absolute_deadline_call_requires_prior_worker_preparation(self):
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}),
+        )
+        with self.assertRaisesRegex(JsonRpcError, "not_prepared"):
+            client.call_until(
+                "eth_chainId", deadline_monotonic=time.monotonic() + 1,
+            )
+
     def test_chain_adapters_expose_deadline_methods_without_overclaiming_dns_bound(self):
         evm = EvmReadOnlyAdapter("https://rpc.example.org")
         solana = SolanaReadOnlyAdapter("https://rpc.example.org")
