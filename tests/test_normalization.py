@@ -99,7 +99,7 @@ class ChainNormalizationTests(unittest.TestCase):
             evm("provider-a", height=100),
             evm("provider-b", height=104),
         ], max_height_delta=1)
-        self.assertTrue(report["valid"] if "valid" in report else True)
+        self.assertTrue(report["valid"])
         self.assertFalse(report["summary"]["consistent"])
         self.assertEqual(report["discrepancies"][0]["kind"], "height_lag")
         self.assertEqual(report["discrepancies"][0]["height_delta"], 4)
