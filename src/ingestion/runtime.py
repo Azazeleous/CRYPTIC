@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import re
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -15,6 +16,8 @@ from typing import Protocol
 from .observation_log import append_page, audit_journal
 from .replay import replay_journal
 from .source_registry import HealthReport, SourceAdapterError, SourceDescriptor, SourcePage, SourceRegistry
+
+_FORBIDDEN_FILTER_KEY = re.compile(r"(secret|password|authorization|api[_-]?key|access[_-]?token)", re.IGNORECASE)
 
 
 class IngestionRuntimeError(ValueError):
@@ -155,6 +158,7 @@ class BoundedIngestionRuntime:
                                             thread_name_prefix="cryptic-ingest")
         self._session_lock = threading.Lock()
         self._closed = False
+        self._poisoned = False
 
     def close(self, *, wait_for_workers: bool = True) -> None:
         if not self._closed:
@@ -195,6 +199,8 @@ class BoundedIngestionRuntime:
             filters_by_source: Mapping[str, Mapping[str, object]] | None = None) -> dict[str, object]:
         if self._closed:
             raise IngestionRuntimeError("runtime is closed")
+        if self._poisoned:
+            raise IngestionRuntimeError("runtime cannot be reused after an unresolved deadline timeout")
         if not self._session_lock.acquire(blocking=False):
             raise IngestionRuntimeError("another ingestion session is active")
         try:
@@ -209,6 +215,9 @@ class BoundedIngestionRuntime:
                 raise IngestionRuntimeError("filters supplied for an unselected source")
             if any(not isinstance(value, Mapping) for value in filters_by_source.values()):
                 raise IngestionRuntimeError("each source filter must be an object")
+            for source_filters in filters_by_source.values():
+                if any(not isinstance(key, str) or _FORBIDDEN_FILTER_KEY.search(key) for key in source_filters):
+                    raise IngestionRuntimeError("filters must not contain credential fields")
             before = audit_journal(journal_path)
             if not before["valid"]:
                 raise IngestionRuntimeError("refusing to ingest into an invalid journal")
@@ -257,6 +266,8 @@ class BoundedIngestionRuntime:
                             (), "failed", type(exc).__name__, 0,
                         )
             if timed_out:
+                if submitted:
+                    self._poisoned = True
                 for future, source_id in submitted.items():
                     future.cancel()
                     results.setdefault(source_id, _WorkerResult(
