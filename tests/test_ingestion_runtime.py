@@ -71,6 +71,33 @@ class BoundedRuntimeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_adapter_preparation_precedes_collection_deadline(self):
+        class PreparedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.prepared_at = None
+                self.prepared_before_collection = False
+
+            def prepare(self):
+                self.prepared_at = time.monotonic()
+
+            def health_check_until(self, *, deadline_monotonic):
+                collection_started = deadline_monotonic - 5.0
+                self.prepared_before_collection = self.prepared_at is not None and self.prepared_at < collection_started
+                if not self.prepared_before_collection:
+                    raise RuntimeError("adapter_not_prepared_before_collection")
+                return HealthReport(self.descriptor.source_id, True, 1, 1)
+
+        adapter = PreparedAdapter("prepared")
+        self.registry.register(adapter)
+        policy = IngestionPolicy(max_workers=1, max_queue_size=0, max_pages=1,
+                                 max_observations=1, max_page_size=1,
+                                 max_duration_seconds=5.0)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            report = runtime.run(self.journal, ["prepared"])
+        self.assertEqual(report["status"], "complete")
+        self.assertTrue(adapter.prepared_before_collection)
+
     def test_legacy_adapter_is_rejected(self):
         self.registry.register(LegacyAdapter("legacy"))
         with BoundedIngestionRuntime(self.registry) as runtime:
