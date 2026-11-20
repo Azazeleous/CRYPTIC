@@ -14,3 +14,10 @@ checks, and explicit exclusions.
 `observation_log` appends validated `SourcePage` records to a canonical
 JSONL SHA-256 chain. It verifies the journal before append and on retrieval.
 See `docs/RAW_OBSERVATION_JOURNAL_V1_7.md` for its threat model and limits.
+
+## Chain normalization
+
+`normalization` derives provider-neutral EVM/Solana chain identities from
+genesis anchors and compares fresh observations across independent sources.
+See `docs/CHAIN_NORMALIZATION_V1_8.md` for the discrepancy semantics and
+interpretation limits.

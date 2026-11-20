@@ -83,6 +83,13 @@ class JsonRpcProtocolTests(unittest.TestCase):
         adapter = EvmReadOnlyAdapter("https://rpc.example.org")
         self.assertEqual(adapter.descriptor.schema_id, "cryptic.evm-chain-observation.v1")
         self.assertEqual(adapter._hex_quantity("0x539", "chain_id"), 1337)
+        self.assertIn("eth_getBlockByNumber", adapter.client.allowed_methods)
+        block = adapter._block_fields({
+            "number": "0x0", "timestamp": "0x1",
+            "hash": "0x" + "a" * 64, "parentHash": "0x" + "b" * 64,
+        }, "genesis")
+        self.assertEqual(block["number"], 0)
+        self.assertEqual(block["timestamp"], 1)
         with self.assertRaisesRegex(JsonRpcError, "quantity_invalid"):
             adapter._hex_quantity("not-hex", "chain_id")
         with self.assertRaisesRegex(SourceRegistryError, "one unfiltered"):
