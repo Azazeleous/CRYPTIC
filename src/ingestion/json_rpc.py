@@ -126,6 +126,8 @@ class JsonRpcClient:
             parsed.scheme == "http" and hostname in {"localhost", "127.0.0.1", "::1"}
         ):
             raise SourceRegistryError("JSON-RPC requires HTTPS or loopback HTTP")
+        if len(endpoint) > 2_048:
+            raise SourceRegistryError("JSON-RPC endpoint exceeds maximum length")
         if not hostname or parsed.username is not None or parsed.password is not None:
             raise SourceRegistryError("JSON-RPC endpoint host is invalid or embeds credentials")
         if parsed.query or parsed.fragment:
