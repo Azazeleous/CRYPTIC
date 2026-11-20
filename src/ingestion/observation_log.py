@@ -300,9 +300,8 @@ def read_records(
     max_record_bytes: int = _DEFAULT_MAX_RECORD_BYTES,
 ) -> tuple[dict[str, Any], ...]:
     """Return verified records; never return partial data from an invalid journal."""
-    report = audit_journal(journal_path, max_record_bytes=max_record_bytes)
-    if not report["valid"]:
-        raise ObservationJournalError(f"journal verification failed: {report['error']}")
+    if isinstance(max_record_bytes, bool) or not isinstance(max_record_bytes, int) or not 1024 <= max_record_bytes <= 67_108_864:
+        raise ObservationJournalError("max_record_bytes must be between 1024 and 67108864")
     path = Path(journal_path).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
     with _exclusive_lock(path.with_name(path.name + ".lock")):
