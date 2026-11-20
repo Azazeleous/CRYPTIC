@@ -120,7 +120,7 @@ class SupervisedHttpTransport:
     ) -> tuple[int, bytes]:
         if not isinstance(url, str) or not url or not isinstance(body, bytes):
             raise SupervisedTransportError("request_invalid")
-        if len(body) > 1_048_576:
+        if len(body) > 65_536:
             raise SupervisedTransportError("request_size_invalid")
         if (isinstance(timeout_seconds, bool)
                 or not isinstance(timeout_seconds, (int, float))
@@ -155,6 +155,11 @@ class SupervisedHttpTransport:
                 self._connection.send((
                     request_id, url, body, bounded_timeout, max_response_bytes,
                 ))
+                remaining = float(deadline_monotonic) - time.monotonic()
+                if remaining <= 0:
+                    self._poisoned = True
+                    self._terminate()
+                    raise SupervisedTransportDeadlineExceeded("http_deadline_exceeded")
                 if not self._connection.poll(remaining):
                     self._poisoned = True
                     self._terminate()
