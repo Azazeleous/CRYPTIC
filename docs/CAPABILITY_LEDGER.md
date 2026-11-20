@@ -7,9 +7,11 @@
 | Market-data source adapters | proposed | live adapter tests with provenance |
 | Bounded JSON-RPC transport | implemented (E3) | HTTPS/loopback policy, response bounds, request IDs, read-only allowlist, retries and per-client request spacing; PR #12 CI verified |
 | Raw observation journal | implemented (E3) | PR #13; CI run 44791258725 passed unit tests and bounded benchmark; canonical JSONL, SHA-256 chain, fsync, OS file locking, tamper detection; no privileged/WORM claim |
-| EVM JSON-RPC transport + chain identity | implemented (E3) | PR #12; CI run 44790661161 passed protocol/adapter tests and bounded benchmark; live provider verification remains unclaimed |
-| Solana JSON-RPC transport + cluster identity | implemented (E3) | PR #12; CI run 44790661161 passed protocol/adapter tests and bounded benchmark; live provider verification and subscriptions remain open |
+| Chain normalization and discrepancy reports | implemented (E3) | PR #14; CI run 44791838680 passed normalization, identity, discrepancy, and bounded benchmark tests; no consensus-validity claim |
+| EVM JSON-RPC transport + chain identity | implemented (E3) | PR #12 and #14; CI protocol/adapter tests passed; identity uses chain ID plus genesis hash; live provider verification remains unclaimed |
+| Solana JSON-RPC transport + cluster identity | implemented (E3) | PR #12 and #14; CI protocol/adapter tests passed; identity uses genesis hash; live provider verification and subscriptions remain open |
 | Complete asset coverage | unverified | provider-by-provider coverage and limits |
+| Canonical chain identity | implemented (E3) | PR #14; EVM chain ID + genesis hash and Solana genesis hash; cross-source comparisons require matching network identity |
 | Canonical asset identity | proposed | collision and alias test suite |
 | Model routing | proposed | provider contract and evaluation |
 | Local model inference | proposed | reproducible benchmark on target hardware |
