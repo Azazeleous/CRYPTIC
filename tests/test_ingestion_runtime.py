@@ -19,7 +19,7 @@ class DeadlineAdapter:
             endpoint=f"https://{source_id}.example.org", auth_mode="none",
             rate_limit_per_minute=60, max_page_size=5,
             pagination_mode="cursor" if pages > 1 else "none",
-            schema_id="test.record.v1",
+            schema_id="cryptic.evm-chain-observation.v1",
         )
         self.delay, self.pages = delay, pages
 
@@ -38,7 +38,12 @@ class DeadlineAdapter:
         index = int(cursor or "0")
         next_cursor = str(index + 1) if index + 1 < self.pages else None
         return SourcePage(self.descriptor.source_id, self.descriptor.schema_id, 1,
-                          ({"source": self.descriptor.source_id, "index": index},), next_cursor)
+                          ({
+                              "chain_id": 1,
+                              "genesis_hash": "0x" + "a" * 64,
+                              "block_number": index,
+                              "block_hash": "0x" + "b" * 64,
+                          },), next_cursor)
 
 
 class LegacyAdapter:
