@@ -211,6 +211,28 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         self.assertTrue(result["valid"])
         self.assertEqual(result["valid_signer_count"], 2)
 
+    def test_quorum_accepts_rotated_key_with_complete_snapshot_history(self):
+        rotated = rotate_trust_key(
+            self.snapshot_v1,
+            issuer_id="issuer-a",
+            old_key_fingerprint=self.key_a["key_fingerprint"],
+            new_public_key_hex=self.key_c["public_key_hex"],
+            effective_at=200,
+            created_at=210,
+        )
+        attestations = [
+            self._attestation("issuer-a", self.key_c, issued_at=205),
+            self._attestation("issuer-b", self.key_b, issued_at=205),
+        ]
+        result = verify_attestation_quorum(
+            attestations,
+            rotated,
+            threshold=2,
+            snapshot_history=[self.snapshot_v1],
+        )
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["valid_signer_count"], 2)
+
     def test_duplicate_issuer_cannot_satisfy_quorum(self):
         attestations = [
             self._attestation("issuer-a", self.key_a),
