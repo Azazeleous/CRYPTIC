@@ -181,7 +181,11 @@ class JsonRpcClient:
         return document["result"]
 
     def call(self, method: str, params: list[Any] | None = None) -> Any:
-        return self._call(method, params, deadline_monotonic=None)
+        # Even non-coordinator calls use a finite whole-request deadline.
+        return self._call(
+            method, params,
+            deadline_monotonic=time.monotonic() + self.policy.timeout_seconds,
+        )
 
     def call_until(self, method: str, params: list[Any] | None = None, *,
                    deadline_monotonic: float) -> Any:
