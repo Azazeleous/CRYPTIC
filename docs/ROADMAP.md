@@ -15,7 +15,7 @@
 
 ## Phase 2 — Ingestion and verification
 - Bounded streaming and backpressure.
-- Immutable raw observation log.
+- Tamper-evident raw observation journal — implemented and CI-verified in PR #13; canonical JSONL, hash chain, append locking, fsync, and full-chain audit are available. It is not privileged-proof/WORM storage.
 - Normalization and cross-source discrepancy records.
 - Deterministic replay and data-quality tests.
 
