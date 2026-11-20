@@ -112,7 +112,7 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
             _remaining(deadline)
             remaining_observations = observation_quota - observations
             if remaining_observations <= 0:
-                budget_exhausted = cursor is not None
+                budget_exhausted = True
                 break
             limit = min(page_size, adapter.descriptor.max_page_size, remaining_observations)
             page = adapter.fetch_page_until(
