@@ -28,6 +28,13 @@ Snapshots are immutable values. Rotation and revocation create a new version
 and preserve the previous snapshot unchanged. The new snapshot references
 the prior snapshot digest and increments its version by one.
 
+`verify_trust_snapshot()` always checks the supplied snapshot's canonical
+digest. For versions after v1, a standalone check explicitly reports that
+the predecessor chain is unchecked. Supplying the immediate predecessor
+checks that direct link. `verify_trust_snapshot_chain()` accepts the ordered
+history beginning at v1 and checks every link sequentially; use this when
+claiming that the complete supplied history is internally consistent.
+
 ## Key rotation and revocation
 
 `rotate_trust_key()` atomically:
@@ -54,9 +61,11 @@ snapshot remain governance responsibilities.
   scheduled revocation does not take effect early.
 
 Both modes verify the Ed25519 signature and key fingerprint through the
-existing v1.1 verifier. Neither treats `issued_at` or `created_at` as a
-trusted clock. The caller must select the correct snapshot and verification
-mode for the audit question.
+existing v1.1 verifier. The current mode means active under the supplied
+snapshot's `created_at` policy state; it is not a live wall-clock lookup.
+Neither mode treats `issued_at` or `created_at` as a trusted clock. The
+caller must select the correct snapshot and verification mode for the audit
+question.
 
 ## Quorum verification
 
