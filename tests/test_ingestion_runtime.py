@@ -98,6 +98,22 @@ class BoundedRuntimeTests(unittest.TestCase):
         self.assertEqual(report["status"], "complete")
         self.assertTrue(adapter.prepared_before_collection)
 
+    def test_non_waiting_shutdown_closes_adapter_transport(self):
+        class ClosableAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        adapter = ClosableAdapter("closable")
+        self.registry.register(adapter)
+        runtime = BoundedIngestionRuntime(self.registry)
+        runtime.run(self.journal, ["closable"])
+        runtime.close(wait_for_workers=False)
+        self.assertTrue(adapter.closed)
+
     def test_legacy_adapter_is_rejected(self):
         self.registry.register(LegacyAdapter("legacy"))
         with BoundedIngestionRuntime(self.registry) as runtime:
