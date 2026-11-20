@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import itertools
+import math
 import json
 import re
 import time
@@ -187,7 +188,10 @@ class JsonRpcClient:
 
     def call_until(self, method: str, params: list[Any] | None = None, *,
                    deadline_monotonic: float) -> Any:
-        if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
+        """Execute against a prepared worker and caller-owned absolute deadline."""
+        if (isinstance(deadline_monotonic, bool)
+                or not isinstance(deadline_monotonic, (int, float))
+                or not math.isfinite(deadline_monotonic)):
             raise JsonRpcError("rpc_deadline_invalid")
         if deadline_monotonic <= time.monotonic():
             raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
