@@ -30,8 +30,8 @@ def _canonical(value: Any) -> bytes:
 def _read_wallet(path: Path) -> tuple[list[tuple[int, dict[str, Any]]], list[int]]:
     records: list[tuple[int, dict[str, Any]]] = []
     malformed: list[int] = []
-    if not path.exists():
-        return records, malformed
+    if not path.is_file():
+        raise FileNotFoundError(f"wallet receipt archive not found: {path}")
     with path.open("rb") as stream:
         for number, raw in enumerate(stream, 1):
             if not raw.strip():
@@ -64,6 +64,8 @@ def build_index(
     """Build a reproducible index from independently verified source artifacts."""
     wallet = Path(wallet_file).expanduser()
     manifests = Path(manifest_dir).expanduser()
+    if not manifests.is_dir():
+        raise FileNotFoundError(f"manifest directory not found: {manifests}")
     wallet_rows, malformed = _read_wallet(wallet)
 
     invalid_receipts: list[dict[str, Any]] = []
@@ -97,7 +99,11 @@ def build_index(
             missing_manifests.append(receipt_id)
             continue
         manifest = _load_manifest(manifest_path)
-        if manifest is None or not verify_manifest(manifest, receipt):
+        try:
+            manifest_valid = manifest is not None and verify_manifest(manifest, receipt)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            manifest_valid = False
+        if not manifest_valid:
             manifest_conflicts.append(filename)
             continue
 
@@ -185,12 +191,19 @@ def export_index(index: dict[str, Any], destination: str | os.PathLike[str]) -> 
     """Write a canonical index to a new file; never overwrite an existing file."""
     if not isinstance(index, dict) or index.get("schema") != SCHEMA:
         raise ValueError("unsupported provenance index")
+    summary = index.get("summary")
+    records = index.get("records")
+    checkpoint = index.get("checkpoint")
+    if (not isinstance(summary, dict) or summary.get("valid") is not True
+            or summary.get("issue_count") != 0 or not isinstance(records, list)):
+        raise ValueError("refusing to export an index with source issues")
     expected_root = hashlib.sha256(_canonical({
         "schema": "cryptic.provenance-checkpoint.v1",
-        "records": index.get("records"),
+        "records": records,
     })).hexdigest()
-    checkpoint = index.get("checkpoint")
-    if not isinstance(checkpoint, dict) or checkpoint.get("archive_root") != expected_root:
+    if (not isinstance(checkpoint, dict)
+            or checkpoint.get("record_count") != len(records)
+            or checkpoint.get("archive_root") != expected_root):
         raise ValueError("provenance checkpoint does not match indexed records")
     path = Path(destination).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -240,6 +253,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         report = build_index(args.wallet, args.manifests)
         if args.output:
+            if not report["summary"]["valid"]:
+                parser.exit(2, "index export refused: source archive contains issues\n")
             try:
                 export_index(report, args.output)
             except (OSError, TypeError, ValueError) as exc:
