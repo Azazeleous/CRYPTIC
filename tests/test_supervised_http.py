@@ -7,6 +7,7 @@ import unittest
 from src.ingestion.supervised_http import (
     SupervisedHttpTransport,
     SupervisedTransportDeadlineExceeded,
+    SupervisedTransportError,
 )
 
 
@@ -92,6 +93,94 @@ class SupervisedHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(len(payload), 9)
         finally:
+            server.close()
+
+    def test_oversized_url_is_rejected_before_ipc(self):
+        transport = SupervisedHttpTransport()
+        try:
+            with self.assertRaisesRegex(SupervisedTransportError, "url_size_invalid"):
+                transport.request(
+                    "http://localhost/" + ("x" * 2048), b"{}",
+                    timeout_seconds=1, max_response_bytes=128,
+                    deadline_monotonic=time.monotonic() + 2,
+                )
+            self.assertTrue(transport.healthy)
+        finally:
+            transport.close()
+
+    def test_waiter_deadline_does_not_abort_active_request(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                entered.set()
+                release.wait(1.5)
+                payload = b"ok"
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            def log_message(self, *args):
+                pass
+
+        server = _Server(Handler)
+        transport = SupervisedHttpTransport()
+        first_result = []
+        def first_call():
+            first_result.append(transport.request(
+                server.url, b"{}", timeout_seconds=2, max_response_bytes=128,
+                deadline_monotonic=time.monotonic() + 3,
+            ))
+        thread = threading.Thread(target=first_call)
+        try:
+            thread.start()
+            self.assertTrue(entered.wait(1))
+            with self.assertRaises(SupervisedTransportDeadlineExceeded):
+                transport.request(
+                    server.url, b"{}", timeout_seconds=1, max_response_bytes=128,
+                    deadline_monotonic=time.monotonic() + 0.1,
+                )
+            self.assertTrue(transport.healthy)
+            release.set()
+            thread.join(timeout=2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(first_result, [(200, b"ok")])
+            self.assertTrue(transport.healthy)
+        finally:
+            release.set()
+            transport.close()
+            server.close()
+
+    def test_truncated_chunked_response_is_reported_without_worker_hang(self):
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                self.wfile.write(b"5\\r\\nabc")
+                self.wfile.flush()
+                self.close_connection = True
+            def log_message(self, *args):
+                pass
+
+        server = _Server(Handler)
+        transport = SupervisedHttpTransport()
+        try:
+            with self.assertRaisesRegex(SupervisedTransportError, "transport_unavailable"):
+                transport.request(
+                    server.url, b"{}", timeout_seconds=2, max_response_bytes=128,
+                    deadline_monotonic=time.monotonic() + 2,
+                )
+            self.assertTrue(transport.healthy)
+        finally:
+            transport.close()
             server.close()
 
     def test_slow_trickle_body_is_terminated_at_absolute_deadline(self):
