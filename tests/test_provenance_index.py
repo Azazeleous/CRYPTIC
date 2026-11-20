@@ -134,7 +134,7 @@ class ProvenanceIndexTests(unittest.TestCase):
             self.assertIsNone(report["indexed_records"])
             self.assertIsNone(report["archive_root"])
 
-    def test_missing_source_paths_fail_closed(self):
+    def test_missing_wallet_fails_closed_and_missing_manifest_dir_is_reported(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifests = root / "trophies"
@@ -143,9 +143,10 @@ class ProvenanceIndexTests(unittest.TestCase):
                 build_index(root / "missing-wallet.jsonl", manifests)
 
             wallet = root / "wallet.jsonl"
-            wallet.write_text("", encoding="utf-8")
-            with self.assertRaises(FileNotFoundError):
-                build_index(wallet, root / "missing-manifests")
+            append_to_wallet(self.receipt, wallet)
+            index = build_index(wallet, root / "missing-manifests")
+            self.assertEqual(index["issues"]["missing_manifests"], [self.receipt["receipt_id"]])
+            self.assertFalse(index["summary"]["valid"])
 
     def test_export_refuses_index_with_source_issues(self):
         with tempfile.TemporaryDirectory() as directory:
