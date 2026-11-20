@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import itertools
 import json
+import re
 import time
 from typing import Any, Mapping
 from threading import Lock
@@ -181,7 +182,7 @@ class JsonRpcClient:
         raise JsonRpcError("transport_retry_exhausted")
 
 
-_EVM_METHODS = frozenset({"eth_chainId", "eth_blockNumber"})
+_EVM_METHODS = frozenset({"eth_chainId", "eth_blockNumber", "eth_getBlockByNumber"})
 _SOLANA_METHODS = frozenset({"getGenesisHash", "getSlot", "getBlockHeight"})
 _READ_ONLY_METHODS = _EVM_METHODS | _SOLANA_METHODS
 
@@ -221,10 +222,46 @@ class EvmReadOnlyAdapter:
             raise JsonRpcError(f"{field}_quantity_invalid")
         return number
 
-    def observe(self) -> dict[str, int]:
+    @classmethod
+    def _block_fields(cls, block: Any, field: str) -> dict[str, Any]:
+        if not isinstance(block, Mapping):
+            raise JsonRpcError(f"{field}_block_invalid")
+        number = cls._hex_quantity(block.get("number"), f"{field}_number")
+        timestamp = cls._hex_quantity(block.get("timestamp"), f"{field}_timestamp")
+        block_hash = block.get("hash")
+        parent_hash = block.get("parentHash")
+        hash_pattern = re.compile(r"^0x[0-9a-fA-F]{64}$")
+        if not isinstance(block_hash, str) or not hash_pattern.fullmatch(block_hash):
+            raise JsonRpcError(f"{field}_hash_invalid")
+        if not isinstance(parent_hash, str) or not hash_pattern.fullmatch(parent_hash):
+            raise JsonRpcError(f"{field}_parent_hash_invalid")
+        return {
+            "number": number,
+            "hash": block_hash.lower(),
+            "parent_hash": parent_hash.lower(),
+            "timestamp": timestamp,
+        }
+
+    def observe(self) -> dict[str, Any]:
         chain_id = self._hex_quantity(self.client.call("eth_chainId"), "chain_id")
-        block_number = self._hex_quantity(self.client.call("eth_blockNumber"), "block_number")
-        return {"chain_id": chain_id, "block_number": block_number}
+        genesis = self._block_fields(
+            self.client.call("eth_getBlockByNumber", ["0x0", False]),
+            "genesis",
+        )
+        latest = self._block_fields(
+            self.client.call("eth_getBlockByNumber", ["latest", False]),
+            "latest",
+        )
+        if genesis["number"] != 0 or latest["number"] < genesis["number"]:
+            raise JsonRpcError("block_height_order_invalid")
+        return {
+            "chain_id": chain_id,
+            "genesis_hash": genesis["hash"],
+            "block_number": latest["number"],
+            "block_hash": latest["hash"],
+            "parent_hash": latest["parent_hash"],
+            "timestamp": latest["timestamp"],
+        }
 
     def health_check(self) -> HealthReport:
         started = time.monotonic()
