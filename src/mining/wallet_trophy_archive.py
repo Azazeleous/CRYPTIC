@@ -23,13 +23,13 @@ def _read_wallet(wallet_file: str | Path) -> tuple[list[tuple[int, dict[str, Any
     path = Path(wallet_file).expanduser()
     if not path.exists():
         return records, malformed
-    with path.open("r", encoding="utf-8") as stream:
+    with path.open("rb") as stream:
         for line_number, raw in enumerate(stream, 1):
             if not raw.strip():
                 continue
             try:
-                value = json.loads(raw)
-            except (json.JSONDecodeError, UnicodeError):
+                value = json.loads(raw.decode("utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
                 malformed.append(line_number)
                 continue
             if not isinstance(value, dict):
