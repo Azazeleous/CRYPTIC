@@ -411,6 +411,7 @@ def verify_attestation_quorum(
     if isinstance(attestations, (str, bytes, Mapping)):
         raise TypeError("attestations must be an iterable of attestation objects")
     verify_one = verify_attestation_historical if historical else verify_attestation_current
+    history = None if snapshot_history is None else list(snapshot_history)
     accepted = []
     rejected = []
     seen_issuers = set()
@@ -418,7 +419,7 @@ def verify_attestation_quorum(
     common_subject = None
     common_purpose = None
     for index, item in enumerate(attestations):
-        result = verify_one(item, snapshot, snapshot_history=snapshot_history)
+        result = verify_one(item, snapshot, snapshot_history=history)
         if not result.get("valid"):
             rejected.append({"index": index, "reason": result.get("reason")})
             continue
