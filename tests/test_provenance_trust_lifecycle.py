@@ -179,6 +179,35 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         self.assertEqual(result["valid_signer_count"], 1)
         self.assertEqual(result["rejected"][0]["reason"], "subject_mismatch")
 
+    def test_quorum_requires_consistent_purpose(self):
+        first = self._attestation("issuer-a", self.key_a)
+        second = create_attestation(
+            issuer_id="issuer-b",
+            private_key_hex=self.key_b["private_key_hex"],
+            subject_schema="cryptic.provenance-federation.v1",
+            subject_id="federation-root-1",
+            subject_digest="a" * 64,
+            issued_at=150,
+            purpose="different-purpose",
+        )
+        result = verify_attestation_quorum(
+            [first, second], self.snapshot_v1, threshold=2
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["valid_signer_count"], 1)
+        self.assertEqual(result["rejected"][0]["reason"], "purpose_mismatch")
+
+    def test_future_scheduled_revocation_remains_active_in_snapshot_state(self):
+        scheduled = revoke_trust_key(
+            self.snapshot_v1,
+            issuer_id="issuer-a",
+            key_fingerprint=self.key_a["key_fingerprint"],
+            effective_at=300,
+            created_at=250,
+        )
+        attestation = self._attestation("issuer-a", self.key_a, issued_at=220)
+        self.assertTrue(verify_attestation_current(attestation, scheduled)["valid"])
+
     def test_quorum_rejects_invalid_snapshot(self):
         altered = copy.deepcopy(self.snapshot_v1)
         altered["snapshot_digest"] = "0" * 64
