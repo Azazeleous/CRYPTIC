@@ -223,11 +223,17 @@ def revoke_trust_key(
     key_fingerprint: str,
     effective_at: int,
     created_at: int,
+    snapshot_history: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a new snapshot revoking exactly one currently active issuer key."""
     verified = verify_trust_snapshot(snapshot)
     if not verified["valid"]:
         raise TrustLifecycleError("cannot modify an invalid trust snapshot")
+    if snapshot.get("version", 0) > 1:
+        if snapshot_history is None or not verify_trust_snapshot_chain(
+            [*snapshot_history, snapshot]
+        )["valid"]:
+            raise TrustLifecycleError("cannot modify a snapshot with an unverified history")
     effective_at = _timestamp(effective_at, "effective_at")
     created_at = _timestamp(created_at, "created_at")
     if created_at < effective_at:
@@ -260,11 +266,17 @@ def rotate_trust_key(
     new_public_key_hex: str,
     effective_at: int,
     created_at: int,
+    snapshot_history: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Atomically revoke one active key and activate its replacement."""
     verified = verify_trust_snapshot(snapshot)
     if not verified["valid"]:
         raise TrustLifecycleError("cannot rotate keys from an invalid snapshot")
+    if snapshot.get("version", 0) > 1:
+        if snapshot_history is None or not verify_trust_snapshot_chain(
+            [*snapshot_history, snapshot]
+        )["valid"]:
+            raise TrustLifecycleError("cannot rotate a snapshot with an unverified history")
     effective_at = _timestamp(effective_at, "effective_at")
     created_at = _timestamp(created_at, "created_at")
     if created_at < effective_at:
