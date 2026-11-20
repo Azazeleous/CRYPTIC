@@ -1,12 +1,14 @@
+import io
 import json
 import tempfile
+from contextlib import redirect_stdout
 import unittest
 from pathlib import Path
 
 from src.mining.sha256d import scan_nonce_range
 from src.mining.receipt_wallet import append_to_wallet, create_receipt
 from src.mining.trophy_manifest import create_manifest, export_manifest
-from src.mining.wallet_trophy_archive import reconcile_wallet
+from src.mining.wallet_trophy_archive import main, reconcile_wallet
 
 
 class WalletTrophyArchiveTests(unittest.TestCase):
@@ -85,6 +87,17 @@ class WalletTrophyArchiveTests(unittest.TestCase):
             report = reconcile_wallet(wallet, manifest_dir)
             self.assertEqual(len(report["manifest_conflicts"]), 1)
             self.assertEqual(target.read_text(encoding="utf-8"), '{"tampered":true}\n')
+
+    def test_cli_emits_json_report_and_returns_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wallet = root / "wallet.jsonl"
+            append_to_wallet(self.receipt, wallet)
+            output = io.StringIO()
+            with redirect_stdout(output):
+                code = main(["--wallet", str(wallet), "--manifests", str(root / "trophies")])
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(output.getvalue())["valid"])
 
     def test_unreferenced_manifest_is_reported_as_orphan(self):
         with tempfile.TemporaryDirectory() as directory:
