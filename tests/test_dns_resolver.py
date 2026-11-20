@@ -42,6 +42,14 @@ class IsolatedDnsResolverTests(unittest.TestCase):
                 )
             self.assertTrue(resolver.healthy)
 
+    def test_expired_deadline_also_rejects_ip_literal_fast_path(self):
+        with IsolatedDnsResolver() as resolver:
+            with self.assertRaises(DnsResolverDeadlineExceeded):
+                resolver.resolve(
+                    "127.0.0.1", 443,
+                    deadline_monotonic=time.monotonic() - 1,
+                )
+
     def test_invalid_host_and_port_are_rejected(self):
         with IsolatedDnsResolver() as resolver:
             with self.assertRaisesRegex(DnsResolverError, "hostname_invalid"):
