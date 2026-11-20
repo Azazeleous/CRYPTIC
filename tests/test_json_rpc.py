@@ -134,6 +134,47 @@ class JsonRpcProtocolTests(unittest.TestCase):
         self.assertGreater(transport.timeout_seen, 0)
         self.assertLessEqual(transport.timeout_seen, 0.4)
 
+    def test_json_rpc_deadline_call_uses_prepared_supervised_worker(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                request_doc = json.loads(self.rfile.read(
+                    int(self.headers.get("Content-Length", "0"))
+                ).decode("utf-8"))
+                payload = json.dumps({
+                    "jsonrpc": "2.0", "id": request_doc["id"], "result": "0x1",
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = __import__("threading").Thread(
+            target=server.serve_forever, daemon=True,
+        )
+        server_thread.start()
+        client = JsonRpcClient(
+            f"http://127.0.0.1:{server.server_port}/rpc",
+            allowed_methods=frozenset({"eth_chainId"}),
+            policy=JsonRpcPolicy(max_retries=0, rate_limit_per_minute=600),
+        )
+        try:
+            client.prepare()
+            self.assertTrue(client._supervised_transport.healthy)
+            result = client.call_until(
+                "eth_chainId", deadline_monotonic=time.monotonic() + 3,
+            )
+            self.assertEqual(result, "0x1")
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1)
+
     def test_evm_and_solana_multi_call_observations_reuse_one_deadline(self):
         deadline = time.monotonic() + 10
         class RecordingClient:
