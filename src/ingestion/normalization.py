@@ -137,12 +137,33 @@ def compare_chain_heads(
         head_hash = observation.get("head_hash")
         if not isinstance(source_id, str) or not source_id:
             raise NormalizationError("normalized source_id is invalid")
-        if family not in {"evm", "solana"} or not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
+        if not isinstance(identity, str) or not re.fullmatch(r"[0-9a-f]{64}", identity):
             raise NormalizationError("normalized network identity is invalid")
-        if head_hash is not None and (
-            not isinstance(head_hash, str) or not _EVM_HASH.fullmatch(head_hash)
-        ):
-            raise NormalizationError("normalized head_hash is invalid")
+        genesis_hash = observation.get("genesis_hash")
+        if family == "evm":
+            if observation.get("source_schema") != "cryptic.evm-chain-observation.v1":
+                raise NormalizationError("EVM family/source schema mismatch")
+            chain_id = _nonnegative_int(observation.get("chain_id"), "chain_id")
+            if not isinstance(genesis_hash, str) or not _EVM_HASH.fullmatch(genesis_hash):
+                raise NormalizationError("normalized EVM genesis hash is invalid")
+            identity_body = {
+                "family": "evm", "chain_id": chain_id,
+                "genesis_hash": genesis_hash.lower(),
+            }
+            if not isinstance(head_hash, str) or not _EVM_HASH.fullmatch(head_hash):
+                raise NormalizationError("normalized EVM head hash is invalid")
+        elif family == "solana":
+            if observation.get("source_schema") != "cryptic.solana-chain-observation.v1":
+                raise NormalizationError("Solana family/source schema mismatch")
+            if observation.get("chain_id") is not None or head_hash is not None:
+                raise NormalizationError("Solana normalized identity fields are invalid")
+            if not isinstance(genesis_hash, str) or not _SOLANA_HASH.fullmatch(genesis_hash):
+                raise NormalizationError("normalized Solana genesis hash is invalid")
+            identity_body = {"family": "solana", "genesis_hash": genesis_hash}
+        else:
+            raise NormalizationError("normalized network family is invalid")
+        if _digest(identity_body) != identity:
+            raise NormalizationError("normalized network identity does not match genesis anchor")
         key = (identity, source_id)
         if key in source_keys:
             raise NormalizationError("duplicate source_id for one network comparison")
