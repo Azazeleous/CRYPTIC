@@ -9,10 +9,10 @@ not an ASIC/GPU miner and not a Stratum pool client.
 The scanner serializes the 32-bit nonce in little-endian order at bytes 76–79,
 computes SHA256(SHA256(header)), interprets the digest as a little-endian
 256-bit integer for target comparison, scans finite half-open nonce ranges,
-reuses the SHA-256 state after the first 64 header bytes, optionally partitions
-work across a bounded process pool, and independently recomputes candidates.
+reuses the SHA-256 state after the first 64 header bytes, partitions work
+across a bounded process pool, and independently recomputes candidates.
 
-## Optimization
+## Kernel optimization
 
 An 80-byte header has a fixed first 76 bytes for a given work item. SHA-256
 processes the first 64 bytes as one block. The optimized kernel hashes those
@@ -20,6 +20,15 @@ processes the first 64 bytes as one block. The optimized kernel hashes those
 4-byte nonce. This avoids reprocessing the fixed first block for every nonce.
 The second SHA-256 remains a full hash. This is an implementation optimization,
 not a change to SHA-256 or a reversal of its digest.
+
+## Adaptive scheduling
+
+The parallel scheduler keeps at most one outstanding chunk per worker. When
+a chunk completes, it measures that worker's elapsed processing time and
+adjusts the next chunk size toward a configurable target duration. Chunk
+growth/shrinkage is bounded to avoid runaway allocation. The scan result
+records completed chunks and final chunk size. This is dynamic chunk sizing,
+not an unbounded worker launcher.
 
 ## Commands
 
@@ -39,10 +48,11 @@ Run a bounded scan with an 80-byte header:
 
 The benchmark compares the straightforward full-header reference kernel,
 the optimized prefix-state kernel in one process, and the optimized kernel
-with bounded multiprocessing. All configurations use the same header, target,
-and nonce interval. Results include attempts, elapsed time, hashes/second,
-worker count, candidate count, and speedup relative to the reference run.
-Repeat each configuration on the same host and compare medians.
+with adaptive multiprocessing. All configurations use the same header,
+target, and nonce interval. Results include attempts, elapsed time,
+hashes/second, worker count, completed chunks, final chunk size, candidate
+count, and speedup relative to the reference run. Repeat each configuration
+on the same host and compare medians.
 
 ## Comparison limitation
 
@@ -64,5 +74,5 @@ profitability, or network-level compatibility.
 ## Evidence status
 
 Source, tests, and benchmark commands are committed on a feature branch.
-Tests and benchmarks are supplied but have not been executed by these
-GitHub file-write operations.
+Tests and benchmark commands are executed by the repository's GitHub Actions
+workflow; the latest workflow result is linked in the pull request.
