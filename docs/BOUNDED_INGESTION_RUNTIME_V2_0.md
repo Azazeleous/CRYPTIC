@@ -50,3 +50,20 @@ measured finalization work and are not represented as hard-interruptible.
 The in-flight metric is bounded by `max_workers + max_queue_size`. Timing
 metrics are excluded from the deterministic session digest so identical
 evidence does not hash differently merely because scheduling latency changed.
+
+
+## v2.1 transport deadline groundwork
+
+The JSON-RPC client now exposes `call_until(..., deadline_monotonic=...)`.
+Rate-gate waiting, retry backoff, and socket timeout selection consume the
+same absolute monotonic deadline. EVM and Solana adapters expose
+`health_check_until`, `observe_until`, and `fetch_page_until` methods and
+pass one deadline through every RPC in their multi-call observations.
+
+**Coordinator eligibility remains deliberately disabled for these adapters.**
+Python's standard-library URL resolver may block outside the socket timeout,
+so these methods are deadline-aware but do not yet prove a hard bound over DNS
+resolution. Both adapters therefore declare `deadline_enforced = False` and
+remain rejected by the bounded runtime. A supervised resolver/transport
+boundary is required before enabling them. No live-provider verification is
+claimed by these protocol-level tests.

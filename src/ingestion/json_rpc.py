@@ -29,6 +29,10 @@ class JsonRpcError(SourceAdapterError):
     """Sanitized JSON-RPC transport, protocol, or provider error."""
 
 
+class JsonRpcDeadlineExceeded(TimeoutError):
+    """The shared monotonic deadline expired during transport coordination."""
+
+
 class JsonRpcRemoteError(JsonRpcError):
     """Provider returned a JSON-RPC error object."""
 
@@ -66,13 +70,29 @@ class _RateGate:
         self._next_at = 0.0
         self._lock = Lock()
 
-    def wait(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            delay = self._next_at - now
-            if delay > 0:
-                time.sleep(delay)
-            self._next_at = max(time.monotonic(), self._next_at) + self._interval
+    def wait(self, *, deadline_monotonic: float | None = None) -> None:
+        if deadline_monotonic is None:
+            with self._lock:
+                delay = self._next_at - time.monotonic()
+                if delay > 0:
+                    time.sleep(delay)
+                self._next_at = max(time.monotonic(), self._next_at) + self._interval
+            return
+        remaining = deadline_monotonic - time.monotonic()
+        if remaining <= 0 or not self._lock.acquire(timeout=remaining):
+            raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+        try:
+            while True:
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+                delay = self._next_at - time.monotonic()
+                if delay <= 0:
+                    self._next_at = time.monotonic() + self._interval
+                    return
+                time.sleep(min(delay, remaining))
+        finally:
+            self._lock.release()
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -146,6 +166,18 @@ class JsonRpcClient:
         return document["result"]
 
     def call(self, method: str, params: list[Any] | None = None) -> Any:
+        return self._call(method, params, deadline_monotonic=None)
+
+    def call_until(self, method: str, params: list[Any] | None = None, *,
+                   deadline_monotonic: float) -> Any:
+        if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
+            raise JsonRpcError("rpc_deadline_invalid")
+        if deadline_monotonic <= time.monotonic():
+            raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+        return self._call(method, params, deadline_monotonic=float(deadline_monotonic))
+
+    def _call(self, method: str, params: list[Any] | None, *,
+              deadline_monotonic: float | None) -> Any:
         if not isinstance(method, str) or method not in self.allowed_methods:
             raise JsonRpcError("rpc_method_not_allowlisted")
         if params is None:
@@ -164,21 +196,36 @@ class JsonRpcClient:
             method="POST",
         )
         for attempt in range(self.policy.max_retries + 1):
-            self._rate_gate.wait()
+            self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
+            timeout = self.policy.timeout_seconds
+            if deadline_monotonic is not None:
+                remaining = deadline_monotonic - time.monotonic()
+                if remaining <= 0:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+                timeout = min(timeout, remaining)
             try:
                 opener = build_opener(_NoRedirect())
-                with opener.open(request, timeout=self.policy.timeout_seconds) as response:
+                with opener.open(request, timeout=timeout) as response:
                     payload = response.read(self.policy.max_response_bytes + 1)
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
             except HTTPError as exc:
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
                 if not retryable or attempt >= self.policy.max_retries:
                     raise JsonRpcError(f"http_status:{exc.code}") from None
             except (URLError, TimeoutError, OSError):
+                if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
+                    raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded") from None
                 if attempt >= self.policy.max_retries:
                     raise JsonRpcError("transport_unavailable") from None
             if self.policy.retry_base_seconds:
-                time.sleep(self.policy.retry_base_seconds * (2 ** attempt))
+                delay = self.policy.retry_base_seconds * (2 ** attempt)
+                if deadline_monotonic is not None:
+                    remaining = deadline_monotonic - time.monotonic()
+                    if remaining <= 0 or delay >= remaining:
+                        raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+                time.sleep(delay)
         raise JsonRpcError("transport_retry_exhausted")
 
 
@@ -189,6 +236,10 @@ _READ_ONLY_METHODS = _EVM_METHODS | _SOLANA_METHODS
 
 class EvmReadOnlyAdapter:
     """EVM chain identity and finalized-head observation; no write methods."""
+
+    # urllib's resolver can block outside the socket timeout. Do not advertise
+    # this adapter as runtime-deadline-enforced until resolver isolation exists.
+    deadline_enforced = False
 
     def __init__(
         self,
@@ -273,7 +324,57 @@ class EvmReadOnlyAdapter:
                 reason=f"chain_id:{chain_id}",
             )
         except Exception:
+            return HealthReport(self.descriptor.source_id, False, int(time.time()),
+                                reason="rpc_unavailable")
+
+    def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
+        started = time.monotonic()
+        try:
+            chain_id = self._hex_quantity(
+                self.client.call_until("eth_chainId", deadline_monotonic=deadline_monotonic),
+                "chain_id",
+            )
+            return HealthReport(
+                self.descriptor.source_id, True, int(time.time()),
+                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                reason=f"chain_id:{chain_id}",
+            )
+        except JsonRpcDeadlineExceeded:
+            raise
+        except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()), reason="rpc_unavailable")
+
+    def observe_until(self, *, deadline_monotonic: float) -> dict[str, Any]:
+        chain_id = self._hex_quantity(
+            self.client.call_until("eth_chainId", deadline_monotonic=deadline_monotonic),
+            "chain_id",
+        )
+        genesis = self._block_fields(
+            self.client.call_until("eth_getBlockByNumber", ["0x0", False],
+                                   deadline_monotonic=deadline_monotonic),
+            "genesis",
+        )
+        latest = self._block_fields(
+            self.client.call_until("eth_getBlockByNumber", ["latest", False],
+                                   deadline_monotonic=deadline_monotonic),
+            "latest",
+        )
+        if genesis["number"] != 0 or latest["number"] < genesis["number"]:
+            raise JsonRpcError("block_height_order_invalid")
+        return {
+            "chain_id": chain_id, "genesis_hash": genesis["hash"],
+            "block_number": latest["number"], "block_hash": latest["hash"],
+            "parent_hash": latest["parent_hash"], "timestamp": latest["timestamp"],
+        }
+
+    def fetch_page_until(self, *, limit: int, cursor: str | None = None,
+                         filters: Mapping[str, Any] | None = None,
+                         deadline_monotonic: float) -> SourcePage:
+        if limit != 1 or cursor is not None or filters:
+            raise SourceRegistryError("EVM identity adapter accepts one unfiltered observation")
+        observation = self.observe_until(deadline_monotonic=deadline_monotonic)
+        return SourcePage(self.descriptor.source_id, self.descriptor.schema_id,
+                          int(time.time()), (observation,), None)
 
     def fetch_page(self, *, limit: int, cursor: str | None = None, filters: Mapping[str, Any] | None = None) -> SourcePage:
         if limit != 1 or cursor is not None or filters:
@@ -287,6 +388,10 @@ class EvmReadOnlyAdapter:
 
 class SolanaReadOnlyAdapter:
     """Solana genesis identity and finalized head observation; no write methods."""
+
+    # urllib's resolver can block outside the socket timeout; remain ineligible
+    # for the coordinator until that boundary is isolated.
+    deadline_enforced = False
 
     def __init__(
         self,
@@ -332,7 +437,49 @@ class SolanaReadOnlyAdapter:
                 reason="genesis_identity_verified",
             )
         except Exception:
+            return HealthReport(self.descriptor.source_id, False, int(time.time()),
+                                reason="rpc_unavailable")
+
+    def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
+        started = time.monotonic()
+        try:
+            genesis_hash = self.client.call_until("getGenesisHash",
+                                                  deadline_monotonic=deadline_monotonic)
+            if not isinstance(genesis_hash, str) or not genesis_hash:
+                raise JsonRpcError("genesis_hash_invalid")
+            return HealthReport(
+                self.descriptor.source_id, True, int(time.time()),
+                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                reason="genesis_identity_verified",
+            )
+        except JsonRpcDeadlineExceeded:
+            raise
+        except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()), reason="rpc_unavailable")
+
+    def observe_until(self, *, deadline_monotonic: float) -> dict[str, Any]:
+        options = [{"commitment": "finalized"}]
+        genesis_hash = self.client.call_until("getGenesisHash",
+                                              deadline_monotonic=deadline_monotonic)
+        slot = self.client.call_until("getSlot", options,
+                                      deadline_monotonic=deadline_monotonic)
+        block_height = self.client.call_until("getBlockHeight", options,
+                                              deadline_monotonic=deadline_monotonic)
+        if not isinstance(genesis_hash, str) or not genesis_hash:
+            raise JsonRpcError("genesis_hash_invalid")
+        for name, value in (("slot", slot), ("block_height", block_height)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise JsonRpcError(f"{name}_invalid")
+        return {"genesis_hash": genesis_hash, "slot": slot, "block_height": block_height}
+
+    def fetch_page_until(self, *, limit: int, cursor: str | None = None,
+                         filters: Mapping[str, Any] | None = None,
+                         deadline_monotonic: float) -> SourcePage:
+        if limit != 1 or cursor is not None or filters:
+            raise SourceRegistryError("Solana identity adapter accepts one unfiltered observation")
+        observation = self.observe_until(deadline_monotonic=deadline_monotonic)
+        return SourcePage(self.descriptor.source_id, self.descriptor.schema_id,
+                          int(time.time()), (observation,), None)
 
     def fetch_page(self, *, limit: int, cursor: str | None = None, filters: Mapping[str, Any] | None = None) -> SourcePage:
         if limit != 1 or cursor is not None or filters:

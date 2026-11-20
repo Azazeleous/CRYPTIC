@@ -17,6 +17,7 @@ from .observation_log import (
 from .json_rpc import (
     EvmReadOnlyAdapter,
     JsonRpcClient,
+    JsonRpcDeadlineExceeded,
     JsonRpcError,
     JsonRpcPolicy,
     JsonRpcRemoteError,
@@ -50,6 +51,7 @@ __all__ = [
     "read_records",
     "EvmReadOnlyAdapter",
     "JsonRpcClient",
+    "JsonRpcDeadlineExceeded",
     "JsonRpcError",
     "JsonRpcPolicy",
     "JsonRpcRemoteError",
