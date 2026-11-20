@@ -23,7 +23,7 @@ deadline and a bounded IPC poll. If a lookup exceeds that deadline, the parent
 terminates the resolver, marks the instance poisoned, and fails the current
 operation. The instance is never silently restarted during that session.
 
-The resolver returns only validated IPv4/IPv6 stream address tuples. It does
+The resolver returns validated, sorted, de-duplicated IPv4/IPv6 stream address tuples. IPv6 results with a nonzero interface scope are rejected (and scoped IPv6 literals are explicitly refused) until the downstream transport can preserve that scope. It does
 not open network connections, choose an endpoint, perform HTTP, or alter
 source policy. IP literals bypass DNS.
 
@@ -50,7 +50,7 @@ source policy. IP literals bypass DNS.
 
 1. Resolver startup and cleanup on supported spawn platforms.
 2. Hanging lookup is terminated by the parent within the supplied deadline.
-3. Resolved addresses are validated and deterministically de-duplicated.
+3. Resolved addresses are validated, sorted, and de-duplicated; scoped IPv6 is rejected rather than silently losing its interface scope.
 4. HTTPS connects to the pinned address but preserves original-host SNI and
    certificate verification.
 5. Connect and response reads consume the same absolute monotonic budget.
