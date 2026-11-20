@@ -118,6 +118,22 @@ class ProvenanceIndexTests(unittest.TestCase):
             self.assertEqual(index["issues"]["malformed_wallet_lines"], [1])
             self.assertFalse(index["summary"]["valid"])
 
+    def test_malformed_index_structure_fails_audit_without_crashing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wallet = root / "wallet.jsonl"
+            manifests = root / "trophies"
+            target = root / "bad-index.json"
+            target.write_text(json.dumps({
+                "schema": "cryptic.provenance-index.v1",
+                "summary": [],
+                "checkpoint": "not-an-object",
+            }), encoding="utf-8")
+            report = audit_index_file(target, wallet, manifests)
+            self.assertFalse(report["valid"])
+            self.assertIsNone(report["indexed_records"])
+            self.assertIsNone(report["archive_root"])
+
 
 if __name__ == "__main__":
     unittest.main()
