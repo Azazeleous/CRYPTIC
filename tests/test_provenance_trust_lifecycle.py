@@ -110,13 +110,27 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
             effective_at=200,
             created_at=210,
         )
-        self.assertTrue(verify_attestation_historical(old_attestation, rotated)["valid"])
+        self.assertTrue(verify_attestation_historical(old_attestation, rotated, snapshot_history=[self.snapshot_v1])["valid"])
         self.assertEqual(
-            verify_attestation_current(old_attestation, rotated)["reason"],
+            verify_attestation_current(old_attestation, rotated, snapshot_history=[self.snapshot_v1])["reason"],
             "issuer_key_revoked",
         )
         new_attestation = self._attestation("issuer-a", self.key_c, issued_at=205)
-        self.assertTrue(verify_attestation_current(new_attestation, rotated)["valid"])
+        self.assertTrue(verify_attestation_current(new_attestation, rotated, snapshot_history=[self.snapshot_v1])["valid"])
+
+    def test_v2_snapshot_verification_requires_full_history(self):
+        rotated = rotate_trust_key(
+            self.snapshot_v1,
+            issuer_id="issuer-a",
+            old_key_fingerprint=self.key_a["key_fingerprint"],
+            new_public_key_hex=self.key_c["public_key_hex"],
+            effective_at=200,
+            created_at=210,
+        )
+        attestation = self._attestation("issuer-a", self.key_c, issued_at=205)
+        result = verify_attestation_current(attestation, rotated)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "trust_snapshot_chain_unverified")
 
     def test_attestation_outside_key_validity_is_rejected(self):
         rotated = rotate_trust_key(
@@ -129,7 +143,7 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         )
         late_old_signature = self._attestation("issuer-a", self.key_a, issued_at=201)
         self.assertEqual(
-            verify_attestation_historical(late_old_signature, rotated)["reason"],
+            verify_attestation_historical(late_old_signature, rotated, snapshot_history=[self.snapshot_v1])["reason"],
             "attestation_outside_key_validity",
         )
 
@@ -144,8 +158,8 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         )
         self.assertIsNone(self.snapshot_v1["issuers"][1]["revoked_at"])
         self.assertEqual(revoked["version"], 2)
-        self.assertTrue(verify_attestation_historical(attestation, revoked)["valid"])
-        self.assertFalse(verify_attestation_current(attestation, revoked)["valid"])
+        self.assertTrue(verify_attestation_historical(attestation, revoked, snapshot_history=[self.snapshot_v1])["valid"])
+        self.assertFalse(verify_attestation_current(attestation, revoked, snapshot_history=[self.snapshot_v1])["valid"])
 
     def test_rotation_rejects_unknown_old_key_and_duplicate_new_key(self):
         with self.assertRaises(TrustLifecycleError):
@@ -229,7 +243,7 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
             created_at=250,
         )
         attestation = self._attestation("issuer-a", self.key_a, issued_at=220)
-        self.assertTrue(verify_attestation_current(attestation, scheduled)["valid"])
+        self.assertTrue(verify_attestation_current(attestation, scheduled, snapshot_history=[self.snapshot_v1])["valid"])
 
     def test_quorum_rejects_invalid_snapshot(self):
         altered = copy.deepcopy(self.snapshot_v1)
