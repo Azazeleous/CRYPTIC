@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cryptic.example/schemas/cryptic.portable-trophy.v1.schema.json",
+  "$id": "urn:cryptic:schema:portable-trophy:v1",
   "title": "CRYPTIC Portable Trophy Manifest v1",
   "type": "object",
   "additionalProperties": false,
