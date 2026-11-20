@@ -10,6 +10,7 @@ import unittest
 from src.ingestion.json_rpc import (
     EvmReadOnlyAdapter,
     JsonRpcClient,
+    JsonRpcDeadlineExceeded,
     JsonRpcError,
     JsonRpcPolicy,
     JsonRpcRemoteError,
@@ -57,6 +58,27 @@ class JsonRpcProtocolTests(unittest.TestCase):
             JsonRpcClient("http://rpc.example.org", allowed_methods=frozenset({"read"}))
         with self.assertRaisesRegex(SourceRegistryError, "credentials"):
             JsonRpcClient("https://user:pass@rpc.example.org", allowed_methods=frozenset({"read"}))
+
+    def test_expired_shared_deadline_is_rejected_before_transport(self):
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}),
+        )
+        with self.assertRaises(JsonRpcDeadlineExceeded):
+            client.call_until("eth_chainId", deadline_monotonic=__import__("time").monotonic() - 1)
+
+    def test_chain_adapters_expose_deadline_methods_without_overclaiming_dns_bound(self):
+        evm = EvmReadOnlyAdapter("https://rpc.example.org")
+        solana = SolanaReadOnlyAdapter("https://rpc.example.org")
+        for adapter in (evm, solana):
+            self.assertFalse(adapter.deadline_enforced)
+            self.assertTrue(callable(adapter.health_check_until))
+            self.assertTrue(callable(adapter.fetch_page_until))
+            with self.assertRaises(JsonRpcDeadlineExceeded):
+                adapter.fetch_page_until(
+                    limit=1,
+                    deadline_monotonic=__import__("time").monotonic() - 1,
+                )
 
     def test_policy_bounds_are_enforced(self):
         with self.assertRaisesRegex(SourceRegistryError, "timeout_seconds"):
