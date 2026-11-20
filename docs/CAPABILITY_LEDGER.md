@@ -3,6 +3,7 @@
 | Capability | Status | Evidence required |
 |---|---|---|
 | Repository architecture | scaffolded | reviewed architecture and ADRs |
+| Read-only source registry and adapter interface | implemented (E3) | PR #11; CI run 44789964655 passed unit tests and bounded benchmark; provider integrations remain unverified |
 | Market-data source adapters | proposed | live adapter tests with provenance |
 | EVM RPC | proposed | chain ID, block, log, reconnect tests |
 | Solana RPC | proposed | genesis identity and subscription tests |
