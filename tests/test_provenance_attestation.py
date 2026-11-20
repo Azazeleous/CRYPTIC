@@ -10,6 +10,7 @@ from src.mining.provenance_attestation import (
     SCHEMA,
     TRUST_SCHEMA,
     create_attestation,
+    create_federation_attestation,
     generate_ed25519_keypair,
     trust_store_entry,
     verify_attestation,
@@ -86,6 +87,40 @@ class ProvenanceAttestationTests(unittest.TestCase):
         self.assertEqual(
             verify_attestation(self.attestation, trust)["reason"],
             "issuer_key_not_trusted",
+        )
+
+    def test_federation_attestation_binds_full_document_digest(self):
+        federation = {
+            "schema": "cryptic.provenance-federation.v1",
+            "checkpoint": {"federation_root": "c" * 64},
+            "records": [{"receipt_id": "d" * 64}],
+        }
+        attestation = create_federation_attestation(
+            federation,
+            issuer_id="archive-owner-a",
+            private_key_hex=self.keys["private_key_hex"],
+            issued_at=1_800_000_001,
+        )
+        result = verify_attestation(attestation, self.trust)
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["subject"]["id"], "c" * 64)
+        self.assertNotEqual(result["subject"]["digest"], "c" * 64)
+        changed = copy.deepcopy(federation)
+        changed["records"][0]["receipt_id"] = "e" * 64
+        changed_digest = __import__("hashlib").sha256(
+            __import__("json").dumps(
+                changed, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertNotEqual(result["subject"]["digest"], changed_digest)
+
+    def test_unknown_envelope_fields_are_rejected(self):
+        altered = copy.deepcopy(self.attestation)
+        altered["unrecognized"] = True
+        self.assertEqual(
+            verify_attestation(altered, self.trust)["reason"],
+            "malformed_attestation",
         )
 
     def test_duplicate_trust_entries_fail_closed(self):
