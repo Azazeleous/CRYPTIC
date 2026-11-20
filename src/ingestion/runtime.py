@@ -184,6 +184,11 @@ class BoundedIngestionRuntime:
         if not self._closed:
             self._closed = True
             self._executor.shutdown(wait=wait_for_workers, cancel_futures=True)
+            for descriptor in self.registry.list_sources():
+                adapter = self.registry.get_adapter(descriptor.source_id)
+                close = getattr(adapter, "close", None)
+                if callable(close):
+                    close()
 
     def __enter__(self) -> "BoundedIngestionRuntime":
         if self._closed:
@@ -211,6 +216,9 @@ class BoundedIngestionRuntime:
                 getattr(adapter, "fetch_page_until", None)
             ):
                 raise IngestionRuntimeError(f"source {source_id} lacks deadline-aware adapter methods")
+            prepare = getattr(adapter, "prepare", None)
+            if callable(prepare):
+                prepare()  # Worker startup is bounded and precedes collection_started.
             adapters.append(adapter)
         return adapters
 
