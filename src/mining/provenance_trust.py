@@ -162,9 +162,9 @@ def verify_trust_snapshot(
     if previous_digest is None:
         if snapshot["version"] != 1 or previous_snapshot is not None:
             return failure("snapshot_chain_mismatch")
-        chain_verified = True
+        chain_link_verified = True
     elif previous_snapshot is None:
-        chain_verified = False
+        chain_link_verified = False
     else:
         previous_valid, _, previous_expected = _verify_snapshot_contents(previous_snapshot)
         if not previous_valid:
@@ -173,18 +173,15 @@ def verify_trust_snapshot(
                 or snapshot["version"] != previous_snapshot["version"] + 1
                 or snapshot["created_at"] < previous_snapshot["created_at"]):
             return failure("snapshot_chain_mismatch")
-        chain_verified = (
-            previous_snapshot["version"] == 1
-            or previous_snapshot.get("chain_verified") is True
-        )
+        chain_link_verified = True
     return {
         "valid": True,
-        "reason": "snapshot_integrity_valid" if chain_verified
+        "reason": "snapshot_integrity_valid" if chain_link_verified
         else "snapshot_integrity_valid_chain_unchecked",
         "version": snapshot["version"],
         "snapshot_digest": expected,
         "issuer_key_count": len(snapshot["issuers"]),
-        "chain_verified": chain_verified,
+        "chain_link_verified": chain_link_verified,
     }
 
 
@@ -200,7 +197,7 @@ def verify_trust_snapshot_chain(
     previous = None
     for index, current in enumerate(history):
         result = verify_trust_snapshot(current, previous)
-        if not result["valid"] or (index == 0 and not result["chain_verified"]):
+        if not result["valid"] or (index == 0 and not result["chain_link_verified"]):
             return {
                 "valid": False,
                 "reason": "snapshot_chain_invalid",
