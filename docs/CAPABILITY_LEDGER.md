@@ -6,6 +6,7 @@
 | Read-only source registry and adapter interface | implemented (E3) | PR #11; CI run 44789964655 passed unit tests and bounded benchmark; provider integrations remain unverified |
 | Market-data source adapters | proposed | live adapter tests with provenance |
 | Bounded JSON-RPC transport | implemented (E3) | HTTPS/loopback policy, response bounds, request IDs, read-only allowlist, retries and per-client request spacing; PR #12 CI verified |
+| Raw observation journal | implemented (E3) | PR #13; CI run 44791258725 passed unit tests and bounded benchmark; canonical JSONL, SHA-256 chain, fsync, OS file locking, tamper detection; no privileged/WORM claim |
 | EVM JSON-RPC transport + chain identity | implemented (E3) | PR #12; CI run 44790661161 passed protocol/adapter tests and bounded benchmark; live provider verification remains unclaimed |
 | Solana JSON-RPC transport + cluster identity | implemented (E3) | PR #12; CI run 44790661161 passed protocol/adapter tests and bounded benchmark; live provider verification and subscriptions remain open |
 | Complete asset coverage | unverified | provider-by-provider coverage and limits |
