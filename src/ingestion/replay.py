@@ -102,7 +102,10 @@ def replay_journal(
                 "previous_observed_at": prior_timestamp,
                 "observed_at": record["observed_at"],
             })
-        previous_timestamp_by_source[source_id] = record["observed_at"]
+        previous_timestamp_by_source[source_id] = (
+            record["observed_at"] if prior_timestamp is None
+            else max(prior_timestamp, record["observed_at"])
+        )
 
         try:
             normalized = normalize_journal_record(record)
@@ -141,7 +144,11 @@ def replay_journal(
     body = {
         "schema": REPLAY_SCHEMA,
         "valid": not issues,
-        "quality_ok": not issues and not warnings and discrepancy_report["summary"]["consistent"],
+        "quality_ok": (
+            not issues and not warnings
+            and discrepancy_report["summary"]["consistent"]
+            and discrepancy_report["summary"]["evidence_sufficient"]
+        ),
         "journal": {
             "schema": audit["schema"],
             "record_count": audit["record_count"],
