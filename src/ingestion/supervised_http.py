@@ -6,6 +6,7 @@ large-payload pipe receive. Bounded response bytes travel through shared memory.
 """
 from __future__ import annotations
 
+import http.client
 import math
 import multiprocessing
 import struct
@@ -21,6 +22,7 @@ _HEADER = struct.Struct("!QII")  # request id, HTTP status (0 = transport error)
 _MAX_RESPONSE_BYTES = 8_388_608
 _SHARED_CAPACITY = _HEADER.size + _MAX_RESPONSE_BYTES + 1
 _MAX_REQUEST_BYTES = 65_536
+_MAX_URL_CHARS = 2_048
 
 
 class SupervisedTransportError(OSError):
@@ -65,7 +67,7 @@ def _http_worker(connection: Connection, shared_name: str, completed) -> None:
                     payload = b""
                 if len(payload) > max_response_bytes + 1:
                     status_code, payload = 0, b""
-            except (URLError, TimeoutError, OSError, ValueError):
+            except (http.client.HTTPException, URLError, TimeoutError, OSError, ValueError):
                 status_code, payload = 0, b""
 
             if len(payload) > _MAX_RESPONSE_BYTES + 1:
@@ -165,6 +167,8 @@ class SupervisedHttpTransport:
     ) -> tuple[int, bytes]:
         if not isinstance(url, str) or not url or not isinstance(body, bytes):
             raise SupervisedTransportError("request_invalid")
+        if len(url) > _MAX_URL_CHARS:
+            raise SupervisedTransportError("url_size_invalid")
         if len(body) > _MAX_REQUEST_BYTES:
             raise SupervisedTransportError("request_size_invalid")
         if (isinstance(timeout_seconds, bool)
@@ -183,8 +187,7 @@ class SupervisedHttpTransport:
         if remaining <= 0:
             raise SupervisedTransportDeadlineExceeded("http_deadline_exceeded")
         if not self._lock.acquire(timeout=remaining):
-            self._poisoned = True
-            self._terminate()
+            # This caller has not dispatched work; do not abort the owner of the lock.
             raise SupervisedTransportDeadlineExceeded("http_deadline_exceeded")
         try:
             if not self.healthy:
