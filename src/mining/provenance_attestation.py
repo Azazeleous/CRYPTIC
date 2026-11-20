@@ -142,6 +142,41 @@ def create_attestation(
     }
 
 
+def create_federation_attestation(
+    federation: Mapping[str, Any],
+    *,
+    issuer_id: str,
+    private_key_hex: str,
+    issued_at: int,
+    purpose: str = "provenance-audit",
+) -> dict[str, Any]:
+    """Sign the canonical full federation document as a digest reference.
+
+    This signs the supplied document bytes after canonical serialization; it
+    does not rebuild source archives or certify their correctness.
+    """
+    if not isinstance(federation, Mapping):
+        raise AttestationError("federation must be an object")
+    if federation.get("schema") != "cryptic.provenance-federation.v1":
+        raise AttestationError("unsupported federation schema")
+    checkpoint = federation.get("checkpoint")
+    if not isinstance(checkpoint, Mapping):
+        raise AttestationError("federation checkpoint is missing")
+    federation_root = checkpoint.get("federation_root")
+    if not _is_digest(federation_root):
+        raise AttestationError("federation root is malformed")
+    document_digest = hashlib.sha256(canonical_bytes(dict(federation))).hexdigest()
+    return create_attestation(
+        issuer_id=issuer_id,
+        private_key_hex=private_key_hex,
+        subject_schema="cryptic.provenance-federation.v1",
+        subject_id=federation_root,
+        subject_digest=document_digest,
+        issued_at=issued_at,
+        purpose=purpose,
+    )
+
+
 def verify_attestation(
     attestation: Mapping[str, Any],
     trust_store: Mapping[str, Any],
