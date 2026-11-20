@@ -71,6 +71,18 @@ class JsonRpcProtocolTests(unittest.TestCase):
         with self.assertRaises(JsonRpcDeadlineExceeded):
             client.call_until("eth_chainId", deadline_monotonic=__import__("time").monotonic() - 1)
 
+    def test_request_payload_size_is_bounded_before_worker_dispatch(self):
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_getBlockByNumber"}),
+        )
+        client._supervised_transport = type("ReadyTransport", (), {"healthy": True})()
+        with self.assertRaisesRegex(JsonRpcError, "request_size_invalid"):
+            client.call_until(
+                "eth_getBlockByNumber", ["x" * 65_537],
+                deadline_monotonic=time.monotonic() + 2,
+            )
+
     def test_absolute_deadline_call_requires_prior_worker_preparation(self):
         client = JsonRpcClient(
             "https://rpc.example.org",
