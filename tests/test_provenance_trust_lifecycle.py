@@ -286,6 +286,28 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         attestation = self._attestation("issuer-a", self.key_a, issued_at=220)
         self.assertTrue(verify_attestation_current(attestation, scheduled, snapshot_history=[self.snapshot_v1])["valid"])
 
+    def test_future_effective_rotation_preserves_old_key_until_activation(self):
+        scheduled = rotate_trust_key(
+            self.snapshot_v1,
+            issuer_id="issuer-a",
+            old_key_fingerprint=self.key_a["key_fingerprint"],
+            new_public_key_hex=self.key_c["public_key_hex"],
+            effective_at=300,
+            created_at=250,
+        )
+        old_attestation = self._attestation("issuer-a", self.key_a, issued_at=220)
+        new_attestation = self._attestation("issuer-a", self.key_c, issued_at=320)
+        history = [self.snapshot_v1]
+        self.assertTrue(verify_attestation_current(
+            old_attestation, scheduled, snapshot_history=history
+        )["valid"])
+        self.assertEqual(
+            verify_attestation_current(
+                new_attestation, scheduled, snapshot_history=history
+            )["reason"],
+            "issuer_key_not_yet_active",
+        )
+
     def test_quorum_rejects_invalid_snapshot(self):
         altered = copy.deepcopy(self.snapshot_v1)
         altered["snapshot_digest"] = "0" * 64
@@ -307,7 +329,7 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
                 self.snapshot_v1,
                 issuer_id="issuer-a",
                 key_fingerprint=self.key_a["key_fingerprint"],
-                effective_at=150,
+                effective_at=-1,
                 created_at=140,
             )
 
