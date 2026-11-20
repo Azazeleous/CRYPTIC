@@ -57,12 +57,28 @@ def _derived_id(domain: bytes, receipt_id: str) -> str:
 
 
 def create_manifest(receipt: dict[str, Any]) -> dict[str, Any]:
-    """Create a portable manifest only from a valid authoritative receipt."""
-    if not verify_receipt(receipt):
+    """Create a portable manifest only from a structurally complete valid receipt."""
+    if not isinstance(receipt, dict) or not verify_receipt(receipt):
         raise ValueError("cannot create a manifest from an invalid receipt")
 
-    receipt_id = receipt["receipt_id"]
-    work = receipt["work"]
+    try:
+        receipt_id = receipt["receipt_id"]
+        wallet_id = receipt["wallet_id"]
+        ruleset_id = receipt["ruleset_id"]
+        accepted_at = receipt["accepted_at"]
+        work = receipt["work"]
+        if not isinstance(wallet_id, str) or not wallet_id.strip():
+            raise ValueError("receipt wallet_id is missing")
+        if not isinstance(ruleset_id, str) or not ruleset_id.strip():
+            raise ValueError("receipt ruleset_id is missing")
+        if isinstance(accepted_at, bool) or not isinstance(accepted_at, int) or accepted_at < 0:
+            raise ValueError("receipt accepted_at is invalid")
+        if work.get("algorithm") != "SHA-256d" or work.get("header_bytes") != 80:
+            raise ValueError("receipt proof format is unsupported")
+        proof_digest = work["digest_hex"]
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError("receipt is missing required provenance fields") from exc
+
     body: dict[str, Any] = {
         "format": SCHEMA,
         "identity": {
@@ -72,11 +88,11 @@ def create_manifest(receipt: dict[str, Any]) -> dict[str, Any]:
         },
         "provenance": {
             "receipt_hash": receipt_id,
-            "wallet_id": receipt["wallet_id"],
-            "ruleset_id": receipt["ruleset_id"],
-            "accepted_at": receipt["accepted_at"],
-            "algorithm": work["algorithm"],
-            "proof_digest": work["digest_hex"],
+            "wallet_id": wallet_id,
+            "ruleset_id": ruleset_id,
+            "accepted_at": accepted_at,
+            "algorithm": "SHA-256d",
+            "proof_digest": proof_digest,
         },
         "verification": {
             "receipt_integrity": "verified",
@@ -106,14 +122,14 @@ def verify_manifest(manifest: dict[str, Any], receipt: dict[str, Any]) -> bool:
     try:
         if manifest.get("format") != SCHEMA:
             return False
-        integrity = manifest["integrity"]
-        if integrity.get("algorithm") != HASH_ALGORITHM:
+        integrity = manifest.get("integrity")
+        if not isinstance(integrity, dict) or integrity.get("algorithm") != HASH_ALGORITHM:
             return False
         if integrity.get("manifest_hash") != compute_manifest_hash(manifest):
             return False
         expected = create_manifest(receipt)
         return manifest == expected
-    except (KeyError, TypeError, ValueError, UnicodeError):
+    except (KeyError, TypeError, ValueError, UnicodeError, AttributeError):
         return False
 
 
@@ -122,9 +138,11 @@ def export_manifest(manifest: dict[str, Any], destination: str | os.PathLike[str
     if not isinstance(manifest, dict):
         raise TypeError("manifest must be a dictionary")
     expected_hash = compute_manifest_hash(manifest)
-    integrity = manifest.get("integrity", {})
-    if integrity.get("manifest_hash") != expected_hash:
+    integrity = manifest.get("integrity")
+    if not isinstance(integrity, dict) or integrity.get("manifest_hash") != expected_hash:
         raise ValueError("refusing to export a manifest with an invalid integrity hash")
+    if manifest.get("format") != SCHEMA:
+        raise ValueError("unsupported manifest format")
 
     path = Path(destination).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,12 +171,12 @@ def audit_manifest_file(
         }
 
     valid = verify_manifest(manifest, receipt)
+    integrity = manifest.get("integrity") if isinstance(manifest, dict) else None
+    provenance = manifest.get("provenance") if isinstance(manifest, dict) else None
     return {
         "path": str(source),
         "valid": valid,
-        "manifest_hash": manifest.get("integrity", {}).get("manifest_hash")
-        if isinstance(manifest, dict) else None,
-        "receipt_hash": manifest.get("provenance", {}).get("receipt_hash")
-        if isinstance(manifest, dict) else None,
+        "manifest_hash": integrity.get("manifest_hash") if isinstance(integrity, dict) else None,
+        "receipt_hash": provenance.get("receipt_hash") if isinstance(provenance, dict) else None,
         "network_acceptance": "not_claimed",
     }
