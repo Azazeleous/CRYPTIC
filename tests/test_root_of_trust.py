@@ -118,7 +118,7 @@ class RootOfTrustTests(unittest.TestCase):
         self.assertEqual(result["reason"], "old_root_authorization_not_met")
 
     def test_root_rotation_fails_without_new_key_possession(self):
-        n1, n2 = keypair()
+        n1, n2 = keypair(), keypair()
         new = create_root_manifest([n1[1], n2[1]], threshold=2, epoch=2, previous_root_fingerprint=self.pin)
         transition = create_root_rotation(self.root, new, [self.a[0], self.b[0]], [n1[0]])
         result = verify_root_rotation(transition, self.root, pinned_old_root_fingerprint=self.pin)
