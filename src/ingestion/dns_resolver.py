@@ -37,19 +37,18 @@ def _resolver_worker(connection: Connection) -> None:
                     hostname, port, family=socket.AF_UNSPEC,
                     type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
                 )
-                addresses: list[tuple[int, str]] = []
-                seen: set[tuple[int, str]] = set()
+                addresses: set[tuple[int, str]] = set()
                 for family, socktype, proto, _canonname, sockaddr in rows:
                     if family not in (socket.AF_INET, socket.AF_INET6):
                         continue
                     if socktype != socket.SOCK_STREAM:
                         continue
-                    address = str(ipaddress.ip_address(sockaddr[0].split("%", 1)[0]))
-                    item = (family, address)
-                    if item not in seen:
-                        seen.add(item)
-                        addresses.append(item)
-                connection.send((request_id, ("ok", tuple(addresses))))
+                    if family == socket.AF_INET6 and len(sockaddr) > 3 and sockaddr[3]:
+                        # The transport tuple cannot preserve an interface scope.
+                        continue
+                    address = str(ipaddress.ip_address(sockaddr[0]))
+                    addresses.add((family, address))
+                connection.send((request_id, ("ok", tuple(sorted(addresses)))))
             except (OSError, ValueError, OverflowError):
                 connection.send((request_id, ("error", "dns_lookup_failed")))
     except (EOFError, OSError):
@@ -127,6 +126,8 @@ class IsolatedDnsResolver:
             raise DnsResolverDeadlineExceeded("dns_deadline_exceeded")
         try:
             literal = ipaddress.ip_address(hostname)
+            if isinstance(literal, ipaddress.IPv6Address) and literal.scope_id:
+                raise DnsResolverError("scoped_ipv6_unsupported")
             return ((socket.AF_INET6 if literal.version == 6 else socket.AF_INET, str(literal)),)
         except ValueError:
             pass
