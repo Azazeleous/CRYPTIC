@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
-class SupervisedTransportError(RuntimeError):
+class SupervisedTransportError(OSError):
     """Sanitized worker lifecycle or transport failure."""
 
 
