@@ -12,7 +12,7 @@ from src.ingestion.observation_log import (
     audit_journal,
     read_records,
 )
-from src.ingestion.source_registry import SourceDescriptor, SourcePage
+from src.ingestion.source_registry import SourceAdapterError, SourceDescriptor, SourcePage
 
 
 class ObservationJournalTests(unittest.TestCase):
@@ -95,7 +95,7 @@ class ObservationJournalTests(unittest.TestCase):
             observed_at=100,
             items=({"value": 1},),
         )
-        with self.assertRaises(ValueError):
+        with self.assertRaises(SourceAdapterError):
             append_page(self.path, self.descriptor, wrong)
         self.assertFalse(self.path.exists())
 
