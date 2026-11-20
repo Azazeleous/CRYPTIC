@@ -50,6 +50,14 @@ class IsolatedDnsResolverTests(unittest.TestCase):
                     deadline_monotonic=time.monotonic() - 1,
                 )
 
+    def test_scoped_ipv6_literal_is_rejected_without_scope_support(self):
+        with IsolatedDnsResolver() as resolver:
+            with self.assertRaisesRegex(DnsResolverError, "scoped_ipv6_unsupported"):
+                resolver.resolve(
+                    "fe80::1%lo", 443,
+                    deadline_monotonic=time.monotonic() + 1,
+                )
+
     def test_invalid_host_and_port_are_rejected(self):
         with IsolatedDnsResolver() as resolver:
             with self.assertRaisesRegex(DnsResolverError, "hostname_invalid"):
