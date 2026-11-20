@@ -5,6 +5,7 @@ transfer assets, or communicate with a network.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from pathlib import Path
@@ -142,3 +143,23 @@ def reconcile_wallet(
             malformed_lines or invalid_receipts or manifest_conflicts or orphaned_manifests
         ),
     }
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run local wallet-to-trophy reconciliation from the command line."""
+    parser = argparse.ArgumentParser(
+        description="Reconcile a local CRYPTIC receipt wallet with portable trophy manifests"
+    )
+    parser.add_argument("--wallet", required=True, help="path to the receipt JSONL file")
+    parser.add_argument("--manifests", required=True, help="directory for portable manifest JSON files")
+    args = parser.parse_args(argv)
+    try:
+        report = reconcile_wallet(args.wallet, args.manifests)
+    except OSError as exc:
+        parser.exit(2, f"archive error: {type(exc).__name__}: {exc}\n")
+    print(json.dumps(report, sort_keys=True, indent=2))
+    return 0 if report["valid"] else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
