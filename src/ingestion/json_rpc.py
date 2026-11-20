@@ -191,6 +191,8 @@ class JsonRpcClient:
             raise JsonRpcError("rpc_deadline_invalid")
         if deadline_monotonic <= time.monotonic():
             raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+        if self._supervised_transport is None:
+            raise JsonRpcError("rpc_transport_not_prepared")
         return self._call(method, params, deadline_monotonic=float(deadline_monotonic))
 
     def _call(self, method: str, params: list[Any] | None, *,
