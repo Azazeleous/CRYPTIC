@@ -16,7 +16,7 @@
 ## Phase 2 — Ingestion and verification
 - Bounded streaming and backpressure.
 - Tamper-evident raw observation journal — implemented and CI-verified in PR #13; canonical JSONL, hash chain, append locking, fsync, and full-chain audit are available. It is not privileged-proof/WORM storage.
-- Normalization and cross-source discrepancy records.
+- Canonical EVM/Solana chain-head normalization and cross-source discrepancy reports — implemented and CI-verified in PR #14; comparisons are bounded by identity anchors and observation skew. Asset normalization remains open.
 - Deterministic replay and data-quality tests.
 
 ## Phase 3 — Core model
