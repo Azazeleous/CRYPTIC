@@ -5,11 +5,15 @@ CRYPTIC_SOLANA_RPC_URL. No network simulator or fake provider is used.
 """
 import json
 import os
+import time
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 from src.ingestion.json_rpc import (
     EvmReadOnlyAdapter,
     JsonRpcClient,
+    _RateGate,
     JsonRpcDeadlineExceeded,
     JsonRpcError,
     JsonRpcPolicy,
@@ -79,6 +83,94 @@ class JsonRpcProtocolTests(unittest.TestCase):
                     limit=1,
                     deadline_monotonic=__import__("time").monotonic() - 1,
                 )
+
+    def test_rate_gate_wait_is_bounded_by_shared_deadline(self):
+        gate = _RateGate(60)
+        gate._next_at = time.monotonic() + 0.2
+        started = time.monotonic()
+        with self.assertRaises(JsonRpcDeadlineExceeded):
+            gate.wait(deadline_monotonic=started + 0.02)
+        self.assertLess(time.monotonic() - started, 0.15)
+
+    def test_retry_backoff_is_rejected_when_it_exceeds_remaining_budget(self):
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}),
+            policy=JsonRpcPolicy(timeout_seconds=2, max_retries=2,
+                                 retry_base_seconds=1, rate_limit_per_minute=600),
+        )
+        opener = type("FailingOpener", (), {
+            "open": lambda self, request, timeout: (_ for _ in ()).throw(
+                HTTPError(request.full_url, 503, "unavailable", {}, None)
+            )
+        })()
+        with patch("src.ingestion.json_rpc.build_opener", return_value=opener):
+            with self.assertRaises(JsonRpcDeadlineExceeded):
+                client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.1)
+
+    def test_socket_timeout_uses_remaining_shared_budget(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def read(self, size):
+                return self.payload
+
+        class Opener:
+            timeout_seen = None
+            def open(self, request, timeout):
+                self.timeout_seen = timeout
+                request_doc = json.loads(request.data.decode("utf-8"))
+                payload = json.dumps({
+                    "jsonrpc": "2.0", "id": request_doc["id"], "result": "0x1"
+                }).encode("utf-8")
+                return Response(payload)
+
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}),
+            policy=JsonRpcPolicy(timeout_seconds=5, max_retries=0,
+                                 rate_limit_per_minute=600),
+        )
+        opener = Opener()
+        with patch("src.ingestion.json_rpc.build_opener", return_value=opener):
+            result = client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.4)
+        self.assertEqual(result, "0x1")
+        self.assertGreater(opener.timeout_seen, 0)
+        self.assertLessEqual(opener.timeout_seen, 0.4)
+
+    def test_evm_and_solana_multi_call_observations_reuse_one_deadline(self):
+        deadline = time.monotonic() + 10
+        class RecordingClient:
+            def __init__(self, results):
+                self.results = results
+                self.calls = []
+            def call_until(self, method, params=None, *, deadline_monotonic):
+                self.calls.append((method, deadline_monotonic))
+                return self.results[method]
+
+        evm = EvmReadOnlyAdapter("https://rpc.example.org")
+        evm.client = RecordingClient({
+            "eth_chainId": "0x1",
+            "eth_getBlockByNumber": {
+                "number": "0x0", "timestamp": "0x1",
+                "hash": "0x" + "a" * 64, "parentHash": "0x" + "b" * 64,
+            },
+        })
+        evm.observe_until(deadline_monotonic=deadline)
+        self.assertEqual([item[1] for item in evm.client.calls], [deadline] * 3)
+
+        solana = SolanaReadOnlyAdapter("https://rpc.example.org")
+        solana.client = RecordingClient({
+            "getGenesisHash": "genesis",
+            "getSlot": 10,
+            "getBlockHeight": 9,
+        })
+        solana.observe_until(deadline_monotonic=deadline)
+        self.assertEqual([item[1] for item in solana.client.calls], [deadline] * 3)
 
     def test_policy_bounds_are_enforced(self):
         with self.assertRaisesRegex(SourceRegistryError, "timeout_seconds"):
