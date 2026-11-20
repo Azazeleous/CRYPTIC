@@ -121,6 +121,12 @@ class BoundedRuntimeTests(unittest.TestCase):
         self.assertLessEqual(report["journal"]["record_count"], 2)
         self.assertLessEqual(report["sources"][0]["observation_count"], 2)
 
+    def test_credential_filters_are_rejected_before_adapter_dispatch(self):
+        self.registry.register(DeadlineAdapter("alpha"))
+        with BoundedIngestionRuntime(self.registry) as runtime:
+            with self.assertRaisesRegex(IngestionRuntimeError, "credential"):
+                runtime.run(self.journal, ["alpha"], filters_by_source={"alpha": {"api_key": "x"}})
+
     def test_duplicate_source_selection_is_rejected(self):
         self.registry.register(DeadlineAdapter("alpha"))
         with BoundedIngestionRuntime(self.registry) as runtime:
