@@ -17,13 +17,14 @@ Use one supervised, spawn-based HTTP worker per JSON-RPC client.
 - The original HTTPS URL hostname is retained. The standard-library HTTPS handler performs normal certificate-chain and hostname verification and supplies the hostname for SNI.
 - Redirects are not followed. A redirect status is returned to the parent and treated as a non-retryable HTTP status.
 - The worker reads at most max_response_bytes + 1; the parent parser rejects a response exceeding the configured cap.
-- The parent waits on IPC only for the remaining absolute monotonic deadline. If the wait expires, it terminates (then kills if necessary) the worker and permanently poisons that worker instance.
+- The parent waits on a multiprocessing event only for the remaining absolute monotonic deadline. The bounded response body is written into a fixed-capacity shared-memory segment; the event signals that its header and bytes are complete. The parent never performs a blocking pipe receive for the response payload.
+- If the event wait expires, the parent terminates (then kills if necessary) the worker and permanently poisons that worker instance.
 - A poisoned worker is not restarted during the active collection. The owning session fails closed; a later session requires a newly prepared adapter/client.
 - The worker is serialized per client. The runtime's existing fixed worker count and bounded submission window continue to bound concurrent source operations.
 
 ## Error and data handling
 
-Worker exceptions are not serialized to the parent. The IPC protocol returns only a small status tuple and, on success, the bounded response bytes. The worker receives the URL and request body over its private pipe, not as process command-line arguments. The implementation does not emit request bodies, endpoint values, or raw exception text to logs or metrics. Endpoint validation continues to reject embedded user information, query strings, and fragments.
+Worker exceptions are not serialized to the parent. The private pipe carries only bounded request messages and shutdown; response metadata and payload are placed in shared memory, with completion signaled by an event. The worker receives the URL and request body over its private pipe, not as process command-line arguments. Request bodies are capped at 65,536 bytes. The implementation does not emit request bodies, endpoint values, or raw exception text to logs or metrics. Endpoint validation continues to reject embedded user information, query strings, and fragments.
 
 ## Scope and limitations
 
