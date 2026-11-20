@@ -314,6 +314,34 @@ class EvmReadOnlyAdapter:
             "timestamp": latest["timestamp"],
         }
 
+    def health_check(self) -> HealthReport:
+        started = time.monotonic()
+        try:
+            chain_id = self._hex_quantity(self.client.call("eth_chainId"), "chain_id")
+            return HealthReport(
+                self.descriptor.source_id, True, int(time.time()),
+                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                reason=f"chain_id:{chain_id}",
+            )
+        except Exception:
+            return HealthReport(self.descriptor.source_id, False, int(time.time()),
+                                reason="rpc_unavailable")
+
+    def health_check(self) -> HealthReport:
+        started = time.monotonic()
+        try:
+            genesis_hash = self.client.call("getGenesisHash")
+            if not isinstance(genesis_hash, str) or not genesis_hash:
+                raise JsonRpcError("genesis_hash_invalid")
+            return HealthReport(
+                self.descriptor.source_id, True, int(time.time()),
+                latency_ms=max(0, int((time.monotonic() - started) * 1000)),
+                reason="genesis_identity_verified",
+            )
+        except Exception:
+            return HealthReport(self.descriptor.source_id, False, int(time.time()),
+                                reason="rpc_unavailable")
+
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
         try:
