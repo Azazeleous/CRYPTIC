@@ -208,6 +208,7 @@ class JsonRpcClient:
             {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
             separators=(",", ":"),
         ).encode("utf-8")
+        self.prepare()  # One worker lifecycle per client; never restart per retry.
         for attempt in range(self.policy.max_retries + 1):
             self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
             timeout = self.policy.timeout_seconds
@@ -217,7 +218,6 @@ class JsonRpcClient:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 timeout = min(timeout, remaining)
             try:
-                self.prepare()
                 assert self._supervised_transport is not None
                 status, payload = self._supervised_transport.request(
                     self.endpoint, body, timeout_seconds=timeout,
