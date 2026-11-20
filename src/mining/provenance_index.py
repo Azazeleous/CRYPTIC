@@ -64,8 +64,6 @@ def build_index(
     """Build a reproducible index from independently verified source artifacts."""
     wallet = Path(wallet_file).expanduser()
     manifests = Path(manifest_dir).expanduser()
-    if not manifests.is_dir():
-        raise FileNotFoundError(f"manifest directory not found: {manifests}")
     wallet_rows, malformed = _read_wallet(wallet)
 
     invalid_receipts: list[dict[str, Any]] = []
