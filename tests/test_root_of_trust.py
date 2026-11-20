@@ -152,5 +152,33 @@ class RootOfTrustTests(unittest.TestCase):
         result = verify_root_rotation(transition, self.root, pinned_old_root_fingerprint="f"*64)
         self.assertEqual(result["reason"], "old_root_pin_mismatch")
 
+
+    def test_untrusted_non_string_signatures_fail_closed(self):
+        env = create_signed_policy_snapshot(
+            self.snapshot, self.root, [self.a[0], self.b[0]], sequence=1)
+        for invalid in (None, 7, [], {}):
+            altered = dict(env)
+            altered["signatures"] = [dict(env["signatures"][0], signature=invalid)]
+            result = verify_signed_policy_snapshot(
+                altered, self.snapshot, self.root,
+                pinned_root_fingerprint=self.pin)
+            self.assertFalse(result["valid"])
+            self.assertEqual(result["reason"], "policy_quorum_not_met")
+
+        n1, n2 = keypair(), keypair()
+        new = create_root_manifest(
+            [n1[1], n2[1]], threshold=2, epoch=2,
+            previous_root_fingerprint=self.pin)
+        transition = create_root_rotation(
+            self.root, new, [self.a[0], self.b[0]], [n1[0], n2[0]])
+        for invalid in (None, 7, [], {}):
+            altered = dict(transition)
+            altered["old_signatures"] = [
+                dict(transition["old_signatures"][0], signature=invalid)]
+            result = verify_root_rotation(
+                altered, self.root, pinned_old_root_fingerprint=self.pin)
+            self.assertFalse(result["valid"])
+            self.assertEqual(result["reason"], "old_root_authorization_not_met")
+
 if __name__ == "__main__":
     unittest.main()
