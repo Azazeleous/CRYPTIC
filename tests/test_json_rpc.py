@@ -75,7 +75,7 @@ class JsonRpcProtocolTests(unittest.TestCase):
         evm = EvmReadOnlyAdapter("https://rpc.example.org")
         solana = SolanaReadOnlyAdapter("https://rpc.example.org")
         for adapter in (evm, solana):
-            self.assertFalse(adapter.deadline_enforced)
+            self.assertTrue(adapter.deadline_enforced)
             self.assertTrue(callable(adapter.health_check_until))
             self.assertTrue(callable(adapter.fetch_page_until))
             with self.assertRaises(JsonRpcDeadlineExceeded):
@@ -93,41 +93,33 @@ class JsonRpcProtocolTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 0.15)
 
     def test_retry_backoff_is_rejected_when_it_exceeds_remaining_budget(self):
+        class RetryTransport:
+            healthy = True
+            def request(self, *args, **kwargs):
+                return 503, b""
+
         client = JsonRpcClient(
             "https://rpc.example.org",
             allowed_methods=frozenset({"eth_chainId"}),
             policy=JsonRpcPolicy(timeout_seconds=2, max_retries=2,
                                  retry_base_seconds=1, rate_limit_per_minute=600),
         )
-        opener = type("FailingOpener", (), {
-            "open": lambda self, request, timeout: (_ for _ in ()).throw(
-                HTTPError(request.full_url, 503, "unavailable", {}, None)
-            )
-        })()
-        with patch("src.ingestion.json_rpc.build_opener", return_value=opener):
-            with self.assertRaises(JsonRpcDeadlineExceeded):
-                client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.1)
+        client._supervised_transport = RetryTransport()
+        with self.assertRaises(JsonRpcDeadlineExceeded):
+            client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.1)
 
-    def test_socket_timeout_uses_remaining_shared_budget(self):
-        class Response:
-            def __init__(self, payload):
-                self.payload = payload
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                return False
-            def read(self, size):
-                return self.payload
-
-        class Opener:
+    def test_supervised_transport_receives_remaining_shared_budget(self):
+        class RecordingTransport:
+            healthy = True
             timeout_seen = None
-            def open(self, request, timeout):
-                self.timeout_seen = timeout
-                request_doc = json.loads(request.data.decode("utf-8"))
+            def request(self, url, body, *, timeout_seconds, max_response_bytes,
+                        deadline_monotonic):
+                self.timeout_seen = timeout_seconds
+                request_doc = json.loads(body.decode("utf-8"))
                 payload = json.dumps({
                     "jsonrpc": "2.0", "id": request_doc["id"], "result": "0x1"
                 }).encode("utf-8")
-                return Response(payload)
+                return 200, payload
 
         client = JsonRpcClient(
             "https://rpc.example.org",
@@ -135,12 +127,12 @@ class JsonRpcProtocolTests(unittest.TestCase):
             policy=JsonRpcPolicy(timeout_seconds=5, max_retries=0,
                                  rate_limit_per_minute=600),
         )
-        opener = Opener()
-        with patch("src.ingestion.json_rpc.build_opener", return_value=opener):
-            result = client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.4)
+        transport = RecordingTransport()
+        client._supervised_transport = transport
+        result = client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.4)
         self.assertEqual(result, "0x1")
-        self.assertGreater(opener.timeout_seen, 0)
-        self.assertLessEqual(opener.timeout_seen, 0.4)
+        self.assertGreater(transport.timeout_seen, 0)
+        self.assertLessEqual(transport.timeout_seen, 0.4)
 
     def test_evm_and_solana_multi_call_observations_reuse_one_deadline(self):
         deadline = time.monotonic() + 10
