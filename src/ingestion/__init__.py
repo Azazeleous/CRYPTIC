@@ -1,5 +1,6 @@
 """Read-only ingestion source contracts."""
 
+from .replay import ReplayError, replay_journal
 from .normalization import (
     NormalizationError,
     compare_chain_heads,
@@ -31,6 +32,8 @@ from .source_registry import (
 )
 
 __all__ = [
+    "ReplayError",
+    "replay_journal",
     "NormalizationError",
     "compare_chain_heads",
     "normalize_chain_observation",
