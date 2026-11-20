@@ -29,7 +29,7 @@ class JsonRpcError(SourceAdapterError):
     """Sanitized JSON-RPC transport, protocol, or provider error."""
 
 
-class JsonRpcDeadlineExceeded(TimeoutError, JsonRpcError):
+class JsonRpcDeadlineExceeded(TimeoutError):
     """The shared monotonic deadline expired during transport coordination."""
 
 
