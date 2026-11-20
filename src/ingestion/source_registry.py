@@ -169,10 +169,16 @@ class SourceRegistry:
         if not isinstance(descriptor, SourceDescriptor):
             raise SourceRegistryError("adapter must expose a SourceDescriptor")
         descriptor.validate()
-        if not callable(getattr(adapter, "health_check", None)) or not callable(
+        legacy_contract = callable(getattr(adapter, "health_check", None)) and callable(
             getattr(adapter, "fetch_page", None)
-        ):
-            raise SourceRegistryError("adapter does not implement the read-only contract")
+        )
+        deadline_contract = (
+            getattr(adapter, "deadline_enforced", False) is True
+            and callable(getattr(adapter, "health_check_until", None))
+            and callable(getattr(adapter, "fetch_page_until", None))
+        )
+        if not (legacy_contract or deadline_contract):
+            raise SourceRegistryError("adapter does not implement a supported read-only contract")
         if not isinstance(replace, bool):
             raise SourceRegistryError("replace must be boolean")
         with self._lock:
@@ -180,6 +186,14 @@ class SourceRegistry:
                 raise SourceRegistryError("source_id is already registered")
             self._adapters[descriptor.source_id] = adapter
         return descriptor
+
+    def get_adapter(self, source_id: str) -> SourceAdapter:
+        """Return a registered adapter for coordinator-owned execution."""
+        with self._lock:
+            adapter = self._adapters.get(source_id)
+        if adapter is None:
+            raise SourceRegistryError("source_id is not registered")
+        return adapter
 
     def unregister(self, source_id: str) -> bool:
         with self._lock:
