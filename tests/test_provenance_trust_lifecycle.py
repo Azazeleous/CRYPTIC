@@ -70,7 +70,7 @@ class ProvenanceTrustLifecycleTests(unittest.TestCase):
         )
         standalone = verify_trust_snapshot(rotated)
         self.assertTrue(standalone["valid"])
-        self.assertFalse(standalone["chain_verified"])
+        self.assertFalse(standalone["chain_link_verified"])
         self.assertTrue(verify_trust_snapshot(rotated, self.snapshot_v1)["valid"])
         wrong_previous = copy.deepcopy(self.snapshot_v1)
         wrong_previous["created_at"] = 99
