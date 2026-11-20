@@ -181,6 +181,14 @@ class SourceRegistry:
             self._adapters[descriptor.source_id] = adapter
         return descriptor
 
+    def get_adapter(self, source_id: str) -> SourceAdapter:
+        """Return a registered adapter for coordinator-owned execution."""
+        with self._lock:
+            adapter = self._adapters.get(source_id)
+        if adapter is None:
+            raise SourceRegistryError("source_id is not registered")
+        return adapter
+
     def unregister(self, source_id: str) -> bool:
         with self._lock:
             return self._adapters.pop(source_id, None) is not None
