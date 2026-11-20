@@ -125,6 +125,13 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
             observations += len(page.items)
             if page.next_cursor is None or not page.items:
                 break
+            if adapter.descriptor.pagination_mode == "none":
+                raise SourceAdapterError("cursor_not_supported")
+            if adapter.descriptor.pagination_mode == "cursor" and len(page.next_cursor) > 4096:
+                raise SourceAdapterError("cursor_too_large")
+            if adapter.descriptor.pagination_mode == "offset":
+                if not page.next_cursor.isdecimal() or int(page.next_cursor) > 2**63 - 1:
+                    raise SourceAdapterError("offset_cursor_invalid")
             seen[page.next_cursor] = seen.get(page.next_cursor, 0) + 1
             if seen[page.next_cursor] > max_cursor_repeats:
                 raise SourceAdapterError("pagination_cursor_repeated")
