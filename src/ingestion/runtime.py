@@ -151,6 +151,10 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
         return _WorkerResult(source_id, {"healthy": False, "reason": "deadline_exceeded"},
                              tuple(pages), "timed_out", "deadline_exceeded",
                              max(0, int((time.monotonic() - started) * 1000)))
+    except TimeoutError:
+        return _WorkerResult(source_id, {"healthy": False, "reason": "adapter_timeout"},
+                             tuple(pages), "timed_out", "adapter_timeout",
+                             max(0, int((time.monotonic() - started) * 1000)))
     except Exception as exc:
         return _WorkerResult(source_id, {"healthy": False, "reason": "worker_failed"},
                              tuple(pages), "failed", type(exc).__name__,
@@ -220,6 +224,7 @@ class BoundedIngestionRuntime:
         if not self._session_lock.acquire(blocking=False):
             raise IngestionRuntimeError("another ingestion session is active")
         try:
+            run_started = time.monotonic()
             if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= self.policy.max_page_size:
                 raise IngestionRuntimeError("page_size exceeds policy bounds")
             adapters = self._resolve(source_ids)
@@ -238,7 +243,8 @@ class BoundedIngestionRuntime:
             if not before["valid"]:
                 raise IngestionRuntimeError("refusing to ingest into an invalid journal")
 
-            deadline = time.monotonic() + self.policy.max_duration_seconds
+            collection_started = time.monotonic()
+            deadline = collection_started + self.policy.max_duration_seconds
             count = len(adapters)
             page_quotas = [self.policy.max_pages // count] * count
             observation_quotas = [self.policy.max_observations // count] * count
@@ -252,6 +258,7 @@ class BoundedIngestionRuntime:
             results: dict[str, _WorkerResult] = {}
             next_index = 0
             timed_out = False
+            max_in_flight = 0
             while next_index < count or submitted:
                 while next_index < count and len(submitted) < capacity:
                     adapter = adapters[next_index]
@@ -263,6 +270,7 @@ class BoundedIngestionRuntime:
                         max_cursor_repeats=self.policy.max_cursor_repeats,
                     )
                     submitted[future] = source_id
+                    max_in_flight = max(max_in_flight, len(submitted))
                     next_index += 1
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -291,6 +299,8 @@ class BoundedIngestionRuntime:
                         (), "timed_out", "deadline_exceeded", 0,
                     ))
 
+            collection_finished = time.monotonic()
+            finalization_started = collection_finished
             appended: list[dict[str, object]] = []
             for source_id in sorted(results):
                 result = results[source_id]
@@ -308,6 +318,7 @@ class BoundedIngestionRuntime:
                     })
             after = audit_journal(journal_path)
             replay = replay_journal(journal_path) if after["valid"] else None
+            finalization_finished = time.monotonic()
             source_reports = []
             for adapter in adapters:
                 source_id = adapter.descriptor.source_id
@@ -332,6 +343,11 @@ class BoundedIngestionRuntime:
                     "max_page_size": self.policy.max_page_size,
                     "max_duration_seconds": self.policy.max_duration_seconds,
                 },
+                "deadline_scope": "source_collection_only",
+                "max_in_flight": max_in_flight,
+                "collection_elapsed_ms": max(0, int((collection_finished - collection_started) * 1000)),
+                "finalization_elapsed_ms": max(0, int((finalization_finished - finalization_started) * 1000)),
+                "total_elapsed_ms": max(0, int((finalization_finished - run_started) * 1000)),
                 "sources": source_reports, "appended": appended, "journal": after,
                 "replay_digest": replay["replay_digest"] if replay else None,
                 "replay_valid": replay["valid"] if replay else False,
@@ -342,6 +358,9 @@ class BoundedIngestionRuntime:
                 {key: value for key, value in row.items() if key != "elapsed_ms"}
                 for row in source_reports
             ]
+            for timing_field in ("collection_elapsed_ms", "finalization_elapsed_ms", "total_elapsed_ms"):
+                stable.pop(timing_field, None)
+            stable.pop("max_in_flight", None)
             digest = hashlib.sha256(json.dumps(
                 stable, sort_keys=True, separators=(",", ":"),
                 ensure_ascii=False, allow_nan=False,

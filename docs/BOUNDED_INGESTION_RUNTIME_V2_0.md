@@ -37,3 +37,16 @@ This prevents falsely advertising a hard session boundary.
 ## Deadline scope
 
 The monotonic session deadline bounds adapter health checks and page acquisition only. Journal append/fsync, journal audit, and deterministic replay are local filesystem work performed after collection and are not forcibly interruptible by this thread-based coordinator. Their duration is measured by the surrounding caller, not claimed to be inside a hard real-time cutoff. A strict end-to-end cutoff requires a separately supervised process boundary and an explicit storage-I/O policy; this version does not claim that stronger guarantee.
+
+## v2.0.1 accounting clarification
+
+Worker-raised `TimeoutError` values are classified as timed-out source work,
+not generic worker failures. Session reports now expose the maximum submitted
+in-flight window plus collection, finalization, and total elapsed milliseconds.
+The report explicitly labels the monotonic deadline scope as
+`source_collection_only`; journal append/fsync, audit, and replay remain
+measured finalization work and are not represented as hard-interruptible.
+
+The in-flight metric is bounded by `max_workers + max_queue_size`. Timing
+metrics are excluded from the deterministic session digest so identical
+evidence does not hash differently merely because scheduling latency changed.

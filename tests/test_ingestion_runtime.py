@@ -166,5 +166,30 @@ class BoundedRuntimeTests(unittest.TestCase):
             IngestionPolicy(max_duration_seconds=float("inf")).validate()
 
 
+    def test_adapter_timeout_is_reported_as_timed_out(self):
+        class TimeoutAdapter(DeadlineAdapter):
+            def health_check_until(self, *, deadline_monotonic):
+                raise TimeoutError("bounded adapter call timed out")
+        self.registry.register(TimeoutAdapter("timeout-source"))
+        with BoundedIngestionRuntime(self.registry) as runtime:
+            report = runtime.run(self.journal, ["timeout-source"])
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["sources"][0]["status"], "timed_out")
+        self.assertEqual(report["sources"][0]["error_kind"], "adapter_timeout")
+
+    def test_report_discloses_deadline_scope_and_bounded_submission(self):
+        for name in ("a", "b", "c"):
+            self.registry.register(DeadlineAdapter(name, delay=0.005))
+        policy = IngestionPolicy(max_workers=1, max_queue_size=1, max_pages=3,
+                                 max_observations=3, max_page_size=1)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            report = runtime.run(self.journal, ["a", "b", "c"])
+        self.assertEqual(report["deadline_scope"], "source_collection_only")
+        self.assertLessEqual(report["max_in_flight"], policy.max_workers + policy.max_queue_size)
+        self.assertIn("collection_elapsed_ms", report)
+        self.assertIn("finalization_elapsed_ms", report)
+        self.assertIn("total_elapsed_ms", report)
+
+
 if __name__ == "__main__":
     unittest.main()
