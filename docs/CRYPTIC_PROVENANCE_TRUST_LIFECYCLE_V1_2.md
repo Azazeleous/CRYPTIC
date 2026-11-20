@@ -31,9 +31,10 @@ the prior snapshot digest and increments its version by one.
 `verify_trust_snapshot()` always checks the supplied snapshot's canonical
 digest. For versions after v1, a standalone check explicitly reports that
 the predecessor chain is unchecked. Supplying the immediate predecessor
-checks that direct link. `verify_trust_snapshot_chain()` accepts the ordered
-history beginning at v1 and checks every link sequentially; use this when
-claiming that the complete supplied history is internally consistent.
+checks that direct link and reports `chain_link_verified`.
+`verify_trust_snapshot_chain()` accepts the ordered history beginning at v1
+and checks every link sequentially; use this when claiming that the complete
+supplied history is internally consistent.
 
 ## Key rotation and revocation
 
@@ -44,8 +45,10 @@ claiming that the complete supplied history is internally consistent.
 4. creates the next linked snapshot.
 
 `revoke_trust_key()` records an effective revocation without adding a
-replacement key. Both operations reject unknown or ambiguous keys, duplicate
-new public keys, invalid timestamps, and invalid source snapshots.
+replacement key. For snapshots after v1, both operations require the
+complete predecessor history and refuse to advance an unverified chain.
+Both operations reject unknown or ambiguous keys, duplicate new public keys,
+invalid timestamps, and invalid source snapshots.
 
 Revocation timestamps are policy data. They are not proof of when a real-world
 event occurred. Clock accuracy and the authority allowed to publish a trust
@@ -61,8 +64,10 @@ snapshot remain governance responsibilities.
   scheduled revocation does not take effect early.
 
 Both modes verify the Ed25519 signature and key fingerprint through the
-existing v1.1 verifier. The current mode means active under the supplied
-snapshot's `created_at` policy state; it is not a live wall-clock lookup.
+existing v1.1 verifier. For snapshots after v1, callers must supply the full
+ordered predecessor history; verification fails closed if it is missing or
+invalid. The current mode means active under the supplied snapshot's
+`created_at` policy state; it is not a live wall-clock lookup.
 Neither mode treats `issued_at` or `created_at` as a trusted clock. The
 caller must select the correct snapshot and verification mode for the audit
 question.
