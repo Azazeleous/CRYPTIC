@@ -65,6 +65,11 @@ class JsonRpcProtocolTests(unittest.TestCase):
             JsonRpcPolicy(max_retries=9).validate()
 
     def test_method_allowlist_blocks_state_changing_calls(self):
+        with self.assertRaisesRegex(SourceRegistryError, "read-only methods"):
+            JsonRpcClient(
+                "https://rpc.example.org",
+                allowed_methods=frozenset({"eth_sendRawTransaction"}),
+            )
         client = JsonRpcClient(
             "https://rpc.example.org",
             allowed_methods=frozenset({"eth_chainId", "eth_blockNumber"}),
