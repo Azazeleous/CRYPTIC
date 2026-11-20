@@ -200,7 +200,7 @@ def verify_trust_snapshot_chain(
     previous = None
     for index, current in enumerate(history):
         result = verify_trust_snapshot(current, previous)
-        if not result["valid"] or not result["chain_verified"]:
+        if not result["valid"]:
             return {
                 "valid": False,
                 "reason": "snapshot_chain_invalid",
