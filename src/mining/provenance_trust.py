@@ -117,20 +117,15 @@ def create_trust_snapshot(
     return {**body, "snapshot_digest": hashlib.sha256(canonical_bytes(body)).hexdigest()}
 
 
-def verify_trust_snapshot(
-    snapshot: Mapping[str, Any],
-    previous_snapshot: Mapping[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Verify snapshot structure, digest, key material, and optional chain link."""
-    failure = lambda reason: {"valid": False, "reason": reason}
+def _verify_snapshot_contents(snapshot: Mapping[str, Any]) -> tuple[bool, str, str | None]:
     if not isinstance(snapshot, Mapping):
-        return failure("invalid_snapshot")
+        return False, "invalid_snapshot", None
     expected_fields = {
         "schema", "version", "created_at", "previous_snapshot_digest",
         "issuers", "snapshot_digest",
     }
     if set(snapshot.keys()) != expected_fields or snapshot.get("schema") != SNAPSHOT_SCHEMA:
-        return failure("unsupported_or_malformed_snapshot")
+        return False, "unsupported_or_malformed_snapshot", None
     try:
         rows = _normalise_entries(snapshot.get("issuers"))
         body = _snapshot_body(
@@ -140,34 +135,86 @@ def verify_trust_snapshot(
             issuers=rows,
         )
     except (TypeError, ValueError):
-        return failure("invalid_snapshot_contents")
+        return False, "invalid_snapshot_contents", None
     if rows != snapshot.get("issuers"):
-        return failure("issuer_entries_not_canonical")
+        return False, "issuer_entries_not_canonical", None
     expected = hashlib.sha256(canonical_bytes(body)).hexdigest()
     if snapshot.get("snapshot_digest") != expected:
-        return failure("snapshot_digest_mismatch")
-    previous_digest = snapshot.get("previous_snapshot_digest")
+        return False, "snapshot_digest_mismatch", None
+    return True, "snapshot_integrity_valid", expected
+
+
+def verify_trust_snapshot(
+    snapshot: Mapping[str, Any],
+    previous_snapshot: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Verify snapshot integrity and, when supplied, its direct chain link.
+
+    A standalone version greater than one can be integrity-checked, but its
+    chain is explicitly reported as unchecked until predecessor history is
+    supplied. Use verify_trust_snapshot_chain for complete chain validation.
+    """
+    failure = lambda reason: {"valid": False, "reason": reason}
+    valid, reason, expected = _verify_snapshot_contents(snapshot)
+    if not valid:
+        return failure(reason)
+    previous_digest = snapshot["previous_snapshot_digest"]
     if previous_digest is None:
-        if snapshot.get("version") != 1 or previous_snapshot is not None:
+        if snapshot["version"] != 1 or previous_snapshot is not None:
             return failure("snapshot_chain_mismatch")
+        chain_verified = True
+    elif previous_snapshot is None:
+        chain_verified = False
     else:
-        if previous_snapshot is None:
-            return failure("previous_snapshot_required")
-        previous_result = verify_trust_snapshot(previous_snapshot)
-        if not previous_result["valid"]:
+        previous_valid, _, previous_expected = _verify_snapshot_contents(previous_snapshot)
+        if not previous_valid:
             return failure("previous_snapshot_invalid")
-        if (previous_snapshot.get("snapshot_digest") != previous_digest
-                or snapshot.get("version") != previous_snapshot.get("version", 0) + 1
-                or snapshot.get("created_at", -1) < previous_snapshot.get("created_at", 0)):
+        if (previous_expected != previous_digest
+                or snapshot["version"] != previous_snapshot["version"] + 1
+                or snapshot["created_at"] < previous_snapshot["created_at"]):
             return failure("snapshot_chain_mismatch")
+        chain_verified = (
+            previous_snapshot["version"] == 1
+            or previous_snapshot.get("chain_verified") is True
+        )
     return {
         "valid": True,
-        "reason": "snapshot_integrity_valid",
+        "reason": "snapshot_integrity_valid" if chain_verified
+        else "snapshot_integrity_valid_chain_unchecked",
         "version": snapshot["version"],
         "snapshot_digest": expected,
-        "issuer_key_count": len(rows),
+        "issuer_key_count": len(snapshot["issuers"]),
+        "chain_verified": chain_verified,
     }
 
+
+def verify_trust_snapshot_chain(
+    snapshots: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Verify a complete ordered chain beginning at trust snapshot version 1."""
+    if isinstance(snapshots, (str, bytes, Mapping)):
+        raise TypeError("snapshots must be an ordered iterable of snapshot objects")
+    history = list(snapshots)
+    if not history:
+        return {"valid": False, "reason": "empty_snapshot_chain"}
+    previous = None
+    for index, current in enumerate(history):
+        result = verify_trust_snapshot(current, previous)
+        if not result["valid"] or not result["chain_verified"]:
+            return {
+                "valid": False,
+                "reason": "snapshot_chain_invalid",
+                "index": index,
+                "detail": result["reason"],
+            }
+        previous = current
+    return {
+        "valid": True,
+        "reason": "snapshot_chain_valid",
+        "version": previous["version"],
+        "snapshot_digest": previous["snapshot_digest"],
+        "snapshot_count": len(history),
+    }
 
 def revoke_trust_key(
     snapshot: Mapping[str, Any],
