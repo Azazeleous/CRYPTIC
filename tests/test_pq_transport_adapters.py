@@ -8,6 +8,7 @@ from src.ingestion.pq_transport_adapters import (
     AdapterError,
     AdapterProtocolError,
     AdapterRegistry,
+    AdapterSelection,
     NoCompatibleAdapter,
 )
 
@@ -114,6 +115,19 @@ class AdapterRegistryTests(unittest.TestCase):
             registry.exchange(selection, b"x", deadline_monotonic=time.monotonic() - 1)
         with self.assertRaisesRegex(AdapterDeadlineExceeded, "during_exchange"):
             registry.exchange(selection, b"x", deadline_monotonic=time.monotonic() + 0.005)
+
+    def test_forged_selection_cannot_bypass_required_capabilities(self):
+        registry = AdapterRegistry()
+        weak = FakeAdapter("weak", authenticated=False, deadline_enforced=False)
+        registry.register(weak)
+        registry.prepare("weak")
+        forged = AdapterSelection(
+            "weak", "https", "ML-KEM-768", False, False, True, True
+        )
+        with self.assertRaises(NoCompatibleAdapter):
+            registry.exchange(
+                forged, b"x", deadline_monotonic=time.monotonic() + 1
+            )
 
     def test_prepared_adapter_cannot_be_unregistered(self):
         registry = AdapterRegistry()
