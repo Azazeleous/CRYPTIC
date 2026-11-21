@@ -119,6 +119,31 @@ class FourLaneRegtestTests(unittest.TestCase):
         self.assertIsNone(report["receipt"])
         self.assertEqual(report["metrics"]["candidates_checked"], 32)
 
+    def test_candidate_is_discarded_if_center_reverification_crosses_deadline(self):
+        import threading
+        import time
+        from unittest.mock import patch
+        import src.ingestion.four_lane_regtest as regtest
+
+        original = regtest.sha256d
+
+        def delayed_center_recheck(prefix, nonce):
+            if threading.current_thread().name == "MainThread":
+                time.sleep(0.06)
+            return original(prefix, nonce)
+
+        with patch("src.ingestion.four_lane_regtest.sha256d", side_effect=delayed_center_recheck):
+            report = run_four_lane_regtest(
+                self.header_prefix,
+                nonce_start=0,
+                nonce_end=32,
+                target=(1 << 256) - 1,
+                time_budget_seconds=0.05,
+            )
+        self.assertNotEqual(report["status"], "accepted")
+        self.assertEqual(report["winner_count"], 0)
+        self.assertIsNone(report["receipt"])
+
     def test_experiment_commitment_is_bound_to_header_root_and_receipt(self):
         from src.ingestion.research_commitment import (
             bind_commitment_to_header_prefix,
