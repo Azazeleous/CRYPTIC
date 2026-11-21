@@ -169,6 +169,8 @@ def compute_difficulty_stratified_guarantees(
     markov_upper = min(1.0, 1.0 / k)
     chebyshev_upper = min(1.0, (1.0 - success_probability) / ((k - 1.0) ** 2))
     exponential_tail_bound = math.exp(-measured_attempts * success_probability)
+    tail_threshold_trials = math.ceil(k * expected_trials)
+    exponential_tail_at_multiplier = math.exp(-k)
     mixing_heuristic = math.ceil(difficulty * math.log(2.0) / lambda2)
 
     if difficulty <= 6:
@@ -191,6 +193,9 @@ def compute_difficulty_stratified_guarantees(
         "markov_upper_bound_at_multiplier": markov_upper,
         "chebyshev_upper_bound_at_multiplier": chebyshev_upper,
         "geometric_exponential_tail_upper_bound": exponential_tail_bound,
+        "tail_multiplier": k,
+        "tail_threshold_trials": tail_threshold_trials,
+        "geometric_exponential_bound_at_multiplier": exponential_tail_at_multiplier,
         "spectral_gap_input": lambda2,
         "spectral_mixing_schedule_heuristic": mixing_heuristic,
         "spectral_bound_status": "heuristic_until_lambda2_is_verified_for_the_selected_transition_operator",
