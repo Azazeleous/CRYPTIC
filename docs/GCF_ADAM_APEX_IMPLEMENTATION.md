@@ -14,7 +14,7 @@ This is a new protocol implementation, not an import of the visual APEX console.
 Proposal endpoint contract: \`POST /v1/consensus/proposals\`.
 Vote endpoint contract: \`POST /v1/consensus/votes\`.
 
-The current Python package exposes the admission operations directly. An HTTP server/router is not included in this commit.
+The bounded WSGI adapter is implemented in `src/consensus/http_api.py`. It exposes the proposal, vote, finalize, and candidate-status routes. Mount it only behind authenticated TLS infrastructure; this adapter does not provide client authentication or a public server launcher.
 
 Proposal fields:
 \`schema, network_id, epoch, height, round, parent_hash, payload_hash, proof_hash,
@@ -44,8 +44,10 @@ The engine requires independent implementations for:
 - GOD capability/policy authorization
 - GAIA-JUSTICE evidence and transition validation
 
-Each gate is injectable. If omitted, the default denies. Test callbacks in the
-unit tests are test fixtures only and are not production adapters.
+Each gate is injectable. If omitted, the default denies. The GOD adapter and
+justice commitment adapter are implemented, but the production HCCGN verifier,
+GOD allowlist extension, and trusted justice evidence providers are not yet
+connected. Test callbacks in unit tests are test fixtures only and are not production adapters.
 
 **HCCGN boundary:** the uploaded project sources describe HCCGN clock, prime/residue
 and traversal architecture, but do not provide a normative canonical network work
@@ -54,9 +56,13 @@ Therefore this implementation does not infer those from CRYPTIC's existing
 80-byte Bitcoin SHA-256d scanner. No candidate can be network-accepted until a
 real HCCGN verifier is connected.
 
-**GOD boundary:** no private GOD policy is copied into CRYPTIC. The caller must
-supply a live adapter that evaluates the operator's active GOD policy. Denial,
-missing policy, malformed policy, or unavailable verifier must reject the proposal.
+**GOD boundary:** no private GOD policy is copied into CRYPTIC. `GODNetworkAuthorizer`
+uses the existing host gate's `runnable()` decision and requests the capability
+`gcf.consensus.propose`. The inspected Sovereign Operating System GOD v1 allowlist
+does not currently include that capability, so the existing gate denies this path.
+The GOD allowlist and its bounded executor must be explicitly extended and reviewed
+before consensus submission can be authorized. Missing gate, endpoint, or policy
+continues to deny.
 
 ## ADAM/APEX commitment rules
 
