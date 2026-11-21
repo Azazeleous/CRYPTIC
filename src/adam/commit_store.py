@@ -165,6 +165,11 @@ class APEXValidator:
 
     def validate_and_commit(self, certificate: Mapping[str, Any],
                             state_bytes: bytes) -> dict:
+        if not isinstance(state_bytes, (bytes, bytearray, memoryview)):
+            raise APEXValidationError("ADAM_STATE_BYTES_INVALID")
+        raw_state = bytes(state_bytes)
+        if len(raw_state) > MAX_STATE_BYTES:
+            raise APEXValidationError("ADAM_STATE_TOO_LARGE")
         verified = verify_independent_certificate(
             certificate, hccgn_verifier=self.hccgn_verifier,
             god_authorizer=self.god_authorizer,
@@ -173,7 +178,7 @@ class APEXValidator:
         if not verified["valid"]:
             raise APEXValidationError("APEX_FINALITY_REJECTED:" + verified["reason"])
         proposal = certificate["proposal"]
-        if sha256_hex(bytes(state_bytes)) != proposal["payload_hash"]:
+        if sha256_hex(raw_state) != proposal["payload_hash"]:
             raise APEXValidationError("APEX_PAYLOAD_STATE_HASH_MISMATCH")
         if proposal["height"] != self.store.head()["height"] + 1:
             raise APEXValidationError("APEX_HEIGHT_CONTINUITY_FAILURE")
@@ -196,7 +201,7 @@ class APEXValidator:
             height=proposal["height"],
             candidate_digest=verified["candidate_digest"],
             parent_hash=proposal["parent_hash"],
-            state_bytes=bytes(state_bytes),
+            state_bytes=raw_state,
             certificate_digest=certificate_digest,
             receipt=receipt,
         )
