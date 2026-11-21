@@ -118,7 +118,7 @@ class RemoteProviderTests(unittest.TestCase):
                     "schema": ANCHOR_SCHEMA, "signer_id": "anchor-root",
                     "network_id": network, "sequence": seq,
                     "policy_hash": digest, "issued_at": self.now,
-                    "nonce": "a" * 32,
+                    "nonce": headers["X-Anchor-Nonce"],
                 }
                 return 200, {}, _canonical({
                     **body, "signature": self.signed(
@@ -170,7 +170,7 @@ class RemoteProviderTests(unittest.TestCase):
                     "schema": ANCHOR_SCHEMA, "signer_id": "anchor-root",
                     "network_id": "test", "sequence": 5,
                     "policy_hash": "5" * 64, "issued_at": self.now,
-                    "nonce": "b" * 32,
+                    "nonce": headers["X-Anchor-Nonce"],
                 }
                 return 200, {}, _canonical({
                     **body, "signature": self.signed(
