@@ -39,10 +39,14 @@ class AdapterCapabilities:
     deadline_enforced: bool
 
     def __post_init__(self) -> None:
-        if not self.protocols or any(not item for item in self.protocols):
+        if not self.protocols or any(not isinstance(item, str) or not item for item in self.protocols):
             raise ValueError("protocols_must_be_nonempty")
-        if self.max_request_bytes <= 0 or self.max_response_bytes <= 0:
+        if (isinstance(self.max_request_bytes, bool) or not isinstance(self.max_request_bytes, int)
+                or isinstance(self.max_response_bytes, bool) or not isinstance(self.max_response_bytes, int)
+                or self.max_request_bytes <= 0 or self.max_response_bytes <= 0):
             raise ValueError("byte_limits_must_be_positive")
+        if not isinstance(self.authenticated, bool) or not isinstance(self.deadline_enforced, bool):
+            raise ValueError("security_capabilities_must_be_boolean")
         if any(item not in {"ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"} for item in self.kem_algorithms):
             raise ValueError("unsupported_kem_identifier")
 
@@ -168,9 +172,11 @@ class AdapterRegistry:
             caps = adapter.capabilities
             if selection.protocol not in caps.protocols or selection.kem_algorithm not in caps.kem_algorithms:
                 raise NoCompatibleAdapter("selection_capabilities_changed")
-            if selection.require_authenticated and not caps.authenticated:
+            # The exchange boundary enforces the secure baseline even if a caller forges
+            # an AdapterSelection with weaker optional requirements.
+            if not caps.authenticated:
                 raise NoCompatibleAdapter("adapter_authentication_requirement_not_met")
-            if selection.require_deadline and not caps.deadline_enforced:
+            if not caps.deadline_enforced:
                 raise NoCompatibleAdapter("adapter_deadline_requirement_not_met")
             if len(payload) > caps.max_request_bytes:
                 raise AdapterProtocolError("request_exceeds_adapter_limit")
