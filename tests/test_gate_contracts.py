@@ -57,6 +57,24 @@ class GateContractTests(unittest.TestCase):
         )
         self.assertTrue(verifier(proposal).allowed)
 
+        uppercase = dict(commitment)
+        uppercase["evidence_root"] = "AB" * 32
+        self.assertFalse(JusticeEvidenceVerifier(
+            policy_verifier=lambda *_: True,
+            evidence_verifier=lambda *_: True,
+        )({"justice_commitment": uppercase}).allowed)
+
+        def unavailable(*_args):
+            raise RuntimeError("evidence service unavailable")
+        self.assertFalse(JusticeEvidenceVerifier(
+            policy_verifier=unavailable,
+            evidence_verifier=lambda *_: True,
+        )(proposal).allowed)
+        self.assertFalse(JusticeEvidenceVerifier(
+            policy_verifier=lambda *_: True,
+            evidence_verifier=None,
+        )(proposal).allowed)
+
 
 class RuntimeCompositionTests(unittest.TestCase):
     def setUp(self):
