@@ -22,6 +22,7 @@ from src.consensus.hccgn_work import HCCGNWorkProofProvider, PROFILE_ID
 from src.consensus.http_api import GCFWSGI
 from src.governance.god_adapter import GODNetworkAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
+from src.governance.remote_providers import load_independently_pinned_root
 
 
 class RuntimeConfigurationError(ValueError):
@@ -83,6 +84,7 @@ def build_consensus_runtime(
     data_dir: str | os.PathLike[str],
     god_trust_root_path: str | os.PathLike[str],
     god_signer_id: str,
+    god_trust_root_fingerprint: str | None = None,
     sequence_anchor: HCCGNSequenceAnchor | None,
     god_gate: Any | None,
     policy_evidence_verifier: Callable | None,
@@ -113,7 +115,24 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("runtime_data_dir_permissions_must_be_private")
     if hasattr(os, "getuid") and root_info.st_uid != os.getuid():
         raise RuntimeConfigurationError("runtime_data_dir_owner_mismatch")
-    public_key = load_pinned_ed25519_public_key(god_trust_root_path)
+    if require_external_anchor:
+        if (not isinstance(god_trust_root_fingerprint, str)
+                or len(god_trust_root_fingerprint) != 64):
+            raise RuntimeConfigurationError("independent_god_root_fingerprint_required")
+        try:
+            bytes.fromhex(god_trust_root_fingerprint)
+        except ValueError as exc:
+            raise RuntimeConfigurationError("independent_god_root_fingerprint_invalid") from exc
+        try:
+            public_key = load_independently_pinned_root(
+                str(god_trust_root_path),
+                expected_fingerprint=god_trust_root_fingerprint,
+                expected_signer_id=god_signer_id,
+            )
+        except Exception as exc:
+            raise RuntimeConfigurationError("independent_god_root_pin_invalid") from exc
+    else:
+        public_key = load_pinned_ed25519_public_key(god_trust_root_path)
 
     policy_kwargs = {
         "trusted_public_key": public_key,
