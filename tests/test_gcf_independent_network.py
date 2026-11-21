@@ -251,8 +251,16 @@ class PeerTransportTests(unittest.TestCase):
                 private_key_hex=private, peer_certificate_fingerprints={},
                 replay_db_path=Path(temp.name) / "replay.sqlite3",
             )
+            from src.consensus.gcf import sign_object
+            from src.consensus.peer_transport import P2P_DOMAIN
+            envelope = {
+                "schema": "GCF-P2P/1", "message_id": "c" * 32,
+                "sender_id": "peer-a", "issued_at": int(__import__("time").time()),
+                "message_type": "PROPOSAL", "payload": {"candidate": "x"},
+            }
+            envelope["signature"] = sign_object(private, P2P_DOMAIN, envelope)
             with self.assertRaisesRegex(PeerTransportError, "PEER_IDENTITY_MISMATCH"):
-                node.handle_envelope("peer-other", {})
+                node.handle_envelope("peer-other", envelope)
         finally:
             temp.cleanup()
 
