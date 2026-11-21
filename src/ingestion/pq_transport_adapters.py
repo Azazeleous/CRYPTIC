@@ -95,6 +95,20 @@ class AdapterRegistry:
                 raise ValueError("adapter_id_already_registered")
             self._adapters[adapter_id] = adapter
 
+    def register_verified(self, adapter: TransportAdapter, signed_manifest: object,
+                          trust_store: object) -> None:
+        """Enroll only an adapter whose ML-DSA manifest chains to a pinned key."""
+        from src.ingestion.pq_adapter_manifest import (
+            manifest_matches_adapter,
+            verify_signed_adapter_manifest,
+        )
+
+        if not verify_signed_adapter_manifest(signed_manifest, trust_store):
+            raise ValueError("adapter_manifest_signature_invalid")
+        if not manifest_matches_adapter(signed_manifest, adapter):
+            raise ValueError("manifest_adapter_mismatch")
+        self.register(adapter)
+
     def unregister(self, adapter_id: str) -> None:
         with self._lock:
             if adapter_id in self._prepared:
