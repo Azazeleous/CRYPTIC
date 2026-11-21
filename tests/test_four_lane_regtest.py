@@ -119,6 +119,43 @@ class FourLaneRegtestTests(unittest.TestCase):
         self.assertIsNone(report["receipt"])
         self.assertEqual(report["metrics"]["candidates_checked"], 32)
 
+    def test_experiment_commitment_is_bound_to_header_root_and_receipt(self):
+        from src.ingestion.research_commitment import (
+            bind_commitment_to_header_prefix,
+            compute_experiment_commitment,
+        )
+
+        metadata = {"algorithm": "FGR-ICE", "ring": {"n": 256, "q": 3329}}
+        commitment = compute_experiment_commitment(metadata)
+        prefix = bind_commitment_to_header_prefix(bytes(76), commitment)
+        report = run_four_lane_regtest(
+            prefix,
+            nonce_start=0,
+            nonce_end=16,
+            target=(1 << 256) - 1,
+            time_budget_seconds=5.0,
+            experiment_commitment=commitment,
+        )
+        self.assertEqual(report["status"], "accepted")
+        self.assertEqual(report["receipt"]["experiment_commitment"], commitment)
+        self.assertEqual(
+            report["receipt"]["header_prefix_sha256"],
+            __import__("hashlib").sha256(prefix).hexdigest(),
+        )
+
+    def test_experiment_commitment_mismatch_is_rejected(self):
+        from src.ingestion.research_commitment import compute_experiment_commitment
+
+        commitment = compute_experiment_commitment({"ring": {"n": 256, "q": 3329}})
+        with self.assertRaisesRegex(RegtestError, "header_binding_mismatch"):
+            run_four_lane_regtest(
+                bytes(76),
+                nonce_start=0,
+                nonce_end=1,
+                target=0,
+                experiment_commitment=commitment,
+            )
+
     def test_invalid_header_and_bounds_rejected(self):
         with self.assertRaisesRegex(RegtestError, "76_bytes"):
             run_four_lane_regtest(b"short", nonce_start=0, nonce_end=1, target=0)
