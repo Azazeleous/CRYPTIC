@@ -21,10 +21,9 @@ class HCCGNVerifierAdapter:
         profile_id: exact configured profile identifier
         proof_hash: same 32-byte hex digest as the proposal commitment
 
-    The provider is responsible for retrieving the proof material by digest,
-    parsing the canonical HCCGN header, recomputing the prescribed digest,
-    applying the specified target comparison, and checking proof parameters.
-    This adapter does not implement or guess those HCCGN rules.
+    HCCGNWorkProofProvider implements the HCCGN-WORK/1 parser and verifier.
+    The deployment supplies proof-envelope retrieval and authenticated active
+    target resolution. This adapter pins the profile and proposal commitment.
     """
     def __init__(self, provider: Any | None = None, *, profile_id: str | None = None):
         self.provider = provider
