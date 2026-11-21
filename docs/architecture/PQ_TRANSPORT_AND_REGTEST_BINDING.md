@@ -22,7 +22,9 @@ Initial target profiles:
 
 Review current NIST publication errata and deployment requirements before final profile selection. The KEM shared secret must be passed to a separately specified KDF and authenticated symmetric encryption construction. Never use a KEM shared secret directly as an application encryption key.
 
-The Python adapter registry is a provider-neutral contract. It does not implement lattice cryptography and does not accept locally invented ML-KEM-like operations as substitutes for FIPS implementations. A production provider must supply interoperable test vectors, key/ciphertext length checks, constant-time implementation review, secure randomness, key lifecycle rules, and independent conformance testing before enablement.
+The module src/ingestion/pq_security.py now binds ML-KEM-768 and ML-DSA-65 to the pinned pqcrypto 1.0.0 provider. It enforces the FIPS parameter-set byte lengths, performs encapsulation/decapsulation, context-bound signing and verification, and composes the KEM shared secret with HKDF-SHA-256 and AES-256-GCM for authenticated envelope encryption. It also provides context-bound receipt-signing helpers.
+
+The provider's upstream documentation states that its underlying crates have not undergone a formal security audit. This repository's functional tests check parameter sizes, round trips, context binding, tampering, and AEAD authentication; these are not deterministic NIST ACVP known-answer tests, CMVP validation, or a security audit. Do not label the deployment FIPS 140 validated or production-certified. Before production use, add byte-exact NIST KAT/ACVP coverage, independent cross-implementation interoperability tests, a security review, and a documented secret-key lifecycle.
 
 No downgrade is permitted: if a route requires ML-KEM-768 and no enrolled adapter supports it, selection fails closed. A classical-only route is not a fallback for a PQ-required session.
 
@@ -82,8 +84,10 @@ Cloudflare Tunnel is a suitable origin-routing layer for a private service: it e
 - [x] Late candidate rejected at the acceptance boundary.
 - [x] Capability-gated adapter registry with no silent PQ downgrade.
 - [x] Request/response size and deadline checks at the registry boundary.
-- [ ] Production ML-KEM provider with NIST-aligned known-answer tests.
-- [ ] Production ML-DSA provider and signed adapter-manifest verification.
+- [x] ML-KEM-768 and ML-DSA-65 provider API integration with parameter-size and functional round-trip tests.
+- [ ] Byte-exact NIST ACVP known-answer tests for ML-KEM-768 and ML-DSA-65.
+- [ ] Independent cross-provider interoperability and cryptographic security review.
+- [ ] Signed adapter-manifest verification and public-key trust-anchor management.
 - [ ] Concrete HTTPS/WebSocket/WebRTC adapters and protocol conformance tests.
 - [ ] Bitcoin Core local regtest node integration and accepted-block verification.
 - [ ] Public-page CSP/dependency audit and SOS visual integration.
