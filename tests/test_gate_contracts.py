@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import stat
 import tempfile
@@ -84,9 +86,17 @@ class RuntimeCompositionTests(unittest.TestCase):
         public = private.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
+        self.public_key = public
         self.key_path = self.root / "god-root.pub"
         self.key_path.write_bytes(public)
         os.chmod(self.key_path, 0o600)
+        self.root_pin_path = self.root / "god-root-pin.json"
+        self.root_pin_path.write_text(json.dumps({
+            "schema": "CRYPTIC-GOD-ROOT-PIN/1",
+            "signer_id": "GOD-ROOT-1",
+            "public_key_hex": public.hex(),
+        }))
+        os.chmod(self.root_pin_path, 0o600)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -108,7 +118,8 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "public_key_hex": "11" * 32, "weight": 1,
             }},
             data_dir=self.root / "data",
-            god_trust_root_path=self.key_path,
+            god_trust_root_path=self.root_pin_path,
+            god_trust_root_fingerprint=hashlib.sha256(self.public_key).hexdigest(),
             god_signer_id="GOD-ROOT-1",
             sequence_anchor=self.Anchor(),
             god_gate=None,
@@ -142,7 +153,8 @@ class RuntimeCompositionTests(unittest.TestCase):
             build_consensus_runtime(
                 network_id="gaia-testnet", epoch=1, validators={},
                 data_dir=self.root / "data2",
-                god_trust_root_path=self.key_path, god_signer_id="GOD-ROOT-1",
+                god_trust_root_path=self.root_pin_path, god_signer_id="GOD-ROOT-1",
+                god_trust_root_fingerprint=hashlib.sha256(self.public_key).hexdigest(),
                 sequence_anchor=None, god_gate=None,
                 policy_evidence_verifier=None, justice_evidence_verifier=None,
                 consensus_endpoint="https://consensus.invalid",
@@ -153,6 +165,20 @@ class RuntimeCompositionTests(unittest.TestCase):
         self.key_path.write_bytes(key)
         os.chmod(self.key_path, 0o600)
         self.assertEqual(load_pinned_ed25519_public_key(self.key_path), key)
+
+    def test_production_runtime_rejects_missing_independent_root_pin(self):
+        with self.assertRaisesRegex(RuntimeConfigurationError, "independent_god_root_fingerprint_required"):
+            build_consensus_runtime(
+                network_id="gaia-testnet", epoch=1,
+                validators={"validator-a": {"public_key_hex": "11" * 32, "weight": 1}},
+                data_dir=self.root / "missing-pin",
+                god_trust_root_path=self.root_pin_path,
+                god_signer_id="GOD-ROOT-1",
+                sequence_anchor=self.Anchor(),
+                god_gate=None, policy_evidence_verifier=None,
+                justice_evidence_verifier=None,
+                consensus_endpoint="https://consensus.invalid",
+            )
 
     def test_trust_root_rejects_group_or_world_writable_file(self):
         os.chmod(self.key_path, 0o666)
