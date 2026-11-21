@@ -64,6 +64,16 @@ class HCCGNWorkProfileTests(unittest.TestCase):
             verify_proof(self.proof, expected_network_id='gaia-testnet',
                          expected_target=self.target, proposal=proposal)
 
+    def test_boolean_version_is_rejected(self):
+        bad = HCCGNWorkHeader(
+            network_id_hash=network_hash('gaia-testnet'), epoch=1, height=1,
+            timestamp=1700000000, parent_hash=bytes(32), payload_hash=bytes(32),
+            primary_stride=5, compact_stride=7, nonce=0, target=self.target,
+            version=True,
+        )
+        with self.assertRaisesRegex(HCCGNWorkError, 'version_must_be_integer'):
+            bad.encode()
+
     def test_non_coprime_stride_is_rejected(self):
         bad = HCCGNWorkHeader(
             network_id_hash=network_hash('gaia-testnet'), epoch=1, height=1,
