@@ -17,7 +17,7 @@ class FakeAdapter:
     def __init__(self, adapter_id, *, protocols=frozenset({"https"}),
                  kem=frozenset({"ML-KEM-768"}), authenticated=True,
                  deadline_enforced=True, max_request=1024, max_response=1024,
-                 delay=0.0, response=b"ok"):
+                 delay=0.0, response=b"ok", signature_algorithms=frozenset({"ML-DSA-65"})):
         self.adapter_id = adapter_id
         self.capabilities = AdapterCapabilities(
             protocols=frozenset(protocols),
@@ -26,7 +26,7 @@ class FakeAdapter:
             max_response_bytes=max_response,
             authenticated=authenticated,
             deadline_enforced=deadline_enforced,
-            signature_algorithms=frozenset({"ML-DSA-65"}),
+            signature_algorithms=frozenset(signature_algorithms),
         )
         self.delay = delay
         self.response = response
