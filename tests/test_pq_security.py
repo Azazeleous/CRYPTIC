@@ -88,8 +88,7 @@ class PQSecurityTests(unittest.TestCase):
         pair = MLDSA65.keygen()
         with self.assertRaisesRegex(ValueError, "secret_key_length"):
             MLDSA65.sign(b"bad", b"message")
-        with self.assertRaisesRegex(ValueError, "public_key_length"):
-            MLDSA65.verify(b"bad", b"message", bytes(3309))
+        self.assertFalse(MLDSA65.verify(b"bad", b"message", bytes(3309)))
 
 
 if __name__ == "__main__":
