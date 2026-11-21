@@ -9,10 +9,13 @@ import threading
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+MAX_STATE_BYTES = 1_048_576
+MAX_SQLITE_INT = (1 << 63) - 1
+
 from src.consensus.gcf import (
-    GCFError, canonical_bytes, sha256_hex, verify_finality_certificate,
-    DenyUnconfigured,
+    GCFError, canonical_bytes, sha256_hex, DenyUnconfigured,
 )
+from src.consensus.independent_verifier import verify_certificate as verify_independent_certificate
 
 
 class APEXValidationError(ValueError):
@@ -53,7 +56,43 @@ class AdamCommitStore:
         finally:
             db.close()
 
+    @staticmethod
+    def _valid_digest(value: Any) -> bool:
+        if not isinstance(value, str) or len(value) != 64:
+            return False
+        try:
+            return bytes.fromhex(value).hex() == value
+        except ValueError:
+            return False
+
+    def verify_chain(self) -> dict:
+        """Recheck every persisted commitment from genesis before recovery/use."""
+        expected_height = 1
+        expected_parent = "0" * 64
+        with self._db() as db:
+            rows = db.execute("SELECT * FROM adam_commits ORDER BY height ASC").fetchall()
+        for row in rows:
+            state = bytes(row["state_bytes"])
+            if row["height"] != expected_height:
+                raise APEXValidationError("ADAM_CHAIN_HEIGHT_GAP")
+            if row["parent_hash"] != expected_parent:
+                raise APEXValidationError("ADAM_CHAIN_PARENT_MISMATCH")
+            if not self._valid_digest(row["candidate_digest"]) or not self._valid_digest(row["certificate_digest"]):
+                raise APEXValidationError("ADAM_CHAIN_DIGEST_FORMAT_INVALID")
+            if hashlib.sha256(state).hexdigest() != row["state_hash"]:
+                raise APEXValidationError("ADAM_STORED_STATE_INTEGRITY_FAILURE")
+            try:
+                receipt = json.loads(row["receipt_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise APEXValidationError("ADAM_RECEIPT_CORRUPT") from exc
+            if not isinstance(receipt, dict):
+                raise APEXValidationError("ADAM_RECEIPT_CORRUPT")
+            expected_parent = row["state_hash"]
+            expected_height += 1
+        return {"valid": True, "height": expected_height - 1, "state_hash": expected_parent}
+
     def head(self) -> dict:
+        self.verify_chain()
         with self._db() as db:
             row = db.execute("SELECT * FROM adam_commits ORDER BY height DESC LIMIT 1").fetchone()
         if row is None:
@@ -63,7 +102,18 @@ class AdamCommitStore:
 
     def commit(self, *, height: int, candidate_digest: str, parent_hash: str,
                state_bytes: bytes, certificate_digest: str, receipt: Mapping[str, Any]) -> dict:
+        if isinstance(height, bool) or not isinstance(height, int) or not 1 <= height <= MAX_SQLITE_INT:
+            raise APEXValidationError("ADAM_HEIGHT_INVALID")
+        if not self._valid_digest(candidate_digest) or not self._valid_digest(parent_hash) or not self._valid_digest(certificate_digest):
+            raise APEXValidationError("ADAM_DIGEST_FORMAT_INVALID")
+        if not isinstance(state_bytes, (bytes, bytearray, memoryview)):
+            raise APEXValidationError("ADAM_STATE_BYTES_INVALID")
         raw = bytes(state_bytes)
+        if len(raw) > MAX_STATE_BYTES:
+            raise APEXValidationError("ADAM_STATE_TOO_LARGE")
+        if not isinstance(receipt, Mapping):
+            raise APEXValidationError("ADAM_RECEIPT_INVALID")
+        self.verify_chain()
         state_hash = sha256_hex(raw)
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -88,6 +138,7 @@ class AdamCommitStore:
                 "candidate_digest": candidate_digest, "certificate_digest": certificate_digest}
 
     def get_commit(self, height: int) -> dict | None:
+        self.verify_chain()
         with self._db() as db:
             row = db.execute("SELECT * FROM adam_commits WHERE height=?", (height,)).fetchone()
         if row is None:
@@ -114,7 +165,7 @@ class APEXValidator:
 
     def validate_and_commit(self, certificate: Mapping[str, Any],
                             state_bytes: bytes) -> dict:
-        verified = verify_finality_certificate(
+        verified = verify_independent_certificate(
             certificate, hccgn_verifier=self.hccgn_verifier,
             god_authorizer=self.god_authorizer,
             justice_verifier=self.justice_verifier,

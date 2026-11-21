@@ -206,6 +206,39 @@ class GCFAdamConsensusTests(unittest.TestCase):
         )
         self.assertFalse(result["valid"])
 
+    def test_adam_recovery_verifies_entire_commit_chain(self):
+        store = AdamCommitStore(Path(self.temp.name) / "adam-chain.sqlite3")
+        first_state = b"state-1"
+        first_hash = sha256_hex(first_state)
+        store.commit(
+            height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+            state_bytes=first_state, certificate_digest="b" * 64,
+            receipt={"height": 1},
+        )
+        store.commit(
+            height=2, candidate_digest="c" * 64, parent_hash=first_hash,
+            state_bytes=b"state-2", certificate_digest="d" * 64,
+            receipt={"height": 2},
+        )
+        self.assertEqual(store.verify_chain()["height"], 2)
+        with store._db() as db:
+            db.execute("UPDATE adam_commits SET state_bytes=? WHERE height=1", (b"tampered",))
+        with self.assertRaisesRegex(APEXValidationError, "STORED_STATE_INTEGRITY_FAILURE"):
+            store.get_commit(2)
+
+    def test_adam_rejects_non_bytes_and_oversized_state(self):
+        store = AdamCommitStore(Path(self.temp.name) / "adam-bounds.sqlite3")
+        with self.assertRaisesRegex(APEXValidationError, "STATE_BYTES_INVALID"):
+            store.commit(
+                height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+                state_bytes=100, certificate_digest="b" * 64, receipt={},
+            )
+        with self.assertRaisesRegex(APEXValidationError, "STATE_TOO_LARGE"):
+            store.commit(
+                height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+                state_bytes=b"x" * (1_048_577), certificate_digest="b" * 64, receipt={},
+            )
+
     def test_adam_parent_continuity_is_enforced(self):
         store = AdamCommitStore(Path(self.temp.name) / "adam-parent.sqlite3")
         with self.assertRaisesRegex(APEXValidationError, "PARENT_HASH_MISMATCH"):

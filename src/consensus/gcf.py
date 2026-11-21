@@ -22,6 +22,7 @@ PROPOSAL_DOMAIN = b"GCF/1|PROPOSAL|ED25519\x00"
 VOTE_DOMAIN = b"GCF/1|VOTE|ED25519\x00"
 CERT_DOMAIN = b"GCF/1|FINALITY-CERTIFICATE\x00"
 ZERO_HASH = "0" * 64
+MAX_SQLITE_INT = (1 << 63) - 1
 
 
 class GCFError(ValueError):
@@ -115,8 +116,8 @@ def verify_object(public_hex: str, signature: str, domain: bytes,
 
 
 def _require_int(value: Any, field: str, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise GCFError(f"{field} must be an integer >= {minimum}")
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > MAX_SQLITE_INT:
+        raise GCFError(f"{field} must be an integer in [{minimum}, {MAX_SQLITE_INT}]")
     return value
 
 
@@ -168,6 +169,8 @@ class ValidatorSet:
             raise GCFError("validator set cannot be empty")
         self.validators = parsed
         self.total_weight = sum(v.weight for v in parsed.values())
+        if self.total_weight > MAX_SQLITE_INT:
+            raise GCFError("validator_total_weight_exceeds_storage_limit")
         self.digest = sha256_hex(canonical_bytes({
             "network_id": network_id,
             "epoch": self.epoch,
@@ -260,10 +263,19 @@ class GCFEngine:
             """)
 
     def _gate(self, gate: Callable, *args) -> GateResult:
-        result = gate(*args)
+        try:
+            result = gate(*args)
+        except Exception:
+            return GateResult(False, "GATE_EVALUATION_ERROR")
         if isinstance(result, GateResult):
+            if type(result.allowed) is not bool or not isinstance(result.reason, str):
+                return GateResult(False, "GATE_RESPONSE_INVALID")
             return result
-        return GateResult(bool(result), "ALLOW" if result else "DENIED")
+        if result is True:
+            return GateResult(True, "ALLOW")
+        if result is False:
+            return GateResult(False, "DENIED")
+        return GateResult(False, "GATE_RESPONSE_INVALID")
 
     def _validate_proposal(self, proposal: Mapping[str, Any]) -> tuple[str, dict]:
         required = {
@@ -318,7 +330,7 @@ class GCFEngine:
             result = self._gate(gate, *args)
             if not result.allowed:
                 raise GCFError(f"{code}:{result.reason}")
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 db.execute(
@@ -413,7 +425,7 @@ class GCFEngine:
         digest = vote.get("candidate_digest") if isinstance(vote, Mapping) else None
         if not isinstance(digest, str):
             raise GCFError("candidate_digest_required")
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 proposal = self._proposal(db, digest)
@@ -463,7 +475,7 @@ class GCFEngine:
                 "quorum_weight": self.validator_set.quorum_weight()}
 
     def finalize(self, candidate_digest: str) -> dict:
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 proposal = self._proposal(db, candidate_digest)
@@ -562,7 +574,7 @@ def verify_finality_certificate(certificate: Mapping[str, Any], *,
             (justice_verifier or DenyUnconfigured("JUSTICE"), (normalized,), "justice_invalid"),
         ):
             result = gate(*args)
-            if not (result.allowed if isinstance(result, GateResult) else bool(result)):
+            if not (result.allowed is True if isinstance(result, GateResult) else result is True):
                 return fail(code)
         prevotes = certificate["polc"]["prevotes"]
         precommits = certificate["precommits"]
