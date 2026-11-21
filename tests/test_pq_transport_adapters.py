@@ -60,6 +60,23 @@ class AdapterRegistryTests(unittest.TestCase):
         with self.assertRaises(NoCompatibleAdapter):
             registry.select(protocol="https", kem_algorithm="ML-KEM-768")
 
+    def test_signature_capability_defaults_to_none(self):
+        from types import SimpleNamespace
+
+        capabilities = AdapterCapabilities(
+            protocols=frozenset({"https"}),
+            kem_algorithms=frozenset({"ML-KEM-768"}),
+            max_request_bytes=1024,
+            max_response_bytes=1024,
+            authenticated=True,
+            deadline_enforced=True,
+        )
+        self.assertEqual(capabilities.signature_algorithms, frozenset())
+        registry = AdapterRegistry()
+        registry.register(SimpleNamespace(adapter_id="implicit-signature", capabilities=capabilities))
+        with self.assertRaises(NoCompatibleAdapter):
+            registry.select(protocol="https", signature_algorithm="ML-DSA-65")
+
     def test_signature_profile_is_required_and_fail_closed(self):
         registry = AdapterRegistry()
         registry.register(FakeAdapter("no-dsa", signature_algorithms=frozenset()))
