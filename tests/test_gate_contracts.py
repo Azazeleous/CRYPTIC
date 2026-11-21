@@ -104,6 +104,21 @@ class RuntimeCompositionTests(unittest.TestCase):
             "justice_commitment": {},
         }).allowed)
 
+    def test_runtime_data_directory_is_private(self):
+        private_dir = self.root / "private-data"
+        runtime = build_consensus_runtime(
+            network_id="gaia-testnet", epoch=1,
+            validators={"validator-a": {"public_key_hex": "11" * 32, "weight": 1}},
+            data_dir=private_dir, god_trust_root_path=self.key_path,
+            god_signer_id="GOD-ROOT-1", sequence_anchor=self.Anchor(),
+            god_gate=None, policy_evidence_verifier=None,
+            justice_evidence_verifier=None,
+            consensus_endpoint="https://consensus.invalid",
+        )
+        self.assertEqual(stat.S_IMODE(private_dir.stat().st_mode), 0o700)
+        for name in ("hccgn-proofs.sqlite3", "hccgn-target-policy.sqlite3", "gcf.sqlite3", "adam.sqlite3"):
+            self.assertEqual(stat.S_IMODE((private_dir / name).stat().st_mode), 0o600)
+
     def test_runtime_requires_external_anchor_by_default(self):
         with self.assertRaisesRegex(RuntimeConfigurationError, "external_sequence_anchor_required"):
             build_consensus_runtime(

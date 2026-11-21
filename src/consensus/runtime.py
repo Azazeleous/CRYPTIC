@@ -29,22 +29,27 @@ class RuntimeConfigurationError(ValueError):
 
 
 def load_pinned_ed25519_public_key(path: str | os.PathLike[str]) -> bytes:
-    """Load a 32-byte raw or 64-character hex public key from a protected file."""
+    """Load a 32-byte raw or 64-character hex key without following a symlink."""
     key_path = Path(path).expanduser()
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        info = key_path.lstat()
+        descriptor = os.open(key_path, flags)
     except OSError as exc:
-        raise RuntimeConfigurationError("god_trust_root_unavailable") from exc
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise RuntimeConfigurationError("god_trust_root_must_be_regular_file")
-    if info.st_mode & 0o022:
-        raise RuntimeConfigurationError("god_trust_root_group_or_world_writable")
-    if hasattr(os, "getuid") and info.st_uid != os.getuid():
-        raise RuntimeConfigurationError("god_trust_root_owner_mismatch")
+        raise RuntimeConfigurationError("god_trust_root_unavailable_or_symlink") from exc
     try:
-        raw = key_path.read_bytes().strip()
-    except OSError as exc:
-        raise RuntimeConfigurationError("god_trust_root_unreadable") from exc
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise RuntimeConfigurationError("god_trust_root_must_be_regular_file")
+        if info.st_mode & 0o022:
+            raise RuntimeConfigurationError("god_trust_root_group_or_world_writable")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise RuntimeConfigurationError("god_trust_root_owner_mismatch")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            raw = stream.read(4097).strip()
+        if len(raw) > 4096:
+            raise RuntimeConfigurationError("god_trust_root_file_too_large")
+    finally:
+        os.close(descriptor)
     if len(raw) == 64:
         try:
             raw = bytes.fromhex(raw.decode("ascii"))
@@ -53,7 +58,6 @@ def load_pinned_ed25519_public_key(path: str | os.PathLike[str]) -> bytes:
     if len(raw) != 32:
         raise RuntimeConfigurationError("god_trust_root_length_invalid")
     return raw
-
 
 @dataclass(frozen=True)
 class ConsensusRuntime:
@@ -99,7 +103,14 @@ def build_consensus_runtime(
     if require_external_anchor and sequence_anchor is None:
         raise RuntimeConfigurationError("external_sequence_anchor_required")
     root = Path(data_dir).expanduser()
-    root.mkdir(parents=True, exist_ok=True)
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root_info = root.lstat()
+    if not root.is_dir() or root.is_symlink():
+        raise RuntimeConfigurationError("runtime_data_dir_must_be_real_directory")
+    if root_info.st_mode & 0o077:
+        raise RuntimeConfigurationError("runtime_data_dir_permissions_must_be_private")
+    if hasattr(os, "getuid") and root_info.st_uid != os.getuid():
+        raise RuntimeConfigurationError("runtime_data_dir_owner_mismatch")
     public_key = load_pinned_ed25519_public_key(god_trust_root_path)
 
     policy_kwargs = {
@@ -142,6 +153,14 @@ def build_consensus_runtime(
         god_authorizer=god_authorizer, justice_verifier=justice_gate,
     )
     http = GCFWSGI(engine, apex_validator=apex)
+    for database_path in (
+        root / "hccgn-proofs.sqlite3", root / "hccgn-target-policy.sqlite3",
+        root / "gcf.sqlite3", root / "adam.sqlite3",
+    ):
+        try:
+            os.chmod(database_path, 0o600)
+        except OSError as exc:
+            raise RuntimeConfigurationError("runtime_database_permissions_failed") from exc
     return ConsensusRuntime(
         proof_store, target_policy, work_provider, hccgn_gate, justice_gate,
         god_authorizer, engine, adam_store, apex, http,
