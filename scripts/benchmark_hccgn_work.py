@@ -10,7 +10,14 @@ import argparse
 import hashlib
 import json
 import struct
+import sys
 import time
+from pathlib import Path
+
+# Executing a script by path sets sys.path[0] to scripts/, not the repository root.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from src.consensus.hccgn_work import (
     HCCGNWorkHeader, WORK_DOMAIN, network_hash, work_digest,
