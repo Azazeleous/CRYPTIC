@@ -37,7 +37,7 @@ class HCCGNWorkProfileTests(unittest.TestCase):
     def test_low_target_known_answer_fails(self):
         low = bytes.fromhex('00' + 'ff' * 31)
         header = HCCGNWorkHeader(
-            network_id_hash=network_hash('gaia-testnet'), epoch=1, height=1,
+            network_id_hash=network_hash('gaia-testnet'), height=1, sequence=1,
             timestamp=1700000000, parent_hash=bytes.fromhex('11' * 32),
             payload_hash=bytes.fromhex('22' * 32), primary_stride=5,
             compact_stride=7, nonce=42, target=low,
@@ -102,7 +102,7 @@ class HCCGNWorkProfileTests(unittest.TestCase):
 
     def test_boolean_version_is_rejected(self):
         bad = HCCGNWorkHeader(
-            network_id_hash=network_hash('gaia-testnet'), epoch=1, height=1,
+            network_id_hash=network_hash('gaia-testnet'), height=1, sequence=1,
             timestamp=1700000000, parent_hash=bytes(32), payload_hash=bytes(32),
             primary_stride=5, compact_stride=7, nonce=0, target=self.target,
             version=True,
@@ -112,7 +112,7 @@ class HCCGNWorkProfileTests(unittest.TestCase):
 
     def test_non_coprime_stride_is_rejected(self):
         bad = HCCGNWorkHeader(
-            network_id_hash=network_hash('gaia-testnet'), epoch=1, height=1,
+            network_id_hash=network_hash('gaia-testnet'), height=1, sequence=1,
             timestamp=1700000000, parent_hash=bytes(32), payload_hash=bytes(32),
             primary_stride=2, compact_stride=7, nonce=0, target=self.target,
         )
