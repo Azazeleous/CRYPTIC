@@ -228,7 +228,7 @@ class HTTPSSequenceAnchor:
             raise RemoteProviderError("anchor_network_id_invalid")
         return self.endpoint + "/v1/anchors/" + urllib.parse.quote(network_id, safe="")
 
-    def _signed(self, raw: bytes, network_id: str, *, update: bool = False) -> dict:
+    def _signed(self, raw: bytes, network_id: str, *, update: bool = False, expected_nonce: str | None = None) -> dict:
         try:
             response = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -243,6 +243,8 @@ class HTTPSSequenceAnchor:
             raise RemoteProviderError("anchor_identity_mismatch")
         if response["network_id"] != network_id:
             raise RemoteProviderError("anchor_network_mismatch")
+        if expected_nonce is not None and response["nonce"] != expected_nonce:
+            raise RemoteProviderError("anchor_nonce_mismatch")
         sequence, issued = response["sequence"], response["issued_at"]
         digest = response["policy_hash"]
         if (isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1
@@ -262,15 +264,16 @@ class HTTPSSequenceAnchor:
         return response
 
     def read_sequence(self, network_id: str) -> tuple[int, str] | None:
+        nonce = secrets.token_hex(16)
         status, _headers, raw = self.transport(
             "GET", self._url(network_id),
-            {"Accept": "application/json"}, None, self.timeout,
+            {"Accept": "application/json", "X-Anchor-Nonce": nonce}, None, self.timeout,
         )
         if status == 404:
             return None
         if status != 200:
             raise RemoteProviderError(f"anchor_http_status_{status}")
-        response = self._signed(raw, network_id)
+        response = self._signed(raw, network_id, expected_nonce=nonce)
         return response["sequence"], response["policy_hash"]
 
     def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool:
@@ -308,7 +311,7 @@ class HTTPSSequenceAnchor:
             return False
         if status != 200:
             raise RemoteProviderError(f"anchor_http_status_{status}")
-        response = self._signed(raw, network_id, update=True)
+        response = self._signed(raw, network_id, update=True, expected_nonce=body["nonce"])
         if (response.get("accepted") is not True or response["sequence"] != sequence
                 or response["policy_hash"] != policy_hash):
             raise RemoteProviderError("anchor_update_not_confirmed")
