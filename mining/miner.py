@@ -43,9 +43,11 @@ def verify_candidate(header: bytes, result: MiningResult, target: int) -> bool:
 
 
 def _mine_lane(header: bytes, start_nonce: int, count: int, target: int, lane_id: int):
-    hits = []
+    best_hit = None
     attempts = 0
     # Lanes 2 and 3 traverse their disjoint assignments in reverse order.
+    # Keep only the lowest-ordinal hit: memory stays O(1) per lane even when
+    # every candidate qualifies under a permissive target.
     for ordinal in lane_ordinals(lane_id, count, LANE_COUNT, reverse=lane_id in (1, 2)):
         nonce = nonce_for_ordinal(start_nonce, ordinal)
         if nonce > MAX_NONCE:
@@ -53,8 +55,9 @@ def _mine_lane(header: bytes, start_nonce: int, count: int, target: int, lane_id
         digest = candidate_digest(header, nonce)
         attempts += 1
         if int.from_bytes(digest, "big") <= target:
-            hits.append(MiningResult(nonce, digest.hex(), lane_id, ordinal, attempts))
-    return hits, attempts
+            if best_hit is None or ordinal < best_hit.ordinal:
+                best_hit = MiningResult(nonce, digest.hex(), lane_id, ordinal, attempts)
+    return best_hit, attempts
 
 
 def mine_four_lane(header: bytes, start_nonce: int, count: int, target: int) -> MiningResult | None:
@@ -77,7 +80,7 @@ def mine_four_lane(header: bytes, start_nonce: int, count: int, target: int) -> 
     with ThreadPoolExecutor(max_workers=LANE_COUNT) as pool:
         futures = [pool.submit(_mine_lane, header, start_nonce, count, target, lane) for lane in range(LANE_COUNT)]
         lane_results = [future.result() for future in futures]
-    hits = [hit for lane_hits, _ in lane_results for hit in lane_hits]
+    hits = [hit for hit, _ in lane_results if hit is not None]
     if not hits:
         return None
     winner = min(hits, key=lambda item: item.ordinal)
