@@ -26,6 +26,7 @@ class FakeAdapter:
             max_response_bytes=max_response,
             authenticated=authenticated,
             deadline_enforced=deadline_enforced,
+            signature_algorithms=frozenset({"ML-DSA-65"}),
         )
         self.delay = delay
         self.response = response
@@ -58,6 +59,12 @@ class AdapterRegistryTests(unittest.TestCase):
         registry.register(FakeAdapter("classical-only", kem=frozenset()))
         with self.assertRaises(NoCompatibleAdapter):
             registry.select(protocol="https", kem_algorithm="ML-KEM-768")
+
+    def test_signature_profile_is_required_and_fail_closed(self):
+        registry = AdapterRegistry()
+        registry.register(FakeAdapter("no-dsa", signature_algorithms=frozenset()))
+        with self.assertRaises(NoCompatibleAdapter):
+            registry.select(protocol="https", signature_algorithm="ML-DSA-65")
 
     def test_authentication_and_deadline_capabilities_are_required(self):
         registry = AdapterRegistry()
