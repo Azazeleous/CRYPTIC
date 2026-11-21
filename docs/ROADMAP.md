@@ -52,4 +52,12 @@
 - Explicit PQ transport adapter manifests, pinned signer trust, declared KEM/signature capabilities, and revocation-aware adapter invalidation.
 - Provider interoperability, Windows spawn verification, production trust-root operation, and live endpoint verification remain open.
 
+## Phase 8 — GCF consensus, HCCGN proof, and ADAM/APEX finality
+- Independent GCF/1 certificate verifier reconstructs canonical serialization, checks Ed25519 signatures, validator-set digest, PREVOTE/PRECOMMIT weighted quorum, lock references, and certificate metadata.
+- HCCGN-WORK/1 defines a new normative 184-byte binary header, domain-separated SHA-256 proof digest, proof-envelope commitment, authenticated active-target policy, content-addressed proof store, and independent Python/Go known-answer verification.
+- Midstate mining hashes the invariant first 128 bytes once and is cross-checked against full SHA-256; this is kernel throughput, not network target-search capacity.
+- Direct GCF-P2P/1 peer transport provides mutual TLS, pinned peer identities, signed envelopes, bounded frames, and replay protection; it is not yet a complete production BFT mesh.
+- ADAM/APEX acceptance uses independent finality verification, transactional state commitments, contiguous-height/parent-state checks, WAL recovery, and historical-chain integrity verification.
+- GOD network authorization, GAIA-JUSTICE policy/evidence services, a genuinely independent monotonic anti-rollback anchor, physical power-loss durability review, live multi-host validator interoperability, and key-custody security review remain external production gates. Missing providers continue to fail closed.
+
 No phase is considered complete without tests and evidence in the capability ledger.
