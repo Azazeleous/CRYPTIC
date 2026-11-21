@@ -24,6 +24,8 @@ CRYPTIC is a source-grounded, extensible model and runtime. This repository is i
 | `extensions` | manifests, adapters, sandboxing, extension tests |
 | `storage` | chunk store, manifests, indexes, backends, recovery |
 | `error-correction` | GF(256), Reed–Solomon, QC-LDPC, Berlekamp–Welch, reverification |
+| `mining` | finite-window four-lane SHA-256 reference miner, reversible barrel-roll framing, and scheduler |
+| `cryptography/pq` | ML-KEM/ML-DSA suite selection and provider boundary |
 | `device` | enrollment, assistant, discovery, BLE, device bridges |
 | `sos` | isolated virtual computer, terminal, filesystem, mounts, process model |
 | `web` | operator application, visual computer, canvas, assets |
@@ -34,7 +36,7 @@ CRYPTIC is a source-grounded, extensible model and runtime. This repository is i
 
 ## Current status
 
-Foundation and contracts are being documented. Directory creation does not imply implementation. See [capability ledger](docs/CAPABILITY_LEDGER.md), [roadmap](docs/ROADMAP.md), [verification policy](docs/VERIFICATION.md), and [Crystalline admission lifecycle](docs/CRYSTALLINE_ADMISSION.md).
+The four-lane reference miner, reversible barrel-roll framing, and post-quantum suite architecture are implemented as reference components and covered by repository CI. The miner is not a coin-specific consensus adapter or production pool client. PQ algorithms are selected, but a vetted provider, official vectors, protected key lifecycle, and runtime interoperability remain follow-on gates. Directory creation does not imply implementation. See the capability ledger, roadmap, mining architecture, and verification policy.
 
 ## Security
 

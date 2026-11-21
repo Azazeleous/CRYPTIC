@@ -8,7 +8,7 @@
 | ADAM SQLite commitment store + APEX finality gate | implemented (E3) | Branch CI run 44915510019; independent finality re-verification, payload/state digest match, contiguous height and parent-state hash, durable receipt and state recovery; no WORM/replication claim |
 | GOD GCF network authorization adapter | partial (E2) | Calls host GOD gate `runnable()` with `gcf.consensus.propose`; inspected GOD v1 allowlist does not yet include this capability, so live network submission remains denied |
 | GAIA-JUSTICE/1 commitment verifier | partial (E2) | Strict commitment shape plus injected policy/evidence verifiers; production policy/evidence providers and independent audit suite remain unconnected |
-| HCCGN network proof verifier | blocked pending canonical specification | No normative work-header serialization, digest preimage, target endianness, or known-answer vectors were found in supplied sources; Bitcoin 80-byte SHA-256d miner format is not substituted |
+| HCCGN network proof verifier | reference profile implemented (E3) | HCCGN-WORK/1 header, digest, target policy, proof store, independent Go vector, and bounded miner; actual GOD root, external monotonic anchor, live network interoperability, and deployment hardware profile remain open |
 | Read-only source registry and adapter interface | implemented (E3) | PR #11; CI run 44789964655 passed unit tests and bounded benchmark; provider integrations remain unverified |
 | Market-data source adapters | proposed | live adapter tests with provenance |
 | Bounded JSON-RPC transport | implemented (E3) | HTTPS/loopback policy, response bounds, request IDs, read-only allowlist, retries and per-client request spacing; PR #12 CI verified |
@@ -34,6 +34,12 @@
 | Device assistant | proposed | enrollment, scope, revoke, audit tests |
 | Local seed and Merkle ledger CLI | implemented (E2) | seven local unit tests pass; repository commit and runtime integration still require CI/integration evidence |
 | Crystalline admission lifecycle | proposed (E1) | schemas, deterministic ADAM policy evaluator, signed decisions, negative tests, independent verifier, external checkpoint |
+| Four-lane SHA-256 reference mining | implemented (E3 reference) | four disjoint lanes, deterministic affine traversal, independently verified SHA-256 candidates, bounded per-lane hit retention; chain-specific header adapter and production benchmark remain |
+| Reversible barrel-roll framing | implemented (E3 reference) | bit/byte/lane inverse and round-trip tests; transforms remain outside consensus preimage |
+| ML-KEM-768 suite selection | adopted design | vetted provider, official vectors, authenticated key binding, and interoperability tests |
+| ML-DSA-65 suite selection | adopted design | vetted provider, official vectors, key lifecycle, and signature interoperability tests |
+| SLH-DSA optional profile | adopted design | provider selection and optional-profile interoperability tests |
+| PQ key lifecycle/runtime | proposed | protected key store, rotation, revocation, replay, and recovery tests |
 | BLE/home automation | proposed | device-specific authorization and safety tests |
 
 Update this ledger only with reproducible evidence. Never mark a feature complete because its directory, interface, or design document exists.
