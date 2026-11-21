@@ -64,6 +64,9 @@ class GovernanceAdapterTests(unittest.TestCase):
 
 
 class StubEngine:
+    def submit_proposal(self, proposal):
+        return {"accepted": True}
+
     def get_status(self, digest):
         return {"status": "RECEIVED", "candidate_digest": digest}
 
