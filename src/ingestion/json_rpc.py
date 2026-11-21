@@ -8,13 +8,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 import itertools
 import math
-import json
 import re
 import time
 from typing import Any, Mapping
 from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
+
+from .transport_codec import (
+    TransportCodecError,
+    canonical_json_bytes,
+    decode_json_document,
+)
 
 from .supervised_http import (
     SupervisedHttpTransport,
@@ -158,11 +163,11 @@ class JsonRpcClient:
 
     @staticmethod
     def parse_response(payload: bytes, expected_id: int, max_bytes: int) -> Any:
-        if not isinstance(payload, bytes) or len(payload) > max_bytes:
-            raise JsonRpcError("response_size_invalid")
         try:
-            document = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            document = decode_json_document(payload, max_bytes=max_bytes)
+        except TransportCodecError as exc:
+            if str(exc) == "payload_too_large":
+                raise JsonRpcError("response_size_invalid") from None
             raise JsonRpcError("response_json_invalid") from None
         if not isinstance(document, dict) or document.get("jsonrpc") != "2.0":
             raise JsonRpcError("response_envelope_invalid")
@@ -218,12 +223,15 @@ class JsonRpcClient:
         if not isinstance(params, list):
             raise JsonRpcError("rpc_params_must_be_array")
         request_id = next(self._ids)
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
-            separators=(",", ":"),
-        ).encode("utf-8")
-        if len(body) > 65_536:
-            raise JsonRpcError("request_size_invalid")
+        try:
+            body = canonical_json_bytes(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                max_bytes=65_536,
+            )
+        except TransportCodecError as exc:
+            if str(exc) == "encoded_payload_too_large":
+                raise JsonRpcError("request_size_invalid") from None
+            raise JsonRpcError("rpc_params_invalid") from None
         if self._supervised_transport is None or not self._supervised_transport.healthy:
             raise JsonRpcError("rpc_transport_not_prepared")
         for attempt in range(self.policy.max_retries + 1):
