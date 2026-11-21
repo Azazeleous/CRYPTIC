@@ -22,7 +22,7 @@ Added \`src/consensus/hccgn_adapter.py\`. It requires a separately implemented p
 
 The supplied project source \`Correct HCCGN Integration Equation (2).txt\` specifies computational graph and residue-space context, including primary modulus 97,152, totient 28,160, compact modulus 1,518, totient 440, and forward/reverse coprime traversal. It explicitly distinguishes reversible index reconstruction from SHA-256 inversion. The supplied \`Branch · Valuate Ancestry Solver\` material describes a shared computation record containing input, algorithm parameters, hash output, quotient/residue, stride/inverse, candidate result, and target.
 
-The uploaded source supplies the exact field semantics and midstate miner strategy; HCCGN-WORK/1 adopts that 184-byte binary layout while explicitly defining its GCF network bindings and independently authenticated target rule. This remains a newly versioned profile, not a claim about prior wire behavior. The existing 80-byte Bitcoin SHA-256d scanner remains separate. PR workflow run 44919550338 passed the full suite: 245 tests, 2 skipped, including known-answer digest/commitment, low-target rejection, proposal binding, midstate/full-hash equivalence, bounded mining, tamper and nonce-overflow tests. Production activation additionally requires authenticated proof storage, active-target policy resolution, GOD-authorized epoch/height activation, and cross-language interoperability.
+The uploaded source supplies the exact field semantics and midstate miner strategy; HCCGN-WORK/1 adopts that 184-byte binary layout while explicitly defining its GCF network bindings and independently authenticated target rule. This remains a newly versioned profile, not a claim about prior wire behavior. The existing 80-byte Bitcoin SHA-256d scanner remains separate. PR workflow run 44919550338 passed the full suite: 245 tests, 2 skipped, including known-answer digest/commitment, low-target rejection, proposal binding, midstate/full-hash equivalence, bounded mining, tamper and nonce-overflow tests. The branch now adds a content-addressed SQLite proof store, Ed25519-signed target-policy snapshots with network/profile/sequence/expiry/height/epoch binding, and a standard-library Go verifier for the Python known-answer vector. The new Python and Go tests are pending the current PR workflow. The actual GOD root remains an out-of-band deployment input; database-local anti-rollback still needs an external monotonic checkpoint.
 
 ## Stage 3 — Distributed validator networking
 
@@ -67,7 +67,7 @@ Earlier CI run 44916647888 passed 234 tests (2 skipped). After adding HCCGN-WORK
 
 Additional required tests before production:
 - Independent cross-language vectors from a finalized GCF/1 wire specification.
-- HCCGN known-answer work-header/digest/target vectors.
+- HCCGN known-answer work-header/digest/target vectors (Python and Go implementations now share the vector; CI result pending).
 - Validator-set transition and epoch activation.
 - Live mutual-TLS multi-node interoperability and network partition/round-change tests.
 - ADAM crash injection, WAL recovery, duplicate commit, and filesystem durability review.
