@@ -319,12 +319,20 @@ class HCCGNActiveTargetPolicy:
                     return None
             except Exception:
                 return None
+        # Select the newest policy eligible at this proposal boundary BEFORE
+        # applying expiry. Filtering expired rows in SQL would silently fall
+        # back to an older, potentially revoked/easier target.
         with closing(_connect(self.database)) as conn:
             row = conn.execute(
                 """SELECT target,issued_at,expires_at FROM hccgn_target_policies
                 WHERE network_id=? AND activation_height<=? AND activation_epoch<=?
-                AND issued_at<=? AND expires_at>=?
+                AND issued_at<=?
                 ORDER BY sequence DESC LIMIT 1""",
-                (network, height, epoch, issued_at, now),
+                (network, height, epoch, issued_at),
             ).fetchone()
-        return bytes(row[0]) if row is not None else None
+        if row is None:
+            return None
+        policy_issued, policy_expires = row[1], row[2]
+        if policy_issued > issued_at or policy_expires < issued_at or policy_expires < now:
+            return None
+        return bytes(row[0])

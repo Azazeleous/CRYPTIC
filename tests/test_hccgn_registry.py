@@ -163,6 +163,19 @@ class HCCGNRegistryTests(unittest.TestCase):
             "issued_at": self.now - 1500,
         }))
 
+    def test_expired_latest_policy_never_falls_back_to_older_target(self):
+        old_target = self.target
+        self.policy.install(self.signed_policy(sequence=1, target=old_target.hex()))
+        harder_target = bytes.fromhex("00" + "ff" * 31)
+        newer = self.signed_policy(sequence=2, target=harder_target.hex(),
+                                    issued_at=self.now - 5, expires_at=self.now + 5)
+        self.policy.install(newer)
+        self.now += 10
+        self.assertIsNone(self.policy.resolve({
+            "network_id": "gaia-testnet", "height": 1, "epoch": 1,
+            "issued_at": self.now - 1,
+        }))
+
     def test_provider_connects_durable_proof_and_authenticated_target(self):
         proof = self.proof()
         digest = self.store.put(proof)
