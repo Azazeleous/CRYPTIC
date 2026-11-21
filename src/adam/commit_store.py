@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from src.consensus.gcf import (
-    GCFError, canonical_bytes, sha256_hex, verify_finality_certificate,
-    DenyUnconfigured,
+    GCFError, canonical_bytes, sha256_hex, DenyUnconfigured,
 )
+from src.consensus.independent_verifier import verify_certificate as verify_independent_certificate
 
 
 class APEXValidationError(ValueError):
@@ -114,7 +114,7 @@ class APEXValidator:
 
     def validate_and_commit(self, certificate: Mapping[str, Any],
                             state_bytes: bytes) -> dict:
-        verified = verify_finality_certificate(
+        verified = verify_independent_certificate(
             certificate, hccgn_verifier=self.hccgn_verifier,
             god_authorizer=self.god_authorizer,
             justice_verifier=self.justice_verifier,
