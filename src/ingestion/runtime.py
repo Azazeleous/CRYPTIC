@@ -366,8 +366,14 @@ class BoundedIngestionRuntime:
                             source_id, {"healthy": False, "reason": "worker_failed"},
                             (), "failed", type(exc).__name__, 0,
                         )
-            if any(result.error_kind == "deadline_exceeded" for result in results.values()):
+            rpc_deadline_failed = any(
+                result.error_kind == "deadline_exceeded" for result in results.values()
+            )
+            if rpc_deadline_failed:
                 timed_out = True
+                # A supervised RPC worker that crossed its absolute deadline is
+                # terminated and cannot be safely reused by this runtime.
+                self._poisoned = True
             if timed_out:
                 if submitted:
                     self._poisoned = True
