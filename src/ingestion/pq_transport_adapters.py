@@ -37,7 +37,7 @@ class AdapterCapabilities:
     max_response_bytes: int
     authenticated: bool
     deadline_enforced: bool
-    signature_algorithms: frozenset[str] = frozenset({"ML-DSA-65"})
+    signature_algorithms: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.protocols or any(not isinstance(item, str) or not item for item in self.protocols):
@@ -81,7 +81,30 @@ class AdapterRegistry:
     def __init__(self) -> None:
         self._adapters: dict[str, TransportAdapter] = {}
         self._prepared: set[str] = set()
+        self._verified_signers: dict[str, tuple[object, str]] = {}
         self._lock = threading.RLock()
+
+    def _trust_active_locked(self, adapter_id: str) -> bool:
+        binding = self._verified_signers.get(adapter_id)
+        if binding is None:
+            return adapter_id in self._adapters
+        trust_store, key_id = binding
+        resolver = getattr(trust_store, "resolve", None)
+        try:
+            active = callable(resolver) and resolver(key_id) is not None
+        except Exception:
+            active = False
+        if active:
+            return True
+        adapter = self._adapters.pop(adapter_id, None)
+        self._verified_signers.pop(adapter_id, None)
+        if adapter_id in self._prepared:
+            try:
+                if adapter is not None:
+                    adapter.close()
+            finally:
+                self._prepared.discard(adapter_id)
+        return False
 
     def register(self, adapter: TransportAdapter) -> None:
         adapter_id = getattr(adapter, "adapter_id", "")
@@ -108,6 +131,10 @@ class AdapterRegistry:
         if not manifest_matches_adapter(signed_manifest, adapter):
             raise ValueError("manifest_adapter_mismatch")
         self.register(adapter)
+        with self._lock:
+            self._verified_signers[adapter.adapter_id] = (
+                trust_store, signed_manifest.signer_key_id
+            )
 
     def unregister(self, adapter_id: str) -> None:
         with self._lock:
@@ -116,6 +143,7 @@ class AdapterRegistry:
             if adapter_id not in self._adapters:
                 raise KeyError("adapter_not_registered")
             del self._adapters[adapter_id]
+            self._verified_signers.pop(adapter_id, None)
 
     def select(
         self,
@@ -140,7 +168,9 @@ class AdapterRegistry:
         with self._lock:
             allowed = set(allowed_adapter_ids) if allowed_adapter_ids is not None else None
             candidates = []
-            for adapter_id, adapter in self._adapters.items():
+            for adapter_id, adapter in tuple(self._adapters.items()):
+                if not self._trust_active_locked(adapter_id):
+                    continue
                 caps = adapter.capabilities
                 if allowed is not None and adapter_id not in allowed:
                     continue
@@ -169,6 +199,8 @@ class AdapterRegistry:
             adapter = self._adapters.get(adapter_id)
             if adapter is None:
                 raise KeyError("adapter_not_registered")
+            if not self._trust_active_locked(adapter_id):
+                raise NoCompatibleAdapter("adapter_signer_revoked")
             if adapter_id in self._prepared:
                 return
             adapter.prepare()
@@ -192,6 +224,8 @@ class AdapterRegistry:
             adapter = self._adapters.get(selection.adapter_id)
             if adapter is None:
                 raise KeyError("adapter_not_registered")
+            if not self._trust_active_locked(selection.adapter_id):
+                raise NoCompatibleAdapter("adapter_signer_revoked")
             caps = adapter.capabilities
             if selection.protocol not in caps.protocols or selection.kem_algorithm not in caps.kem_algorithms:
                 raise NoCompatibleAdapter("selection_capabilities_changed")
@@ -212,6 +246,9 @@ class AdapterRegistry:
                 raise AdapterError("adapter_must_be_prepared_before_exchange")
 
         response = adapter.exchange(payload, deadline_monotonic=deadline_monotonic)
+        with self._lock:
+            if not self._trust_active_locked(selection.adapter_id):
+                raise NoCompatibleAdapter("adapter_signer_revoked")
         if time.monotonic() >= deadline_monotonic:
             raise AdapterDeadlineExceeded("deadline_expired_during_exchange")
         if not isinstance(response, bytes):
