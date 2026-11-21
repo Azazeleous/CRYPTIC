@@ -57,7 +57,7 @@ class AdamCommitStore:
                state_bytes: bytes, certificate_digest: str, receipt: Mapping[str, Any]) -> dict:
         raw = bytes(state_bytes)
         state_hash = sha256_hex(raw)
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 row = db.execute("SELECT height,state_hash FROM adam_commits ORDER BY height DESC LIMIT 1").fetchone()
