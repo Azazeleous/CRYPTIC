@@ -1,4 +1,5 @@
 import hashlib
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -205,6 +206,90 @@ class GCFAdamConsensusTests(unittest.TestCase):
             justice_verifier=self.allow, clock=lambda: self.now,
         )
         self.assertFalse(result["valid"])
+
+    def test_adam_recovery_verifies_entire_commit_chain(self):
+        store = AdamCommitStore(Path(self.temp.name) / "adam-chain.sqlite3")
+        first_state = b"state-1"
+        first_hash = sha256_hex(first_state)
+        store.commit(
+            height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+            state_bytes=first_state, certificate_digest="b" * 64,
+            receipt={"height": 1},
+        )
+        store.commit(
+            height=2, candidate_digest="c" * 64, parent_hash=first_hash,
+            state_bytes=b"state-2", certificate_digest="d" * 64,
+            receipt={"height": 2},
+        )
+        self.assertEqual(store.verify_chain()["height"], 2)
+        with store._db() as db:
+            db.execute("UPDATE adam_commits SET state_bytes=? WHERE height=1", (b"tampered",))
+        with self.assertRaisesRegex(APEXValidationError, "STORED_STATE_INTEGRITY_FAILURE"):
+            store.get_commit(2)
+
+    def test_adam_rejects_non_bytes_and_oversized_state(self):
+        store = AdamCommitStore(Path(self.temp.name) / "adam-bounds.sqlite3")
+        with self.assertRaisesRegex(APEXValidationError, "STATE_BYTES_INVALID"):
+            store.commit(
+                height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+                state_bytes=100, certificate_digest="b" * 64, receipt={},
+            )
+        with self.assertRaisesRegex(APEXValidationError, "STATE_TOO_LARGE"):
+            store.commit(
+                height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+                state_bytes=b"x" * (1_048_577), certificate_digest="b" * 64, receipt={},
+            )
+
+    def test_adam_wal_commit_survives_close_and_reopen(self):
+        path = Path(self.temp.name) / "adam-wal-reopen.sqlite3"
+        store = AdamCommitStore(path)
+        state = b"durable-state"
+        state_hash = sha256_hex(state)
+        store.commit(
+            height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+            state_bytes=state, certificate_digest="b" * 64,
+            receipt={"height": 1},
+        )
+        reopened = AdamCommitStore(path)
+        self.assertEqual(reopened.verify_chain()["height"], 1)
+        self.assertEqual(reopened.head()["state_hash"], state_hash)
+        self.assertEqual(reopened.get_commit(1)["state_bytes"], state)
+
+    def test_adam_failed_insert_rolls_back_and_wal_remains_recoverable(self):
+        path = Path(self.temp.name) / "adam-wal-rollback.sqlite3"
+        store = AdamCommitStore(path)
+        with store._db() as db:
+            db.execute("""
+                CREATE TRIGGER reject_adam_insert BEFORE INSERT ON adam_commits
+                BEGIN SELECT RAISE(ABORT, 'injected_storage_failure'); END;
+            """)
+        with self.assertRaises(sqlite3.IntegrityError):
+            store.commit(
+                height=1, candidate_digest="a" * 64, parent_hash="0" * 64,
+                state_bytes=b"not-committed", certificate_digest="b" * 64,
+                receipt={"height": 1},
+            )
+        with store._db() as db:
+            db.execute("DROP TRIGGER reject_adam_insert")
+        self.assertEqual(store.head()["height"], 0)
+        store.commit(
+            height=1, candidate_digest="c" * 64, parent_hash="0" * 64,
+            state_bytes=b"committed-after-recovery", certificate_digest="d" * 64,
+            receipt={"height": 1},
+        )
+        reopened = AdamCommitStore(path)
+        self.assertEqual(reopened.verify_chain()["height"], 1)
+        self.assertEqual(reopened.get_commit(1)["state_bytes"], b"committed-after-recovery")
+
+    def test_apex_rejects_non_bytes_before_state_hashing(self):
+        _, cert = self._build_certificate()
+        store = AdamCommitStore(Path(self.temp.name) / "adam-apex-input.sqlite3")
+        apex = APEXValidator(
+            store, hccgn_verifier=self.allow,
+            god_authorizer=self.allow, justice_verifier=self.allow,
+        )
+        with self.assertRaisesRegex(APEXValidationError, "STATE_BYTES_INVALID"):
+            apex.validate_and_commit(cert, 7)
 
     def test_adam_parent_continuity_is_enforced(self):
         store = AdamCommitStore(Path(self.temp.name) / "adam-parent.sqlite3")

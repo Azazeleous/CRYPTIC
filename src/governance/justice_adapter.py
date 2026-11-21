@@ -35,15 +35,16 @@ class JusticeEvidenceVerifier:
             if not isinstance(value, str) or len(value) != 64:
                 return GateResult(False, f"JUSTICE_{field.upper()}_INVALID")
             try:
-                bytes.fromhex(value)
+                if bytes.fromhex(value).hex() != value:
+                    return GateResult(False, f"JUSTICE_{field.upper()}_INVALID")
             except ValueError:
                 return GateResult(False, f"JUSTICE_{field.upper()}_INVALID")
         if self.policy_verifier is None or self.evidence_verifier is None:
             return GateResult(False, "JUSTICE_EVIDENCE_VERIFIERS_NOT_CONFIGURED")
         try:
-            if not self.policy_verifier(commitment, proposal):
+            if self.policy_verifier(commitment, proposal) is not True:
                 return GateResult(False, "JUSTICE_POLICY_NOT_VERIFIED")
-            if not self.evidence_verifier(commitment, proposal):
+            if self.evidence_verifier(commitment, proposal) is not True:
                 return GateResult(False, "JUSTICE_EVIDENCE_NOT_VERIFIED")
         except Exception:
             return GateResult(False, "JUSTICE_VERIFICATION_ERROR")
