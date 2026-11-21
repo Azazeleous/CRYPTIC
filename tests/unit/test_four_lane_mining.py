@@ -2,7 +2,7 @@ import hashlib
 import unittest
 
 from mining.barrel_roll import roll_frame, unroll_frame, rotl, rotr
-from mining.miner import candidate_digest, mine_four_lane, verify_candidate
+from mining.miner import candidate_digest, mine_four_lane, verify_candidate, _mine_lane
 from mining.scheduler import PROFILE_MODULUS, lane_ordinals, nonce_for_ordinal, traversal_index
 
 
@@ -28,7 +28,7 @@ class SchedulerTests(unittest.TestCase):
 
     def test_four_lanes_are_disjoint_and_complete(self):
         count = 1003
-        ordinals = [o for lane in range(4) for o in lane_ordinals(lane, count)]
+        ordinals = [o for lane in range(4) for o in lane_ordinals(lane, count, reverse=lane in (1, 2))]
         self.assertEqual(sorted(ordinals), list(range(count)))
         self.assertEqual(list(lane_ordinals(1, count, reverse=True)), list(reversed(list(lane_ordinals(1, count)))))
         nonces = [nonce_for_ordinal(100, o) for o in ordinals]
@@ -45,6 +45,12 @@ class MiningTests(unittest.TestCase):
         self.assertEqual(result.attempts, 32)
         self.assertTrue(verify_candidate(b"test-header", result, (1 << 256) - 1))
         self.assertFalse(verify_candidate(b"tampered-header", result, (1 << 256) - 1))
+
+    def test_lane_retains_only_earliest_hit(self):
+        hit, attempts = _mine_lane(b"memory-bound-test", 0, 4096, (1 << 256) - 1, 0)
+        self.assertIsNotNone(hit)
+        self.assertEqual(hit.ordinal, 0)
+        self.assertEqual(attempts, 1024)
 
     def test_zero_count_returns_none(self):
         self.assertIsNone(mine_four_lane(b"header", 0, 0, (1 << 256) - 1))
