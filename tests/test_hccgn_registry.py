@@ -56,6 +56,13 @@ class HCCGNRegistryTests(unittest.TestCase):
         )
         return build_proof(header)
 
+    def test_in_memory_databases_are_rejected_as_non_durable(self):
+        with self.assertRaisesRegex(HCCGNRegistryError, "persistent_database_required"):
+            HCCGNProofStore(":memory:")
+        with self.assertRaisesRegex(HCCGNRegistryError, "persistent_database_required"):
+            HCCGNActiveTargetPolicy(":memory:", trusted_public_key=self.public,
+                                    trusted_signer_id="GOD-ROOT-1", clock=lambda: self.now)
+
     def test_proof_store_content_addressed_round_trip_and_integrity(self):
         proof = self.proof()
         digest = self.store.put(proof, inserted_at=self.now)

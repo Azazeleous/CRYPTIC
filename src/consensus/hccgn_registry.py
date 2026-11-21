@@ -23,6 +23,7 @@ from src.consensus.hccgn_work import PROFILE_ID
 POLICY_SCHEMA = "HCCGN-TARGET-POLICY/1"
 POLICY_DOMAIN = b"HCCGN-TARGET-POLICY/1\x00"
 MAX_PROOF_BYTES = 1_048_576
+MAX_SQLITE_INT = (1 << 63) - 1
 POLICY_FIELDS = {
     "schema", "profile_id", "network_id", "sequence",
     "activation_height", "activation_epoch", "target",
@@ -40,7 +41,7 @@ def _canonical(value: Any) -> bytes:
 
 
 def _uint(value: Any, field: str, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > MAX_SQLITE_INT:
         raise HCCGNRegistryError(field + "_invalid")
     return value
 
@@ -71,6 +72,8 @@ class HCCGNProofStore:
     def __init__(self, database: str | os.PathLike[str], *,
                  max_proof_bytes: int = MAX_PROOF_BYTES):
         self.database = str(database)
+        if self.database == ":memory:":
+            raise HCCGNRegistryError("persistent_database_required")
         if self.database != ":memory:":
             Path(self.database).expanduser().resolve().parent.mkdir(
                 parents=True, exist_ok=True
@@ -150,6 +153,8 @@ class HCCGNActiveTargetPolicy:
         if not isinstance(trusted_signer_id, str) or not trusted_signer_id:
             raise HCCGNRegistryError("trusted_signer_id_invalid")
         self.database = str(database)
+        if self.database == ":memory:":
+            raise HCCGNRegistryError("persistent_database_required")
         if self.database != ":memory:":
             Path(self.database).expanduser().resolve().parent.mkdir(
                 parents=True, exist_ok=True
