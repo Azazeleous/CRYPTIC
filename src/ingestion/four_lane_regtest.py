@@ -246,6 +246,11 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
         receipt = None
     stage_converge_ms = (time.monotonic() - stage_converge_started) * 1000
     elapsed_ms = (time.monotonic() - run_started) * 1000
+    # Final acceptance boundary includes signature verification and report assembly.
+    if accepted and time.monotonic() >= deadline:
+        accepted = False
+        winner = None
+        receipt = None
     return {
         "schema": "cryptic.fgr-ice.four-lane-regtest.v1",
         "status": "accepted" if accepted else ("timed_out" if time.monotonic() >= deadline else "exhausted"),
