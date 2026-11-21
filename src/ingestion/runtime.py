@@ -22,10 +22,13 @@ def _lease_adapter(adapter: object) -> None:
     key = id(adapter)
     with _ADAPTER_LEASE_LOCK:
         current = _ADAPTER_LEASES.get(key)
+        if current is not None and current[0] is adapter:
+            _ADAPTER_LEASES[key] = (adapter, current[1] + 1)
+            return
         prepare = getattr(adapter, "prepare", None)
         if callable(prepare):
             prepare()
-        _ADAPTER_LEASES[key] = (adapter, (current[1] + 1) if current and current[0] is adapter else 1)
+        _ADAPTER_LEASES[key] = (adapter, 1)
 
 
 def _release_adapter(adapter: object) -> None:
@@ -253,9 +256,17 @@ class BoundedIngestionRuntime:
         # Each prepared RPC adapter owns a process and a fixed shared-memory
         # allocation. Cap those resources by the same submission window.
         capacity = self.policy.max_workers + self.policy.max_queue_size
-        prepared = [item for item in adapters if callable(getattr(item, "prepare", None))]
-        if len(prepared) > capacity:
-            raise IngestionRuntimeError("selected prepared adapters exceed bounded worker window")
+        prepared_leased = sum(
+            1 for item in self._leased_adapters.values()
+            if callable(getattr(item, "prepare", None))
+        )
+        prepared_new = [
+            item for item in adapters
+            if callable(getattr(item, "prepare", None))
+            and id(item) not in self._leased_adapters
+        ]
+        if prepared_leased + len(prepared_new) > capacity:
+            raise IngestionRuntimeError("prepared adapter leases exceed bounded worker window")
 
         # Lease every adapter with lifecycle hooks. Some adapters need cleanup
         # without a separate preparation step; omitting those would leak their
