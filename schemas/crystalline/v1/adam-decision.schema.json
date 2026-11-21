@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Azazeleous/CRYPTIC/blob/main/schemas/crystalline/v1/adam-decision.schema.json",
+  "title": "CRYPTIC ADAM Admission Decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "decision_id",
+    "policy_id",
+    "policy_version",
+    "policy_digest",
+    "candidate_id",
+    "candidate_digest",
+    "parent_root",
+    "requested_capabilities",
+    "granted_capabilities",
+    "denied_capabilities",
+    "decision",
+    "reason_codes",
+    "issued_at",
+    "expires_at",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cryptic-adam-decision/v1"
+    },
+    "decision_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "policy_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "policy_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "candidate_digest": {
+      "$ref": "#/$defs/digest"
+    },
+    "parent_root": {
+      "$ref": "#/$defs/digest"
+    },
+    "requested_capabilities": {
+      "$ref": "#/$defs/capabilities"
+    },
+    "granted_capabilities": {
+      "$ref": "#/$defs/capabilities"
+    },
+    "denied_capabilities": {
+      "$ref": "#/$defs/capabilities"
+    },
+    "decision": {
+      "type": "string",
+      "enum": [
+        "ALLOW",
+        "DENY",
+        "QUARANTINE"
+      ]
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Z0-9][A-Z0-9_]{0,95}$"
+      },
+      "uniqueItems": true
+    },
+    "evidence_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 512
+      },
+      "uniqueItems": true
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "signature": {
+      "$ref": "#/$defs/signature"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "DENY"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "granted_capabilities": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "QUARANTINE"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "granted_capabilities": {
+            "maxItems": 0
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "decision": {
+            "const": "ALLOW"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "then": {
+        "properties": {
+          "granted_capabilities": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "sha256",
+            "blake2b-256"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+      },
+      "uniqueItems": true
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "key_id",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "Ed25519"
+        },
+        "key_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "value": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 80,
+          "maxLength": 100
+        }
+      }
+    }
+  }
+}

@@ -34,7 +34,7 @@ CRYPTIC is a source-grounded, extensible model and runtime. This repository is i
 
 ## Current status
 
-Foundation and contracts are being documented. Directory creation does not imply implementation. See [capability ledger](docs/CAPABILITY_LEDGER.md), [roadmap](docs/ROADMAP.md), and [verification policy](docs/VERIFICATION.md).
+Foundation and contracts are being documented. Directory creation does not imply implementation. See [capability ledger](docs/CAPABILITY_LEDGER.md), [roadmap](docs/ROADMAP.md), [verification policy](docs/VERIFICATION.md), and [Crystalline admission lifecycle](docs/CRYSTALLINE_ADMISSION.md).
 
 ## Security
 

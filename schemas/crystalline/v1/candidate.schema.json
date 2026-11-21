@@ -1,0 +1,137 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Azazeleous/CRYPTIC/blob/main/schemas/crystalline/v1/candidate.schema.json",
+  "title": "CRYPTIC Crystalline Candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "project_id",
+    "artifact",
+    "provenance",
+    "parent_root",
+    "requested_capabilities",
+    "submitted_at",
+    "submitted_by"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "cryptic-crystalline-candidate/v1"
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "project_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "revision",
+        "digest"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "retrieved_at",
+        "source_revision"
+      ],
+      "properties": {
+        "source": {
+          "type": "string",
+          "format": "uri"
+        },
+        "retrieved_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "license": {
+          "type": "string",
+          "maxLength": 256
+        }
+      }
+    },
+    "parent_root": {
+      "$ref": "#/$defs/digest"
+    },
+    "requested_capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+      },
+      "uniqueItems": true
+    },
+    "submitted_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "submitted_by": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "tdoc_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256
+      },
+      "uniqueItems": true
+    }
+  },
+  "$defs": {
+    "digest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "value"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "enum": [
+            "sha256",
+            "blake2b-256"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}
