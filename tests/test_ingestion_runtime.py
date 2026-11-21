@@ -114,6 +114,43 @@ class BoundedRuntimeTests(unittest.TestCase):
         runtime.close(wait_for_workers=False)
         self.assertTrue(adapter.closed)
 
+    def test_prepared_adapter_count_is_capped_by_submission_window(self):
+        class PreparedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.prepare_count = 0
+            def prepare(self):
+                self.prepare_count += 1
+        first, second = PreparedAdapter("first"), PreparedAdapter("second")
+        self.registry.register(first)
+        self.registry.register(second)
+        policy = IngestionPolicy(max_workers=1, max_queue_size=0)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            with self.assertRaisesRegex(IngestionRuntimeError, "bounded worker window"):
+                runtime.run(self.journal, ["first", "second"])
+        self.assertEqual(first.prepare_count, 0)
+        self.assertEqual(second.prepare_count, 0)
+
+    def test_shared_adapter_is_closed_only_after_last_runtime_releases_it(self):
+        class SharedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.closed = False
+            def prepare(self):
+                pass
+            def close(self):
+                self.closed = True
+        adapter = SharedAdapter("shared")
+        self.registry.register(adapter)
+        first = BoundedIngestionRuntime(self.registry)
+        second = BoundedIngestionRuntime(self.registry)
+        first.run(self.journal, ["shared"])
+        second.run(self.journal, ["shared"])
+        first.close()
+        self.assertFalse(adapter.closed)
+        second.close()
+        self.assertTrue(adapter.closed)
+
     def test_legacy_adapter_is_rejected(self):
         self.registry.register(LegacyAdapter("legacy"))
         with BoundedIngestionRuntime(self.registry) as runtime:
@@ -219,6 +256,18 @@ class BoundedRuntimeTests(unittest.TestCase):
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["sources"][0]["status"], "timed_out")
         self.assertEqual(report["sources"][0]["error_kind"], "adapter_timeout")
+
+    def test_rpc_deadline_signal_marks_session_timed_out_not_partial(self):
+        class RpcDeadline(TimeoutError):
+            deadline_exceeded = True
+        class DeadlineSignalingAdapter(DeadlineAdapter):
+            def health_check_until(self, *, deadline_monotonic):
+                raise RpcDeadline("rpc_deadline_exceeded")
+        self.registry.register(DeadlineSignalingAdapter("rpc-deadline"))
+        with BoundedIngestionRuntime(self.registry) as runtime:
+            report = runtime.run(self.journal, ["rpc-deadline"])
+        self.assertEqual(report["status"], "timed_out")
+        self.assertEqual(report["sources"][0]["error_kind"], "deadline_exceeded")
 
     def test_report_discloses_deadline_scope_and_bounded_submission(self):
         for name in ("a", "b", "c"):
