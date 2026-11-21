@@ -235,10 +235,19 @@ class GCFEngine:
               polc_digest TEXT, vote_json TEXT NOT NULL,
               PRIMARY KEY(candidate_digest, vote_type, validator_id)
             );
+            CREATE TABLE IF NOT EXISTS vote_locks(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              round INTEGER NOT NULL, vote_type TEXT NOT NULL,
+              validator_id TEXT NOT NULL, candidate_digest TEXT NOT NULL,
+              PRIMARY KEY(network_id, epoch, height, round, vote_type, validator_id)
+            );
             CREATE TABLE IF NOT EXISTS certificates(
               candidate_digest TEXT PRIMARY KEY REFERENCES proposals(candidate_digest),
               certificate_json TEXT NOT NULL, certificate_digest TEXT NOT NULL
             );
+            INSERT OR IGNORE INTO vote_locks
+              SELECT p.network_id,p.epoch,p.height,p.round,v.vote_type,v.validator_id,v.candidate_digest
+              FROM votes v JOIN proposals p ON p.candidate_digest=v.candidate_digest;
             """)
 
     def _gate(self, gate: Callable, *args) -> GateResult:
@@ -352,6 +361,10 @@ class GCFEngine:
         _require_int(vote["issued_at"], "issued_at")
         if abs(int(self.clock()) - vote["issued_at"]) > 300:
             raise GCFError("VOTE_TIME_INVALID")
+        if vote["issued_at"] < proposal["issued_at"] or vote["issued_at"] > proposal["expires_at"]:
+            raise GCFError("VOTE_OUTSIDE_PROPOSAL_WINDOW")
+        if int(self.clock()) > proposal["expires_at"]:
+            raise GCFError("CANDIDATE_EXPIRED")
         if vote["vote_type"] == "PREVOTE" and vote["polc_digest"] is not None:
             raise GCFError("PREVOTE_MUST_NOT_CARRY_POLC")
         if vote["vote_type"] == "PRECOMMIT" and vote["approve"]:
@@ -400,6 +413,23 @@ class GCFEngine:
                     _, polc_digest = self._polc(db, digest)
                     if normalized["polc_digest"] != polc_digest:
                         raise GCFError("PRECOMMIT_POLC_MISMATCH")
+                lock = db.execute(
+                    """SELECT candidate_digest FROM vote_locks
+                       WHERE network_id=? AND epoch=? AND height=? AND round=?
+                         AND vote_type=? AND validator_id=?""",
+                    (normalized["network_id"], normalized["epoch"], normalized["height"],
+                     normalized["round"], normalized["vote_type"], normalized["validator_id"]),
+                ).fetchone()
+                if lock is not None:
+                    if lock["candidate_digest"] != digest:
+                        raise GCFError("VALIDATOR_EQUIVOCATION_DETECTED")
+                    raise GCFError("DUPLICATE_VOTE_OR_EQUIVOCATION")
+                db.execute(
+                    "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
+                    (normalized["network_id"], normalized["epoch"], normalized["height"],
+                     normalized["round"], normalized["vote_type"],
+                     normalized["validator_id"], digest),
+                )
                 try:
                     db.execute(
                         "INSERT INTO votes VALUES(?,?,?,?,?,?)",
