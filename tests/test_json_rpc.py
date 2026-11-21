@@ -90,6 +90,26 @@ class JsonRpcProtocolTests(unittest.TestCase):
                 allowed_methods=frozenset({"eth_chainId"}),
             )
 
+    def test_direct_call_timeout_starts_after_cold_worker_preparation(self):
+        policy = JsonRpcPolicy(timeout_seconds=0.25, max_retries=0)
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}), policy=policy,
+        )
+        prepared_at = []
+        captured = {}
+        def prepare():
+            time.sleep(0.12)
+            prepared_at.append(time.monotonic())
+        def call_stub(method, params, *, deadline_monotonic):
+            captured["deadline"] = deadline_monotonic
+            return "ok"
+        with patch.object(client, "prepare", side_effect=prepare), patch.object(
+            client, "_call", side_effect=call_stub
+        ):
+            self.assertEqual(client.call("eth_chainId"), "ok")
+        self.assertGreaterEqual(captured["deadline"] - prepared_at[0], 0.24)
+
     def test_absolute_deadline_call_requires_prior_worker_preparation(self):
         client = JsonRpcClient(
             "https://rpc.example.org",
