@@ -88,7 +88,7 @@ Header hex:
 Work digest: c823ee2a5d77e8576b1b4213bcdcca983b31c8b1c55743059f240957d9467f71
 Proof envelope SHA-256: b48d21de1459758e3ffa8ed5a6e8a4488491787a4cd285bd93def24d3b36bb57
 
-A second vector with target 00 followed by 31 bytes of ff produces the same work digest and must fail the target predicate.
+With target 00 followed by 31 bytes of ff committed into a second header, the resulting work digest is 0654fc8c10a9a9a5dbb4ad82c6621608f5b596fb053cc6a467a9b3a6fdb70560 and the proof envelope SHA-256 is 6aa84b5c7f01360a8f133d4a2144e7e333845905102eec7c0ba5ba1a62db3b2e. That digest exceeds the committed low target and must fail. Changing the target changes the header and therefore changes the digest.
 
 ## Deployment and governance
 
