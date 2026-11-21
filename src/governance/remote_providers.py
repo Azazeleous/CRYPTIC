@@ -345,3 +345,145 @@ def load_independently_pinned_root(path: str, *, expected_fingerprint: str,
         raise RemoteProviderError("root_fingerprint_pin_mismatch")
     _public_key(key)
     return key
+
+
+class GODHTTPSGate:
+    """Host GOD gate facade backed by an independently pinned signed endpoint.
+
+    This does not grant authority by itself: the endpoint must be the actual
+    GOD policy service and its key fingerprint must be provisioned out of band.
+    """
+    def __init__(self, client: SignedHTTPSDecisionClient):
+        self.client = client
+
+    def runnable(self, capability: str, endpoint: str) -> dict:
+        try:
+            allowed = self.client.verify_decision(
+                "GOD-CAPABILITY-AUTHORIZATION/1",
+                {"capability": capability, "endpoint": endpoint},
+            )
+        except RemoteProviderError as exc:
+            return {"allowed": False, "reason": str(exc)}
+        return {
+            "allowed": allowed,
+            "reason": "GOD_SIGNED_CAPABILITY_ALLOW" if allowed else "GOD_SIGNED_CAPABILITY_DENY",
+        }
+
+
+class HTTPSHSMEd25519Signer:
+    """Remote Ed25519 signing boundary; private key never enters this process.
+
+    The signing service MUST be an approved HSM/KMS-backed signer. Mutual TLS
+    client identity is mandatory. Every returned signature is locally verified
+    against the independently pinned validator public key before it is returned.
+    """
+    def __init__(self, endpoint: str, *, key_id: str, public_key: bytes,
+                 client_certificate: str, client_private_key: str,
+                 timeout: float = 5.0, transport: Callable | None = None):
+        self.endpoint = _https_endpoint(endpoint)
+        if not isinstance(key_id, str) or not key_id:
+            raise RemoteProviderError("hsm_key_id_invalid")
+        if not client_certificate or not client_private_key:
+            raise RemoteProviderError("hsm_mutual_tls_identity_required")
+        self.key_id = key_id
+        self.public_key = _public_key(public_key)
+        self.public_key_hex = public_key.hex()
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
+            raise RemoteProviderError("timeout_invalid")
+        self.timeout = float(timeout)
+        self.transport = transport
+        self.client_certificate = client_certificate
+        self.client_private_key = client_private_key
+
+    def sign(self, message: bytes) -> bytes:
+        if not isinstance(message, bytes) or not message or len(message) > 1_048_576:
+            raise RemoteProviderError("hsm_message_invalid")
+        request_id = secrets.token_hex(16)
+        body = {
+            "schema": "CRYPTIC-ED25519-SIGN/1",
+            "key_id": self.key_id,
+            "request_id": request_id,
+            "message_b64": base64.b64encode(message).decode("ascii"),
+        }
+        encoded = _canonical(body)
+        if self.transport is None:
+            import ssl
+            context = ssl.create_default_context()
+            context.load_cert_chain(self.client_certificate, self.client_private_key)
+            request = urllib.request.Request(
+                self.endpoint, data=encoded,
+                headers={"Content-Type": "application/json", "Accept": "application/json"},
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout, context=context) as response:
+                    raw = response.read(MAX_RESPONSE_BYTES + 1)
+                    status = response.status
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                raise RemoteProviderError("hsm_signer_unavailable") from exc
+        else:
+            status, _headers, raw = self.transport(
+                "POST", self.endpoint,
+                {"Content-Type": "application/json", "Accept": "application/json",
+                 "X-Client-Certificate": self.client_certificate},
+                encoded, self.timeout,
+            )
+        if len(raw) > MAX_RESPONSE_BYTES:
+            raise RemoteProviderError("hsm_response_too_large")
+        if status != 200:
+            raise RemoteProviderError(f"hsm_http_status_{status}")
+        try:
+            result = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RemoteProviderError("hsm_response_invalid") from exc
+        if (not isinstance(result, dict)
+                or set(result) != {"schema", "key_id", "request_id", "signature"}
+                or result["schema"] != "CRYPTIC-ED25519-SIGN/1"
+                or result["key_id"] != self.key_id
+                or result["request_id"] != request_id):
+            raise RemoteProviderError("hsm_response_binding_invalid")
+        try:
+            signature = base64.b64decode(result["signature"], validate=True)
+            self.public_key.verify(signature, message)
+        except (ValueError, InvalidSignature) as exc:
+            raise RemoteProviderError("hsm_signature_verification_failed") from exc
+        return signature
+
+
+def make_proposal_with_signer(*, signer: HTTPSHSMEd25519Signer, **fields) -> dict:
+    """GCF/1 proposal builder using a remote signer instead of raw private bytes."""
+    from src.consensus.gcf import PROPOSAL_DOMAIN, SCHEMA, canonical_bytes
+    required = {
+        "network_id", "epoch", "height", "round", "parent_hash",
+        "payload_hash", "proof_hash", "justice_commitment", "proposer_id",
+        "nonce", "issued_at", "expires_at",
+    }
+    if set(fields) != required:
+        raise RemoteProviderError("proposal_fields_invalid")
+    body = {
+        "schema": SCHEMA,
+        **fields,
+        "proposer_public_key": signer.public_key_hex,
+    }
+    signature = signer.sign(PROPOSAL_DOMAIN + canonical_bytes(body))
+    return {**body, "signature": base64.b64encode(signature).decode("ascii")}
+
+
+def make_vote_with_signer(*, signer: HTTPSHSMEd25519Signer, validator_id: str,
+                          proposal: Mapping[str, Any], vote_type: str,
+                          approve: bool = True, polc_digest: str | None = None,
+                          issued_at: int | None = None) -> dict:
+    """GCF/1 vote builder using a remote signer instead of raw private bytes."""
+    from src.consensus.gcf import VOTE_DOMAIN, SCHEMA, canonical_bytes, sha256_hex
+    import time as _time
+    body = {
+        "schema": SCHEMA, "network_id": proposal["network_id"],
+        "epoch": proposal["epoch"], "height": proposal["height"],
+        "round": proposal["round"],
+        "candidate_digest": sha256_hex(canonical_bytes(proposal)),
+        "validator_id": validator_id, "vote_type": vote_type,
+        "approve": approve, "polc_digest": polc_digest,
+        "issued_at": int(_time.time()) if issued_at is None else issued_at,
+    }
+    signature = signer.sign(VOTE_DOMAIN + canonical_bytes(body))
+    return {**body, "signature": base64.b64encode(signature).decode("ascii")}
