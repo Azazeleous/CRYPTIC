@@ -3,6 +3,12 @@
 | Capability | Status | Evidence required |
 |---|---|---|
 | Repository architecture | scaffolded | reviewed architecture and ADRs |
+| GCF/1 signed proposal and weighted BFT round engine | implemented (E3) | Branch CI run 44915510019 passed 215 unit tests (2 skipped) and bounded benchmark; Ed25519 proposals/votes, replay protection, strict >2/3 quorum, durable per-round vote locks, PREVOTE/PRECOMMIT and POLC certificate checks; no live validator network claim |
+| GCF/1 bounded WSGI submission/status adapter | implemented (E3) | Branch CI run 44915510019; bounded JSON body, duplicate-key rejection, proposal/vote/finalize/status routes; authentication and TLS are external deployment requirements |
+| ADAM SQLite commitment store + APEX finality gate | implemented (E3) | Branch CI run 44915510019; independent finality re-verification, payload/state digest match, contiguous height and parent-state hash, durable receipt and state recovery; no WORM/replication claim |
+| GOD GCF network authorization adapter | partial (E2) | Calls host GOD gate `runnable()` with `gcf.consensus.propose`; inspected GOD v1 allowlist does not yet include this capability, so live network submission remains denied |
+| GAIA-JUSTICE/1 commitment verifier | partial (E2) | Strict commitment shape plus injected policy/evidence verifiers; production policy/evidence providers and independent audit suite remain unconnected |
+| HCCGN network proof verifier | blocked pending canonical specification | No normative work-header serialization, digest preimage, target endianness, or known-answer vectors were found in supplied sources; Bitcoin 80-byte SHA-256d miner format is not substituted |
 | Read-only source registry and adapter interface | implemented (E3) | PR #11; CI run 44789964655 passed unit tests and bounded benchmark; provider integrations remain unverified |
 | Market-data source adapters | proposed | live adapter tests with provenance |
 | Bounded JSON-RPC transport | implemented (E3) | HTTPS/loopback policy, response bounds, request IDs, read-only allowlist, retries and per-client request spacing; PR #12 CI verified |
