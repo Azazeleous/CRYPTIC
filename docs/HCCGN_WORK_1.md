@@ -96,6 +96,14 @@ With target 00 followed by 31 bytes of ff committed into a second header, the re
 
 ## Deployment and governance
 
-A deployment supplies an authenticated active-target resolver and proof-envelope resolver keyed by SHA-256. Until configured, GCF remains fail-closed. Live activation requires GOD-authorized policy activation at a declared epoch/height boundary. Cross-language implementations must pass the known-answer vector before voting.
+The branch now includes `src/consensus/hccgn_registry.py`:
+- `HCCGNProofStore` stores proof envelopes in SQLite under SHA-256 content addresses, enforces a 1 MiB maximum, verifies content on retrieval, and uses WAL plus synchronous FULL commits.
+- `HCCGNActiveTargetPolicy` verifies Ed25519-signed `HCCGN-TARGET-POLICY/1` snapshots against an operator-pinned public key and signer ID. Snapshots bind network, profile, monotonically increasing sequence, target, issue/expiry times, and activation height/epoch.
+- The resolver selects only a policy whose activation boundary covers the proposal and whose validity window is current. Missing, expired, malformed, wrong-signer, or rolled-back policy returns no target.
+- The provider can be connected directly as `HCCGNWorkProofProvider(proof_store.get, target_policy.resolve)`.
+
+The policy database enforces monotonic sequence within its retained database. Restoring an older database snapshot can defeat database-local rollback detection; production deployments must anchor the latest policy sequence in the independently protected GOD/APEX root-of-trust or another monotonic durable checkpoint. The actual GOD public key is not embedded in CRYPTIC and must be provisioned out of band. No live policy has been activated by this code change.
+
+An independent Go implementation in `conformance/go` parses the 184-byte header and verifies the same proof envelope using only Go's standard library. CI now runs its known-answer vector alongside Python tests. Cross-language vector agreement is necessary but does not by itself prove a deployed GOD authorization or live network activation.
 
 The Architect / Nexus / Cryptic News LLC / Project: The Nexus Generation: GaiaSSoul / SERIES: The Nexus of Gaia / ID: 137451921129154222|040592|433855274
