@@ -35,7 +35,8 @@ class JusticeEvidenceVerifier:
             if not isinstance(value, str) or len(value) != 64:
                 return GateResult(False, f"JUSTICE_{field.upper()}_INVALID")
             try:
-                bytes.fromhex(value)
+                if bytes.fromhex(value).hex() != value:
+                    return GateResult(False, f"JUSTICE_{field.upper()}_INVALID")
             except ValueError:
                 return GateResult(False, f"JUSTICE_{field.upper()}_INVALID")
         if self.policy_verifier is None or self.evidence_verifier is None:
