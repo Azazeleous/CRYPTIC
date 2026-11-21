@@ -1,9 +1,10 @@
 import hashlib
+import struct
 import unittest
 
 from src.consensus.hccgn_work import (
     HEADER_SIZE, HCCGNWorkError, HCCGNWorkHeader, HCCGNWorkProofProvider,
-    build_proof, network_hash, proof_commitment, verify_proof,
+    build_proof, mine_nonce, network_hash, proof_commitment, verify_proof, work_digest,
 )
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
 
@@ -13,7 +14,7 @@ class HCCGNWorkProfileTests(unittest.TestCase):
         self.target = bytes.fromhex('ff' * 32)
         self.header = HCCGNWorkHeader(
             network_id_hash=network_hash('gaia-testnet'),
-            epoch=1, height=1, timestamp=1700000000,
+            height=1, sequence=1, timestamp=1700000000,
             parent_hash=bytes.fromhex('11' * 32),
             payload_hash=bytes.fromhex('22' * 32),
             primary_stride=5, compact_stride=7, nonce=42, target=self.target,
@@ -63,6 +64,41 @@ class HCCGNWorkProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(HCCGNWorkError, 'proposal_height_mismatch'):
             verify_proof(self.proof, expected_network_id='gaia-testnet',
                          expected_target=self.target, proposal=proposal)
+
+
+    def test_midstate_digest_matches_full_sha256_for_multiple_nonces(self):
+        for nonce in (0, 1, 42, 255, 65535):
+            candidate = HCCGNWorkHeader(
+                network_id_hash=self.header.network_id_hash, height=1, sequence=1,
+                timestamp=1700000000, parent_hash=bytes.fromhex('11' * 32),
+                payload_hash=bytes.fromhex('22' * 32), primary_stride=5,
+                compact_stride=7, nonce=nonce, target=self.target,
+            )
+            stream = bytearray(b'HCCGN-WORK/1\x00' + candidate.encode())
+            midstate = hashlib.sha256(stream[:128])
+            tail = stream[128:]
+            struct.pack_into('>Q', tail, 29, nonce)
+            fast = midstate.copy()
+            fast.update(tail)
+            self.assertEqual(fast.digest(), work_digest(candidate.encode()))
+
+    def test_midstate_miner_returns_independently_verifiable_proof(self):
+        solved, digest, proof, proof_hash, attempts, elapsed = mine_nonce(
+            self.header, start_nonce=42, max_attempts=1
+        )
+        self.assertEqual(solved.nonce, 42)
+        self.assertEqual(digest, work_digest(solved.encode()))
+        self.assertEqual(proof_hash, proof_commitment(proof))
+        self.assertEqual(attempts, 1)
+        self.assertGreaterEqual(elapsed, 0.0)
+        result = verify_proof(
+            proof, expected_network_id='gaia-testnet', expected_target=self.target
+        )
+        self.assertTrue(result['valid'])
+
+    def test_miner_rejects_nonce_range_wraparound(self):
+        with self.assertRaisesRegex(HCCGNWorkError, 'nonce_range_overflow'):
+            mine_nonce(self.header, start_nonce=(1 << 64) - 1, max_attempts=2)
 
     def test_boolean_version_is_rejected(self):
         bad = HCCGNWorkHeader(
