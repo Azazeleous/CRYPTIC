@@ -24,7 +24,7 @@ class ResearchCommitmentTests(unittest.TestCase):
         self.assertNotEqual(first, compute_experiment_commitment({"algorithm": "other", "revision": 1}))
 
     def test_nan_and_non_json_values_are_rejected(self):
-        with self.assertRaisesRegex(ValueError, "finite_json"):
+        with self.assertRaisesRegex(ValueError, "unsupported_canonical_value"):
             canonical_experiment_bytes({"value": float("nan")})
         with self.assertRaisesRegex(ValueError, "finite_json"):
             canonical_experiment_bytes({"value": object()})
