@@ -45,6 +45,14 @@ class AdamCommitStore:
         db.execute("PRAGMA synchronous=FULL")
         return db
 
+    @contextmanager
+    def _db(self):
+        db = self._connect()
+        try:
+            yield db
+        finally:
+            db.close()
+
     def head(self) -> dict:
         with self._db() as db:
             row = db.execute("SELECT * FROM adam_commits ORDER BY height DESC LIMIT 1").fetchone()
