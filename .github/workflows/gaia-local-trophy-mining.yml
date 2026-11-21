@@ -32,7 +32,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m src.mining.trophy_solver \
-            --challenge-id "gaia-nexus-\${{ github.run_id }}" \
+            --challenge-id "gaia-nexus-${{ github.run_id }}" \
             --seed "GAIA-NEXUS-CRYPTIC-LOCAL-TROPHY-CHALLENGE-v1" \
             --min-difficulty 4 \
             --max-difficulty 16 \
@@ -51,7 +51,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gaia-local-proof-trophies-\${{ github.run_id }}
-          path: \${{ runner.temp }}/gaia-trophy/
+          name: gaia-local-proof-trophies-${{ github.run_id }}
+          path: ${{ runner.temp }}/gaia-trophy/
           if-no-files-found: warn
           retention-days: 30
