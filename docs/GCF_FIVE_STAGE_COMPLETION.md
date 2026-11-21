@@ -1,8 +1,8 @@
 # GCF/1 — Five-Stage Completion Track
 
-Base: main after PR #28 merge  
-Base commit: 0079ec720c1e2527556fa724b536454dfdf51ec9  
-Work branch: feat/gcf-five-stage-completion
+Base: main after PR #31 merge  
+Base commit: 5a97b992750747b55a2e1ce88787688856b36aa4  
+Work branch: feat/gcf-adam-mainline
 
 This document tracks the five previously agreed stages after the initial GCF/1 reference implementation. Status labels distinguish executable code from deployment and protocol dependencies.
 
