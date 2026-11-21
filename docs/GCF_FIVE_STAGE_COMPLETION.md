@@ -98,3 +98,17 @@ GCF gate results now accept only the exact boolean `True` or a well-formed `Gate
 ADAM now rejects non-byte state inputs and state payloads above 1 MiB, validates digest formats, and rechecks the entire persisted chain (contiguous heights, parent links, state digests and receipt JSON) before head/recovery reads and before appending a new commitment. A tampered historical record blocks recovery rather than allowing a later intact row to mask it.
 
 These are code and deterministic-test additions. CI for the new head is pending; external GOD/APEX trust-root provisioning, an independently protected anchor implementation, live GAIA-JUSTICE evidence services, and real validator-mesh operations remain deployment dependencies.
+
+
+## Latest expanded CI evidence
+
+Workflow run: `44922018143`  
+Commit: `9eb5647ea7c6efe90439f8d2f484b379161ebab6`  
+Result: successful.
+
+- Python unit suite: 267 passed, 2 skipped.
+- Independent Go HCCGN-WORK/1 conformance vectors: passed, including high-target acceptance and low-target rejection.
+- HCCGN midstate benchmark: 100,000 hashes in 0.03964745 seconds; 2,522,230 hashes/second on the GitHub-hosted runner; full-hash reference matched.
+- Existing bounded SHA-256d benchmark: passed separately; it remains a distinct local trophy-miner benchmark.
+
+This evidence verifies the reference implementation and deterministic CI environment. It is not a hardware benchmark for the user's devices, not a target-search performance claim, and not proof of a live validator network.
