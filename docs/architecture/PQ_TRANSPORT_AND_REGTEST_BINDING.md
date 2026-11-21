@@ -13,6 +13,8 @@ CRYPTIC uses four distinct layers:
 
 ## 2. PQ cryptography contract
 
+The reference arithmetic module src/ingestion/negacyclic_ring.py implements exact ring addition-free primitives needed by the experiment: coefficient validation, monomial shifts, negacyclic multiplication, centered representatives, and identity checks for X^n=-1 and X^(2n)=1. Its O(n^2) multiplication is an auditable reference path, not a constant-time production NTT implementation.
+
 Initial target profiles:
 
 - **ML-KEM-768** (FIPS 203) for establishing a shared secret.
@@ -71,6 +73,7 @@ Cloudflare Tunnel is a suitable origin-routing layer for a private service: it e
 
 ## 7. Acceptance gates
 
+- [x] Reference negacyclic ring arithmetic and identity tests for q=3329 and q=8380417.
 - [x] Deterministic experiment metadata commitment.
 - [x] Commitment binding and verification in the regtest header prefix.
 - [x] Four-lane candidate independently recomputed by the coordinator.
