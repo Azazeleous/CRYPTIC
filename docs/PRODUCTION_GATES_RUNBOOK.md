@@ -71,7 +71,7 @@ Each provider signs a response bound to the exact request digest, signer identit
 **Required hardware test campaign:**
 1. Record host model, storage model/firmware, filesystem, mount options, kernel, SQLite version, power-protection features, and UPS configuration.
 2. Use a disposable test device and a reproducible workload that continuously commits sequence-numbered states and receipts.
-3. Cut power at controlled points: before transaction, during WAL append, after commit return, during checkpoint, and during backup/restore. Do not perform this on production data.
+3. Have a qualified hardware-test lab perform controlled power-interruption tests with approved equipment at defined transaction/checkpoint boundaries. Do not manually manipulate mains power, open power supplies, or run this against production devices or data.
 4. On every restart, require verify_chain() to pass and compare the recovered head against an independently recorded external checkpoint.
 5. Repeat across cold boot, abrupt power removal, full-disk, I/O error, filesystem remount, and backup restoration scenarios.
 6. Record raw logs, hashes, timestamps, hardware identity, failure injection point, and recovery outcome. Independent reviewer signs the report.
