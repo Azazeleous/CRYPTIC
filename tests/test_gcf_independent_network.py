@@ -143,6 +143,42 @@ class IndependentVerifierTests(unittest.TestCase):
         self.assertEqual(store.head()["height"], 1)
 
 
+    def test_adam_commit_http_endpoint_and_head_recovery(self):
+        from src.adam.commit_store import AdamCommitStore, APEXValidator
+        cert = self.build_certificate()
+        store = AdamCommitStore(Path(self.temp.name) / "adam-http.sqlite3")
+        apex = APEXValidator(
+            store, hccgn_verifier=self.allow,
+            god_authorizer=self.allow, justice_verifier=self.allow,
+        )
+        app = GCFWSGI(self.engine, apex_validator=apex)
+        request = json.dumps({
+            "certificate": cert,
+            "state_b64": base64.b64encode(self.state).decode("ascii"),
+        }).encode()
+        environ = {
+            "REQUEST_METHOD": "POST", "PATH_INFO": "/v1/adam/commit",
+            "CONTENT_TYPE": "application/json", "CONTENT_LENGTH": str(len(request)),
+            "wsgi.input": io.BytesIO(request),
+        }
+        response = {}
+        def start(status, headers): response["status"] = status
+        payload = json.loads(b"".join(app(environ, start)).decode())
+        self.assertEqual(response["status"], "201 Created")
+        self.assertTrue(payload["committed"])
+        head_env = {
+            "REQUEST_METHOD": "GET", "PATH_INFO": "/v1/adam/head",
+            "CONTENT_TYPE": "", "CONTENT_LENGTH": "0",
+            "wsgi.input": io.BytesIO(b""),
+        }
+        head_response = {}
+        def head_start(status, headers): head_response["status"] = status
+        head = json.loads(b"".join(app(head_env, head_start)).decode())
+        self.assertEqual(head_response["status"], "200 OK")
+        self.assertEqual(head["height"], 1)
+        self.assertEqual(head["state_hash"], sha256_hex(self.state))
+
+
 class HCCGNAdapterTests(unittest.TestCase):
     def test_hccgn_adapter_denies_without_provider(self):
         result = HCCGNVerifierAdapter()({"proof_hash": "a" * 64})
