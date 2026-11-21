@@ -238,6 +238,12 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
                 "signature_hex": signature.hex(),
                 "signed_payload": "receipt_fields_without_signature",
             }
+    # Signing and self-verification are part of acceptance, not post-deadline
+    # bookkeeping. Never emit an accepted receipt after that work crosses budget.
+    if time.monotonic() >= deadline:
+        accepted = False
+        winner = None
+        receipt = None
     stage_converge_ms = (time.monotonic() - stage_converge_started) * 1000
     elapsed_ms = (time.monotonic() - run_started) * 1000
     return {
