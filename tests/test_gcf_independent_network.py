@@ -1,13 +1,19 @@
+import asyncio
 import base64
 import hashlib
 import io
+import ipaddress
 import json
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from src.consensus.gcf import (
     CERT_DOMAIN, GateResult, GCFEngine, ValidatorSet,
@@ -15,7 +21,10 @@ from src.consensus.gcf import (
 )
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
 from src.consensus.independent_verifier import verify_certificate
-from src.consensus.peer_transport import GCFPeerNode, PeerTransportError
+from src.consensus.peer_transport import (
+    GCFPeerNode, PeerTransportError, build_client_ssl_context,
+    build_server_ssl_context,
+)
 from src.consensus.http_api import GCFWSGI
 
 
@@ -196,6 +205,46 @@ class HCCGNAdapterTests(unittest.TestCase):
         self.assertFalse(wrong({"proof_hash": "b" * 64}).allowed)
 
 
+def write_tls_identity(directory, name, serial, ca_key, ca_cert, usage, ip=None):
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    now = datetime.now(timezone.utc)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(serial)
+        .not_valid_before(now - timedelta(minutes=2))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([usage]), critical=False)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True, content_commitment=False,
+                key_encipherment=True, data_encipherment=False,
+                key_agreement=False, key_cert_sign=False, crl_sign=False,
+                encipher_only=None, decipher_only=None,
+            ),
+            critical=True,
+        )
+    )
+    if ip is not None:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(ip))]),
+            critical=False,
+        )
+    cert = builder.sign(ca_key, hashes.SHA256())
+    cert_path = Path(directory) / f"{name}.crt.pem"
+    key_path = Path(directory) / f"{name}.key.pem"
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    return cert, cert_path, key_path
+
+
 class PeerTransportTests(unittest.TestCase):
     def test_signed_peer_envelope_dispatches_and_replay_is_rejected(self):
         temp = tempfile.TemporaryDirectory()
@@ -236,6 +285,98 @@ class PeerTransportTests(unittest.TestCase):
             self.assertEqual(len(engine.seen), 1)
             with self.assertRaisesRegex(PeerTransportError, "MESSAGE_REPLAY"):
                 node.handle_envelope("peer-a", envelope)
+        finally:
+            temp.cleanup()
+
+    def test_mutual_tls_peer_send_and_receive_loopback(self):
+        temp = tempfile.TemporaryDirectory()
+        try:
+            now = datetime.now(timezone.utc)
+            ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+            ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "GCF test CA")])
+            ca_cert = (
+                x509.CertificateBuilder()
+                .subject_name(ca_name).issuer_name(ca_name)
+                .public_key(ca_key.public_key()).serial_number(1)
+                .not_valid_before(now - timedelta(minutes=2))
+                .not_valid_after(now + timedelta(days=1))
+                .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+                .add_extension(
+                    x509.KeyUsage(
+                        digital_signature=True, content_commitment=False,
+                        key_encipherment=False, data_encipherment=False,
+                        key_agreement=False, key_cert_sign=True, crl_sign=True,
+                        encipher_only=None, decipher_only=None,
+                    ), critical=True,
+                )
+                .sign(ca_key, hashes.SHA256())
+            )
+            ca_path = Path(temp.name) / "ca.pem"
+            ca_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+            server_cert, server_cert_path, server_key_path = write_tls_identity(
+                temp.name, "gcf-server", 2, ca_key, ca_cert,
+                ExtendedKeyUsageOID.SERVER_AUTH, "127.0.0.1",
+            )
+            client_cert, client_cert_path, client_key_path = write_tls_identity(
+                temp.name, "gcf-client", 3, ca_key, ca_cert,
+                ExtendedKeyUsageOID.CLIENT_AUTH,
+            )
+            server_private, server_public = keypair()
+            client_private, client_public = keypair()
+            vset = ValidatorSet("gaia-testnet", 1, {
+                "peer-a": {"public_key_hex": client_public, "weight": 1},
+                "peer-b": {"public_key_hex": server_public, "weight": 1},
+            })
+            class Engine:
+                def __init__(self): self.seen = []
+                def submit_proposal(self, payload):
+                    self.seen.append(payload)
+                    return {"candidate_received": True}
+                def submit_vote(self, payload):
+                    return {"vote_received": True}
+            engine = Engine()
+            fingerprint = hashlib.sha256(
+                client_cert.public_bytes(serialization.Encoding.DER)
+            ).hexdigest()
+            server_node = GCFPeerNode(
+                engine=engine, validator_set=vset, node_id="peer-b",
+                private_key_hex=server_private,
+                peer_certificate_fingerprints={fingerprint: "peer-a"},
+                replay_db_path=Path(temp.name) / "server-replay.sqlite3",
+            )
+            client_node = GCFPeerNode(
+                engine=Engine(), validator_set=vset, node_id="peer-a",
+                private_key_hex=client_private,
+                peer_certificate_fingerprints={},
+                replay_db_path=Path(temp.name) / "client-replay.sqlite3",
+            )
+            server_tls = build_server_ssl_context(
+                str(server_cert_path), str(server_key_path), str(ca_path)
+            )
+            client_tls = build_client_ssl_context(
+                str(client_cert_path), str(client_key_path), str(ca_path)
+            )
+            server_fingerprint = hashlib.sha256(
+                server_cert.public_bytes(serialization.Encoding.DER)
+            ).hexdigest()
+
+            async def exchange():
+                server = await server_node.serve("127.0.0.1", 0, server_tls)
+                try:
+                    port = server.sockets[0].getsockname()[1]
+                    return await client_node.send(
+                        "127.0.0.1", port, client_tls, server_fingerprint,
+                        "PROPOSAL", {"candidate": "loopback"},
+                        "d" * 32,
+                    )
+                finally:
+                    server.close()
+                    await server.wait_closed()
+
+            response = asyncio.run(exchange())
+            self.assertEqual(response["status"], "accepted")
+            self.assertTrue(response["accepted"])
+            self.assertEqual(engine.seen, [{"candidate": "loopback"}])
         finally:
             temp.cleanup()
 
