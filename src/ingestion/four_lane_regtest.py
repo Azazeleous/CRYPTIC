@@ -9,6 +9,7 @@ from __future__ import annotations
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 import hashlib
+import math
 import threading
 import time
 from typing import Any
@@ -44,15 +45,9 @@ def sha256d(header_prefix: bytes, nonce: int) -> bytes:
     return hashlib.sha256(hashlib.sha256(header).digest()).digest()
 
 
-def _lane_worker(
-    lane_id: int,
-    header_prefix: bytes,
-    nonce_start: int,
-    nonce_end: int,
-    target: int,
-    deadline: float,
-    stop: threading.Event,
-) -> LaneReport:
+def _lane_worker(lane_id: int, header_prefix: bytes, nonce_start: int,
+                 nonce_end: int, target: int, deadline: float,
+                 stop: threading.Event) -> LaneReport:
     started = time.monotonic()
     checked = 0
     first = nonce_start + ((lane_id - nonce_start) % LANE_COUNT)
@@ -60,32 +55,26 @@ def _lane_worker(
         if stop.is_set():
             break
         if time.monotonic() >= deadline:
+            elapsed = max(time.monotonic() - started, 1e-9)
             return LaneReport(lane_id, f"partition-{lane_id}", checked,
-                              int((time.monotonic() - started) * 1000),
-                              checked / max(time.monotonic() - started, 1e-9),
-                              "deadline")
+                              int(elapsed * 1000), checked / elapsed, "deadline")
         digest = sha256d(header_prefix, nonce)
         checked += 1
         # Bitcoin-style target interpretation: raw digest as a little-endian integer.
         if int.from_bytes(digest, "little") <= target:
+            elapsed = max(time.monotonic() - started, 1e-9)
             return LaneReport(lane_id, f"partition-{lane_id}", checked,
-                              int((time.monotonic() - started) * 1000),
-                              checked / max(time.monotonic() - started, 1e-9),
+                              int(elapsed * 1000), checked / elapsed,
                               "candidate", nonce, digest.hex())
-    status = "cancelled" if stop.is_set() else "exhausted"
     elapsed = max(time.monotonic() - started, 1e-9)
+    status = "cancelled" if stop.is_set() else "exhausted"
     return LaneReport(lane_id, f"partition-{lane_id}", checked,
                       int(elapsed * 1000), checked / elapsed, status)
 
 
-def run_four_lane_regtest(
-    header_prefix: bytes,
-    *,
-    nonce_start: int,
-    nonce_end: int,
-    target: int,
-    time_budget_seconds: float = 5.0,
-) -> dict[str, Any]:
+def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
+                          nonce_end: int, target: int,
+                          time_budget_seconds: float = 5.0) -> dict[str, Any]:
     """Run four disjoint nonce partitions with a central timed verifier.
 
     Three stages:
@@ -102,8 +91,11 @@ def run_four_lane_regtest(
         raise RegtestError("nonce_range_reversed")
     if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target <= UINT256_MAX:
         raise RegtestError("target_out_of_uint256_range")
-    if isinstance(time_budget_seconds, bool) or not isinstance(time_budget_seconds, (int, float)) or time_budget_seconds <= 0:
-        raise RegtestError("time_budget_must_be_positive")
+    if (isinstance(time_budget_seconds, bool)
+            or not isinstance(time_budget_seconds, (int, float))
+            or not math.isfinite(time_budget_seconds)
+            or not 0 < time_budget_seconds <= 300):
+        raise RegtestError("time_budget_must_be_finite_and_between_0_and_300_seconds")
 
     run_started = time.monotonic()
     deadline = run_started + float(time_budget_seconds)
@@ -136,7 +128,9 @@ def run_four_lane_regtest(
                     nonce = report.proposed_nonce
                     if nonce is None:
                         raise RegtestError("candidate_missing_nonce")
-                    # Center lane: independently recompute the complete header digest.
+                    # The center may not accept a result after the HCCGN deadline.
+                    if time.monotonic() >= deadline:
+                        break
                     verified = sha256d(header_prefix, nonce)
                     if verified.hex() != report.proposed_digest:
                         raise RegtestError("center_digest_reverification_failed")
@@ -160,7 +154,6 @@ def run_four_lane_regtest(
                 reports[lane] = future.result()
             else:
                 future.cancel()
-        # Collect running workers after cooperative stop; their loops are bounded.
         for future, lane in futures.items():
             if lane not in reports and not future.cancelled():
                 try:
