@@ -87,3 +87,14 @@ A successful local CI run demonstrates the implemented code and tests. It does n
 Stage 2 is E3 for the Python reference implementation and its in-repository known-answer tests. Do not mark it production-complete until authenticated proof storage, active-target policy resolution, GOD-authorized activation, and independent cross-language profile interoperability are verified. Do not mark Stage 3 production-complete until live multi-node interoperability, failure recovery, and security review pass.
 
 The Architect / Nexus / Cryptic News LLC / Project: The Nexus Generation: GaiaSSoul / SERIES: The Nexus of Gaia / ID: 137451921129154222|040592|433855274
+
+
+## Additional code-boundary completion
+
+The branch now includes `src/consensus/runtime.py` as the composition root. It connects the durable HCCGN proof store, signed active-target policy resolver, HCCGN proof provider and adapter, GOD authorization adapter, GAIA-JUSTICE evidence adapter, GCF engine, ADAM store, APEX validator, and WSGI API. The GOD Ed25519 public key is loaded from an operator-provisioned regular file; symlinks, group/world-writable files, owner mismatch, and invalid key lengths are rejected. The runtime requires an injected external monotonic sequence-anchor provider by default. It does not manufacture trust material or authorize missing providers.
+
+GCF gate results now accept only the exact boolean `True` or a well-formed `GateResult(allowed=True, reason=<string>)`; arbitrary truthy values fail closed. GAIA-JUSTICE policy/evidence callbacks likewise require exact `True`. The legacy finality helper uses the same strict result rule. GCF and independent certificate-verifier integer fields are bounded to SQLite's signed 64-bit range, including aggregate validator weight.
+
+ADAM now rejects non-byte state inputs and state payloads above 1 MiB, validates digest formats, and rechecks the entire persisted chain (contiguous heights, parent links, state digests and receipt JSON) before head/recovery reads and before appending a new commitment. A tampered historical record blocks recovery rather than allowing a later intact row to mask it.
+
+These are code and deterministic-test additions. CI for the new head is pending; external GOD/APEX trust-root provisioning, an independently protected anchor implementation, live GAIA-JUSTICE evidence services, and real validator-mesh operations remain deployment dependencies.
