@@ -168,6 +168,41 @@ class FourLaneRegtestTests(unittest.TestCase):
             __import__("hashlib").sha256(prefix).hexdigest(),
         )
 
+    def test_receipt_can_be_signed_and_independently_verified_with_ml_dsa_65(self):
+        import json
+        from src.ingestion.pq_security import MLDSA65, RECEIPT_CONTEXT
+
+        signing_pair = MLDSA65.keygen()
+        report = run_four_lane_regtest(
+            self.header_prefix,
+            nonce_start=0,
+            nonce_end=16,
+            target=(1 << 256) - 1,
+            time_budget_seconds=5.0,
+            receipt_signing_secret_key=signing_pair.secret_key,
+            receipt_signing_public_key=signing_pair.public_key,
+        )
+        receipt = report["receipt"]
+        signature_info = receipt.pop("signature")
+        signed_bytes = json.dumps(
+            receipt, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+        self.assertEqual(signature_info["algorithm"], "ML-DSA-65")
+        self.assertTrue(MLDSA65.verify(
+            bytes.fromhex(signature_info["public_key_hex"]),
+            signed_bytes,
+            bytes.fromhex(signature_info["signature_hex"]),
+            context=RECEIPT_CONTEXT,
+        ))
+
+    def test_receipt_signing_requires_both_key_halves(self):
+        with self.assertRaisesRegex(RegtestError, "keypair_must_be_supplied_together"):
+            run_four_lane_regtest(
+                self.header_prefix, nonce_start=0, nonce_end=1, target=0,
+                receipt_signing_secret_key=bytes(4032),
+            )
+
     def test_experiment_commitment_mismatch_is_rejected(self):
         from src.ingestion.research_commitment import compute_experiment_commitment
 
