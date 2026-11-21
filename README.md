@@ -41,3 +41,6 @@ The four-lane reference miner, reversible barrel-roll framing, post-quantum suit
 ## Security
 
 Never commit API tokens, private keys, seed phrases, passwords, device credentials, or private user data. Use OS credential stores or explicitly configured secret providers. All device and filesystem access must be enrolled, scoped, logged, and revocable.
+
+
+Production-gate adapters are available for signed GOD decisions, independent HTTPS sequence anchoring, separate GAIA-JUSTICE policy/evidence providers, and mTLS remote Ed25519 signing. These are deployable integration clients; no live authority or production service is implied. See docs/PRODUCTION_GATES_RUNBOOK.md for the five external activation gates and required evidence.
