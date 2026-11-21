@@ -131,13 +131,35 @@ class BoundedRuntimeTests(unittest.TestCase):
         self.assertEqual(first.prepare_count, 0)
         self.assertEqual(second.prepare_count, 0)
 
+    def test_prepared_adapter_cap_applies_across_runtime_reuse(self):
+        class PreparedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.prepare_count = 0
+            def prepare(self):
+                self.prepare_count += 1
+
+        first = PreparedAdapter("first-lifetime")
+        second = PreparedAdapter("second-lifetime")
+        self.registry.register(first)
+        self.registry.register(second)
+        policy = IngestionPolicy(max_workers=1, max_queue_size=0, max_pages=2,
+                                 max_observations=2, max_page_size=1)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            runtime.run(self.journal, ["first-lifetime"])
+            with self.assertRaisesRegex(IngestionRuntimeError, "prepared adapter leases"):
+                runtime.run(self.journal, ["second-lifetime"])
+        self.assertEqual(first.prepare_count, 1)
+        self.assertEqual(second.prepare_count, 0)
+
     def test_shared_adapter_is_closed_only_after_last_runtime_releases_it(self):
         class SharedAdapter(DeadlineAdapter):
             def __init__(self, source_id):
                 super().__init__(source_id)
                 self.closed = False
+                self.prepare_count = 0
             def prepare(self):
-                pass
+                self.prepare_count += 1
             def close(self):
                 self.closed = True
         adapter = SharedAdapter("shared")
@@ -146,6 +168,7 @@ class BoundedRuntimeTests(unittest.TestCase):
         second = BoundedIngestionRuntime(self.registry)
         first.run(self.journal, ["shared"])
         second.run(self.journal, ["shared"])
+        self.assertEqual(adapter.prepare_count, 1)
         first.close()
         self.assertFalse(adapter.closed)
         second.close()
