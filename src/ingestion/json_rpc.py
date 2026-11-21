@@ -38,6 +38,8 @@ class JsonRpcError(SourceAdapterError):
 class JsonRpcDeadlineExceeded(TimeoutError):
     """The shared monotonic deadline expired during transport coordination."""
 
+    deadline_exceeded = True
+
 
 class JsonRpcRemoteError(JsonRpcError):
     """Provider returned a JSON-RPC error object."""
@@ -182,7 +184,11 @@ class JsonRpcClient:
         return document["result"]
 
     def call(self, method: str, params: list[Any] | None = None) -> Any:
-        # Even non-coordinator calls use a finite whole-request deadline.
+        # Cold worker startup has its own bounded startup timeout and occurs
+        # before the direct request's timeout budget begins.
+        if not isinstance(method, str) or method not in self.allowed_methods:
+            raise JsonRpcError("rpc_method_not_allowlisted")
+        self.prepare()
         return self._call(
             method, params,
             deadline_monotonic=time.monotonic() + self.policy.timeout_seconds,
@@ -218,7 +224,8 @@ class JsonRpcClient:
         ).encode("utf-8")
         if len(body) > 65_536:
             raise JsonRpcError("request_size_invalid")
-        self.prepare()  # One worker lifecycle per client; never restart per retry.
+        if self._supervised_transport is None or not self._supervised_transport.healthy:
+            raise JsonRpcError("rpc_transport_not_prepared")
         for attempt in range(self.policy.max_retries + 1):
             self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
             timeout = self.policy.timeout_seconds
