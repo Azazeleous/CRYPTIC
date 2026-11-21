@@ -74,7 +74,8 @@ def _lane_worker(lane_id: int, header_prefix: bytes, nonce_start: int,
 
 def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
                           nonce_end: int, target: int,
-                          time_budget_seconds: float = 5.0) -> dict[str, Any]:
+                          time_budget_seconds: float = 5.0,
+                          experiment_commitment: str | None = None) -> dict[str, Any]:
     """Run four disjoint nonce partitions with a central timed verifier.
 
     Three stages:
@@ -84,6 +85,15 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
     """
     if not isinstance(header_prefix, bytes) or len(header_prefix) != 76:
         raise RegtestError("header_prefix_must_be_76_bytes")
+    if experiment_commitment is not None:
+        if not isinstance(experiment_commitment, str) or len(experiment_commitment) != 64:
+            raise RegtestError("experiment_commitment_must_be_64_hex_characters")
+        try:
+            commitment_bytes = bytes.fromhex(experiment_commitment)
+        except ValueError as exc:
+            raise RegtestError("experiment_commitment_must_be_64_hex_characters") from exc
+        if len(commitment_bytes) != 32 or header_prefix[36:68] != commitment_bytes:
+            raise RegtestError("experiment_commitment_header_binding_mismatch")
     for name, value in (("nonce_start", nonce_start), ("nonce_end", nonce_end)):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= UINT32_MAX:
             raise RegtestError(f"{name}_out_of_uint32_range")
@@ -176,6 +186,10 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
 
     stage_solve_ms = (time.monotonic() - stage_solve_started) * 1000
     stage_converge_started = time.monotonic()
+    # A candidate is not accepted if independent verification or worker cleanup
+    # carried execution beyond the caller's acceptance deadline.
+    if winner is not None and time.monotonic() >= deadline:
+        winner = None
     lane_rows = [asdict(reports[i]) for i in range(LANE_COUNT)]
     accepted = winner is not None
     receipt = None
@@ -189,6 +203,7 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
             "target": winner["target"],
             "target_encoding": winner["target_encoding"],
             "header_prefix_sha256": hashlib.sha256(header_prefix).hexdigest(),
+            "experiment_commitment": experiment_commitment,
             "verification": "independent_sha256d_recomputation_passed",
         }
     stage_converge_ms = (time.monotonic() - stage_converge_started) * 1000
@@ -215,6 +230,8 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
                 "clock": "time.monotonic",
                 "budget_seconds": float(time_budget_seconds),
                 "deadline_enforced": True,
+                "deadline_scope": "winner_verification_and_acceptance",
+                "cleanup_may_extend_wall_clock": True,
                 "stage_ms": {
                     "reduce": round(stage_reduce_ms, 3),
                     "solve": round(stage_solve_ms, 3),
