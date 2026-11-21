@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import contextmanager
 import sqlite3
 import threading
 from pathlib import Path
@@ -24,7 +25,7 @@ class AdamCommitStore:
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        with self._connect() as db:
+        with self._db() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS adam_commits(
               height INTEGER PRIMARY KEY,
@@ -45,7 +46,7 @@ class AdamCommitStore:
         return db
 
     def head(self) -> dict:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute("SELECT * FROM adam_commits ORDER BY height DESC LIMIT 1").fetchone()
         if row is None:
             return {"height": 0, "state_hash": "0" * 64}
@@ -79,7 +80,7 @@ class AdamCommitStore:
                 "candidate_digest": candidate_digest, "certificate_digest": certificate_digest}
 
     def get_commit(self, height: int) -> dict | None:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute("SELECT * FROM adam_commits WHERE height=?", (height,)).fetchone()
         if row is None:
             return None
