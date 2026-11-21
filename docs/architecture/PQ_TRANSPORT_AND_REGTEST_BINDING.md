@@ -49,6 +49,8 @@ When experiment_commitment is passed to run_four_lane_regtest, the coordinator v
 
 This is a research commitment, not automatically a valid transaction merkle root. A future Bitcoin Core regtest integration must construct actual transactions, coinbase commitment data, the transaction merkle tree, and a consensus-valid block template before claiming node acceptance.
 
+The current four lanes are logical nonce partitions scheduled with Python threads. They are not evidence of four-way CPU parallelism: the workload hashes short inputs, so interpreter/GIL and scheduling effects must be measured on the target runtime. Report measured throughput; do not infer a 4x speedup from lane_count=4. A native or process-based backend is a separate optimization and must preserve the same independent-verification tests.
+
 The regtest discards a proposed winner if independent verification and worker shutdown reach the acceptance deadline before receipt acceptance. Cleanup can still add wall-clock time; the deadline is an acceptance boundary, not a claim of hard real-time process termination.
 
 ## 5. Relationship to the browser hypercube source
