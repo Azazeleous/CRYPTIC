@@ -1,5 +1,6 @@
 """Tests for the four-lane FGR-ICE SHA-256d regtest."""
 import unittest
+from unittest.mock import patch
 
 from src.ingestion.four_lane_regtest import (
     LANE_COUNT,
@@ -40,6 +41,68 @@ class FourLaneRegtestTests(unittest.TestCase):
         self.assertLessEqual(int.from_bytes(digest, "little"), target)
         self.assertEqual(report["process"], ["REDUCE", "SOLVE", "CONVERGE"])
         self.assertTrue(report["metrics"]["hccgn_timer"]["deadline_enforced"])
+
+    def test_successfully_cancelled_lanes_still_receive_reports(self):
+        from src.ingestion.four_lane_regtest import LaneReport
+
+        report_digest = sha256d(self.header_prefix, 0).hex()
+
+        class FakeFuture:
+            def __init__(self, lane):
+                self.lane = lane
+                self._cancelled = False
+
+            def done(self):
+                return self.lane == 0
+
+            def result(self, timeout=None):
+                return LaneReport(
+                    0, "partition-0", 1, 1, 1000.0,
+                    "candidate", 0, report_digest,
+                )
+
+            def cancel(self):
+                self._cancelled = True
+                return True
+
+            def cancelled(self):
+                return self._cancelled
+
+        class FakeExecutor:
+            def __init__(self, max_workers, thread_name_prefix):
+                self.futures = []
+
+            def submit(self, fn, lane, *args, **kwargs):
+                future = FakeFuture(lane)
+                self.futures.append(future)
+                return future
+
+            def shutdown(self, wait=True, cancel_futures=False):
+                pass
+
+        def fake_wait(pending, timeout=None, return_when=None):
+            completed = next(future for future in pending if future.lane == 0)
+            return {completed}, set(pending) - {completed}
+
+        with patch("src.ingestion.four_lane_regtest.ThreadPoolExecutor", FakeExecutor), \\
+             patch("src.ingestion.four_lane_regtest.wait", fake_wait):
+            report = run_four_lane_regtest(
+                self.header_prefix,
+                nonce_start=0,
+                nonce_end=100,
+                target=(1 << 256) - 1,
+                time_budget_seconds=5.0,
+            )
+
+        self.assertEqual(report["status"], "accepted")
+        self.assertEqual(
+            sorted(row["lane_id"] for row in report["lanes"]),
+            list(range(LANE_COUNT)),
+        )
+        self.assertEqual(
+            {row["lane_id"]: row["status"] for row in report["lanes"]},
+            {0: "candidate", 1: "cancelled", 2: "cancelled", 3: "cancelled"},
+        )
 
     def test_zero_target_exhausts_small_domain_without_false_winner(self):
         report = run_four_lane_regtest(
