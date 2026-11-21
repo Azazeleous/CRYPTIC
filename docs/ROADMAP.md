@@ -44,4 +44,12 @@
 - Scoped network, BLE, and home-automation bridges.
 - Per-device policy, consent, revocation, and audit.
 
+## Phase 7 — Supervised transport and cryptographic binding
+- Whole-request HTTP execution in an isolated, prestarted worker with an absolute monotonic deadline covering DNS, TCP, TLS, headers, and response reads.
+- Bounded IPC and response sizes, redirect denial, worker termination on timeout, and runtime poisoning after a completed RPC deadline failure.
+- Direct health probes use one-shot workers and close them on every exit path.
+- Four-lane FGR-ICE regtest with independent center verification and optional ML-DSA-65 receipt signing inside the acceptance budget.
+- Explicit PQ transport adapter manifests, pinned signer trust, declared KEM/signature capabilities, and revocation-aware adapter invalidation.
+- Provider interoperability, Windows spawn verification, production trust-root operation, and live endpoint verification remain open.
+
 No phase is considered complete without tests and evidence in the capability ledger.

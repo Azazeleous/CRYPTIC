@@ -1,0 +1,5 @@
+# Optional standards-aligned post-quantum primitive provider.
+# pqcrypto 1.0.0 wraps Rust ML-KEM / ML-DSA implementations.
+# This does not confer CMVP/FIPS 140 validation or independent audit status.
+pqcrypto==1.0.0
+cryptography>=42

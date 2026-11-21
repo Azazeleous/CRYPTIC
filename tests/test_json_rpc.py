@@ -71,11 +71,60 @@ class JsonRpcProtocolTests(unittest.TestCase):
         with self.assertRaises(JsonRpcDeadlineExceeded):
             client.call_until("eth_chainId", deadline_monotonic=__import__("time").monotonic() - 1)
 
+    def test_request_payload_size_is_bounded_before_worker_dispatch(self):
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_getBlockByNumber"}),
+        )
+        client._supervised_transport = type("ReadyTransport", (), {"healthy": True})()
+        with self.assertRaisesRegex(JsonRpcError, "request_size_invalid"):
+            client.call_until(
+                "eth_getBlockByNumber", ["x" * 65_537],
+                deadline_monotonic=time.monotonic() + 2,
+            )
+
+    def test_json_rpc_rejects_oversized_endpoint(self):
+        with self.assertRaisesRegex(SourceRegistryError, "maximum length"):
+            JsonRpcClient(
+                "https://rpc.example.org/" + ("x" * 2048),
+                allowed_methods=frozenset({"eth_chainId"}),
+            )
+
+    def test_direct_call_timeout_starts_after_cold_worker_preparation(self):
+        policy = JsonRpcPolicy(timeout_seconds=0.25, max_retries=0)
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}), policy=policy,
+        )
+        prepared_at = []
+        captured = {}
+        def prepare():
+            time.sleep(0.12)
+            prepared_at.append(time.monotonic())
+        def call_stub(method, params, *, deadline_monotonic):
+            captured["deadline"] = deadline_monotonic
+            return "ok"
+        with patch.object(client, "prepare", side_effect=prepare), patch.object(
+            client, "_call", side_effect=call_stub
+        ):
+            self.assertEqual(client.call("eth_chainId"), "ok")
+        self.assertGreaterEqual(captured["deadline"] - prepared_at[0], 0.24)
+
+    def test_absolute_deadline_call_requires_prior_worker_preparation(self):
+        client = JsonRpcClient(
+            "https://rpc.example.org",
+            allowed_methods=frozenset({"eth_chainId"}),
+        )
+        with self.assertRaisesRegex(JsonRpcError, "not_prepared"):
+            client.call_until(
+                "eth_chainId", deadline_monotonic=time.monotonic() + 1,
+            )
+
     def test_chain_adapters_expose_deadline_methods_without_overclaiming_dns_bound(self):
         evm = EvmReadOnlyAdapter("https://rpc.example.org")
         solana = SolanaReadOnlyAdapter("https://rpc.example.org")
         for adapter in (evm, solana):
-            self.assertFalse(adapter.deadline_enforced)
+            self.assertTrue(adapter.deadline_enforced)
             self.assertTrue(callable(adapter.health_check_until))
             self.assertTrue(callable(adapter.fetch_page_until))
             with self.assertRaises(JsonRpcDeadlineExceeded):
@@ -93,41 +142,33 @@ class JsonRpcProtocolTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 0.15)
 
     def test_retry_backoff_is_rejected_when_it_exceeds_remaining_budget(self):
+        class RetryTransport:
+            healthy = True
+            def request(self, *args, **kwargs):
+                return 503, b""
+
         client = JsonRpcClient(
             "https://rpc.example.org",
             allowed_methods=frozenset({"eth_chainId"}),
             policy=JsonRpcPolicy(timeout_seconds=2, max_retries=2,
                                  retry_base_seconds=1, rate_limit_per_minute=600),
         )
-        opener = type("FailingOpener", (), {
-            "open": lambda self, request, timeout: (_ for _ in ()).throw(
-                HTTPError(request.full_url, 503, "unavailable", {}, None)
-            )
-        })()
-        with patch("src.ingestion.json_rpc.build_opener", return_value=opener):
-            with self.assertRaises(JsonRpcDeadlineExceeded):
-                client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.1)
+        client._supervised_transport = RetryTransport()
+        with self.assertRaises(JsonRpcDeadlineExceeded):
+            client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.1)
 
-    def test_socket_timeout_uses_remaining_shared_budget(self):
-        class Response:
-            def __init__(self, payload):
-                self.payload = payload
-            def __enter__(self):
-                return self
-            def __exit__(self, *args):
-                return False
-            def read(self, size):
-                return self.payload
-
-        class Opener:
+    def test_supervised_transport_receives_remaining_shared_budget(self):
+        class RecordingTransport:
+            healthy = True
             timeout_seen = None
-            def open(self, request, timeout):
-                self.timeout_seen = timeout
-                request_doc = json.loads(request.data.decode("utf-8"))
+            def request(self, url, body, *, timeout_seconds, max_response_bytes,
+                        deadline_monotonic):
+                self.timeout_seen = timeout_seconds
+                request_doc = json.loads(body.decode("utf-8"))
                 payload = json.dumps({
                     "jsonrpc": "2.0", "id": request_doc["id"], "result": "0x1"
                 }).encode("utf-8")
-                return Response(payload)
+                return 200, payload
 
         client = JsonRpcClient(
             "https://rpc.example.org",
@@ -135,12 +176,95 @@ class JsonRpcProtocolTests(unittest.TestCase):
             policy=JsonRpcPolicy(timeout_seconds=5, max_retries=0,
                                  rate_limit_per_minute=600),
         )
-        opener = Opener()
-        with patch("src.ingestion.json_rpc.build_opener", return_value=opener):
-            result = client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.4)
+        transport = RecordingTransport()
+        client._supervised_transport = transport
+        result = client.call_until("eth_chainId", deadline_monotonic=time.monotonic() + 0.4)
         self.assertEqual(result, "0x1")
-        self.assertGreater(opener.timeout_seen, 0)
-        self.assertLessEqual(opener.timeout_seen, 0.4)
+        self.assertGreater(transport.timeout_seen, 0)
+        self.assertLessEqual(transport.timeout_seen, 0.4)
+
+    def test_json_rpc_deadline_call_uses_prepared_supervised_worker(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                request_doc = json.loads(self.rfile.read(
+                    int(self.headers.get("Content-Length", "0"))
+                ).decode("utf-8"))
+                payload = json.dumps({
+                    "jsonrpc": "2.0", "id": request_doc["id"], "result": "0x1",
+                }).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = __import__("threading").Thread(
+            target=server.serve_forever, daemon=True,
+        )
+        server_thread.start()
+        client = JsonRpcClient(
+            f"http://127.0.0.1:{server.server_port}/rpc",
+            allowed_methods=frozenset({"eth_chainId"}),
+            policy=JsonRpcPolicy(max_retries=0, rate_limit_per_minute=600),
+        )
+        try:
+            client.prepare()
+            self.assertTrue(client._supervised_transport.healthy)
+            result = client.call_until(
+                "eth_chainId", deadline_monotonic=time.monotonic() + 3,
+            )
+            self.assertEqual(result, "0x1")
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1)
+
+    def test_json_rpc_maps_slow_body_worker_termination_to_deadline(self):
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                self.send_response(200)
+                self.send_header("Content-Length", "20")
+                self.end_headers()
+                try:
+                    for _ in range(20):
+                        self.wfile.write(b"x")
+                        self.wfile.flush()
+                        time.sleep(0.15)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server_thread = __import__("threading").Thread(
+            target=server.serve_forever, daemon=True,
+        )
+        server_thread.start()
+        client = JsonRpcClient(
+            f"http://127.0.0.1:{server.server_port}/rpc",
+            allowed_methods=frozenset({"eth_chainId"}),
+            policy=JsonRpcPolicy(max_retries=0, rate_limit_per_minute=600),
+        )
+        try:
+            client.prepare()
+            with self.assertRaises(JsonRpcDeadlineExceeded):
+                client.call_until(
+                    "eth_chainId", deadline_monotonic=time.monotonic() + 0.4,
+                )
+            self.assertFalse(client._supervised_transport.healthy)
+        finally:
+            client.close()
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=1)
 
     def test_evm_and_solana_multi_call_observations_reuse_one_deadline(self):
         deadline = time.monotonic() + 10
@@ -217,6 +341,23 @@ class JsonRpcProtocolTests(unittest.TestCase):
         }))
         with self.assertRaisesRegex(SourceRegistryError, "one unfiltered"):
             adapter.fetch_page(limit=1, filters={"address": "not-accepted-here"})
+
+    def test_direct_health_checks_close_their_one_shot_workers(self):
+        from unittest.mock import MagicMock
+
+        evm = EvmReadOnlyAdapter("https://rpc.example.org")
+        evm_probe = MagicMock()
+        evm_probe.call.return_value = "0x1"
+        with patch("src.ingestion.json_rpc.JsonRpcClient", return_value=evm_probe):
+            self.assertTrue(evm.health_check().healthy)
+        evm_probe.close.assert_called_once_with()
+
+        solana = SolanaReadOnlyAdapter("https://rpc.example.org")
+        solana_probe = MagicMock()
+        solana_probe.call.return_value = "genesis-hash"
+        with patch("src.ingestion.json_rpc.JsonRpcClient", return_value=solana_probe):
+            self.assertTrue(solana.health_check().healthy)
+        solana_probe.close.assert_called_once_with()
 
     def test_adapters_register_with_shared_registry(self):
         registry = __import__("src.ingestion.source_registry", fromlist=["SourceRegistry"]).SourceRegistry()
