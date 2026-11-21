@@ -37,6 +37,7 @@ class AdapterCapabilities:
     max_response_bytes: int
     authenticated: bool
     deadline_enforced: bool
+    signature_algorithms: frozenset[str] = frozenset({"ML-DSA-65"})
 
     def __post_init__(self) -> None:
         if not self.protocols or any(not isinstance(item, str) or not item for item in self.protocols):
@@ -49,6 +50,8 @@ class AdapterCapabilities:
             raise ValueError("security_capabilities_must_be_boolean")
         if any(item not in {"ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"} for item in self.kem_algorithms):
             raise ValueError("unsupported_kem_identifier")
+        if any(item not in {"ML-DSA-44", "ML-DSA-65", "ML-DSA-87"} for item in self.signature_algorithms):
+            raise ValueError("unsupported_signature_identifier")
 
 
 class TransportAdapter(Protocol):
@@ -69,6 +72,7 @@ class AdapterSelection:
     authenticated: bool
     require_authenticated: bool = True
     require_deadline: bool = True
+    signature_algorithm: str | None = "ML-DSA-65"
 
 
 class AdapterRegistry:
@@ -104,6 +108,7 @@ class AdapterRegistry:
         *,
         protocol: str,
         kem_algorithm: str = "ML-KEM-768",
+        signature_algorithm: str | None = "ML-DSA-65",
         request_bytes: int = 0,
         require_authenticated: bool = True,
         require_deadline: bool = True,
@@ -113,6 +118,8 @@ class AdapterRegistry:
             raise ValueError("protocol_required")
         if kem_algorithm not in {"ML-KEM-512", "ML-KEM-768", "ML-KEM-1024"}:
             raise ValueError("unsupported_kem_identifier")
+        if signature_algorithm is not None and signature_algorithm not in {"ML-DSA-44", "ML-DSA-65", "ML-DSA-87"}:
+            raise ValueError("unsupported_signature_identifier")
         if isinstance(request_bytes, bool) or not isinstance(request_bytes, int) or request_bytes < 0:
             raise ValueError("request_bytes_must_be_nonnegative_integer")
 
@@ -124,6 +131,8 @@ class AdapterRegistry:
                 if allowed is not None and adapter_id not in allowed:
                     continue
                 if protocol not in caps.protocols or kem_algorithm not in caps.kem_algorithms:
+                    continue
+                if signature_algorithm is not None and signature_algorithm not in caps.signature_algorithms:
                     continue
                 if request_bytes > caps.max_request_bytes:
                     continue
@@ -138,7 +147,7 @@ class AdapterRegistry:
             caps = self._adapters[chosen].capabilities
             return AdapterSelection(
                 chosen, protocol, kem_algorithm, caps.deadline_enforced, caps.authenticated,
-                require_authenticated, require_deadline
+                require_authenticated, require_deadline, signature_algorithm
             )
 
     def prepare(self, adapter_id: str) -> None:
@@ -172,6 +181,9 @@ class AdapterRegistry:
             caps = adapter.capabilities
             if selection.protocol not in caps.protocols or selection.kem_algorithm not in caps.kem_algorithms:
                 raise NoCompatibleAdapter("selection_capabilities_changed")
+            if (selection.signature_algorithm is not None
+                    and selection.signature_algorithm not in caps.signature_algorithms):
+                raise NoCompatibleAdapter("selection_signature_capability_changed")
             # The exchange boundary enforces the secure baseline even if a caller forges
             # an AdapterSelection with weaker optional requirements.
             if not caps.authenticated:
