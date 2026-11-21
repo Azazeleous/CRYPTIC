@@ -260,10 +260,19 @@ class GCFEngine:
             """)
 
     def _gate(self, gate: Callable, *args) -> GateResult:
-        result = gate(*args)
+        try:
+            result = gate(*args)
+        except Exception:
+            return GateResult(False, "GATE_EVALUATION_ERROR")
         if isinstance(result, GateResult):
+            if type(result.allowed) is not bool or not isinstance(result.reason, str):
+                return GateResult(False, "GATE_RESPONSE_INVALID")
             return result
-        return GateResult(bool(result), "ALLOW" if result else "DENIED")
+        if result is True:
+            return GateResult(True, "ALLOW")
+        if result is False:
+            return GateResult(False, "DENIED")
+        return GateResult(False, "GATE_RESPONSE_INVALID")
 
     def _validate_proposal(self, proposal: Mapping[str, Any]) -> tuple[str, dict]:
         required = {

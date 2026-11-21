@@ -41,9 +41,9 @@ class JusticeEvidenceVerifier:
         if self.policy_verifier is None or self.evidence_verifier is None:
             return GateResult(False, "JUSTICE_EVIDENCE_VERIFIERS_NOT_CONFIGURED")
         try:
-            if not self.policy_verifier(commitment, proposal):
+            if self.policy_verifier(commitment, proposal) is not True:
                 return GateResult(False, "JUSTICE_POLICY_NOT_VERIFIED")
-            if not self.evidence_verifier(commitment, proposal):
+            if self.evidence_verifier(commitment, proposal) is not True:
                 return GateResult(False, "JUSTICE_EVIDENCE_NOT_VERIFIED")
         except Exception:
             return GateResult(False, "JUSTICE_VERIFICATION_ERROR")
