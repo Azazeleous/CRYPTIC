@@ -45,3 +45,16 @@
 - Per-device policy, consent, revocation, and audit.
 
 No phase is considered complete without tests and evidence in the capability ledger.
+
+
+## Phase 7 — GCF consensus and ADAM/APEX acceptance
+
+- GCF/1 proposal/vote engine, strict weighted quorum, vote locks, PREVOTE/PRECOMMIT and finality certificate — implemented and CI-verified after PR #28.
+- Independent finality verifier — added as a separate implementation; ADAM/APEX consumes it; branch CI pending.
+- HCCGN proof-provider adapter — implemented fail-closed; canonical network header/digest/target specification and known-answer vectors remain a blocking dependency.
+- GOD and GAIA-JUSTICE adapters — fail-closed contracts exist; production policy/evidence providers and GOD capability authorization remain open.
+- ADAM/APEX transactional commitment and recovery — implemented; HTTP commit/head/recovery routes added; branch CI pending.
+- Direct validator peer transport — mutual TLS, peer certificate allowlist, signed envelopes and replay protection added; peer discovery/gossip, round changes, live multi-node interoperability and security review remain open.
+- Conformance tests — independent certificate, canonical serialization, peer, HTTP, ADAM and recovery tests added; branch CI pending.
+
+Phase 7 is not production-complete until the canonical HCCGN profile is independently implemented and vectors pass, GOD and justice providers are connected, validator liveness/recovery is tested across real nodes, and ADAM durability/security review is complete.
