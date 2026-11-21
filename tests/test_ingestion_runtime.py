@@ -289,8 +289,10 @@ class BoundedRuntimeTests(unittest.TestCase):
         self.registry.register(DeadlineSignalingAdapter("rpc-deadline"))
         with BoundedIngestionRuntime(self.registry) as runtime:
             report = runtime.run(self.journal, ["rpc-deadline"])
-        self.assertEqual(report["status"], "timed_out")
-        self.assertEqual(report["sources"][0]["error_kind"], "deadline_exceeded")
+            self.assertEqual(report["status"], "timed_out")
+            self.assertEqual(report["sources"][0]["error_kind"], "deadline_exceeded")
+            with self.assertRaises(IngestionRuntimeError):
+                runtime.run(self.journal, ["rpc-deadline"])
 
     def test_report_discloses_deadline_scope_and_bounded_submission(self):
         for name in ("a", "b", "c"):
