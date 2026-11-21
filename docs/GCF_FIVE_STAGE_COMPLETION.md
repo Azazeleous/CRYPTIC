@@ -16,13 +16,13 @@ It does not instantiate \`GCFEngine\` or call its private proposal/vote validati
 
 ## Stage 2 — Canonical HCCGN proof integration
 
-Status: adapter contract implemented; canonical HCCGN network profile BLOCKED pending source specification.
+Status: new canonical HCCGN-WORK/1 profile and reference verifier implemented; conformance tests added; CI verification pending.
 
 Added \`src/consensus/hccgn_adapter.py\`. It requires a separately implemented provider to resolve the proposal's proof hash, verify the canonical work header and digest, apply the target comparison, and return a profile identifier and matching proof commitment. Missing providers, missing pinned profile IDs, mismatched profiles, and mismatched proof hashes are denied.
 
 The supplied project source \`Correct HCCGN Integration Equation (2).txt\` specifies computational graph and residue-space context, including primary modulus 97,152, totient 28,160, compact modulus 1,518, totient 440, and forward/reverse coprime traversal. It explicitly distinguishes reversible index reconstruction from SHA-256 inversion. The supplied \`Branch · Valuate Ancestry Solver\` material describes a shared computation record containing input, algorithm parameters, hash output, quotient/residue, stride/inverse, candidate result, and target.
 
-Those sources do not specify the HCCGN network work-header byte serialization, exact digest preimage, digest algorithm/round count, target byte order/comparison, canonical parameter encoding, or known-answer vectors. The existing 80-byte Bitcoin SHA-256d scanner is not an HCCGN substitute. Therefore no real HCCGN proof is accepted by this branch until the canonical profile is supplied and independently implemented.
+The uploaded sources still do not specify a historical network header, so HCCGN-WORK/1 is explicitly a newly defined protocol profile rather than a claim about prior wire behavior. The existing 80-byte Bitcoin SHA-256d scanner remains separate and is not substituted. Conformance tests must pass before this stage is marked E3; production activation additionally requires authenticated proof storage, active-target policy resolution, GOD-authorized epoch/height activation, and cross-language interoperability.
 
 ## Stage 3 — Distributed validator networking
 
