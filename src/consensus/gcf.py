@@ -318,7 +318,7 @@ class GCFEngine:
             result = self._gate(gate, *args)
             if not result.allowed:
                 raise GCFError(f"{code}:{result.reason}")
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 db.execute(
@@ -413,7 +413,7 @@ class GCFEngine:
         digest = vote.get("candidate_digest") if isinstance(vote, Mapping) else None
         if not isinstance(digest, str):
             raise GCFError("candidate_digest_required")
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 proposal = self._proposal(db, digest)
@@ -463,7 +463,7 @@ class GCFEngine:
                 "quorum_weight": self.validator_set.quorum_weight()}
 
     def finalize(self, candidate_digest: str) -> dict:
-        with self._lock, self._connect() as db:
+        with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 proposal = self._proposal(db, candidate_digest)
