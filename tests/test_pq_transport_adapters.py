@@ -122,7 +122,7 @@ class AdapterRegistryTests(unittest.TestCase):
         registry.register(weak)
         registry.prepare("weak")
         forged = AdapterSelection(
-            "weak", "https", "ML-KEM-768", False, False, True, True
+            "weak", "https", "ML-KEM-768", False, False, False, False
         )
         with self.assertRaises(NoCompatibleAdapter):
             registry.exchange(
