@@ -196,6 +196,32 @@ class FourLaneRegtestTests(unittest.TestCase):
             context=RECEIPT_CONTEXT,
         ))
 
+    def test_receipt_signing_that_crosses_deadline_is_not_accepted(self):
+        import time
+        from src.ingestion.pq_security import MLDSA65
+
+        signing_pair = MLDSA65.keygen()
+        original_sign = MLDSA65.sign
+
+        def delayed_sign(*args, **kwargs):
+            time.sleep(0.25)
+            return original_sign(*args, **kwargs)
+
+        with patch.object(MLDSA65, "sign", side_effect=delayed_sign):
+            report = run_four_lane_regtest(
+                self.header_prefix,
+                nonce_start=0,
+                nonce_end=16,
+                target=(1 << 256) - 1,
+                time_budget_seconds=0.2,
+                receipt_signing_secret_key=signing_pair.secret_key,
+                receipt_signing_public_key=signing_pair.public_key,
+            )
+        self.assertEqual(report["status"], "timed_out")
+        self.assertEqual(report["winner_count"], 0)
+        self.assertIsNone(report["winner"])
+        self.assertIsNone(report["receipt"])
+
     def test_receipt_signing_requires_both_key_halves(self):
         with self.assertRaisesRegex(RegtestError, "keypair_must_be_supplied_together"):
             run_four_lane_regtest(
