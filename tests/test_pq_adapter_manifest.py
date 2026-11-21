@@ -15,6 +15,7 @@ from src.ingestion.pq_adapter_manifest import (
 class Adapter:
     def __init__(self, adapter_id="https-main"):
         self.adapter_id = adapter_id
+        self.closed = 0
         self.capabilities = AdapterCapabilities(
             protocols=frozenset({"https", "wss"}),
             kem_algorithms=frozenset({"ML-KEM-768"}),
@@ -32,7 +33,7 @@ class Adapter:
         return payload
 
     def close(self):
-        pass
+        self.closed += 1
 
 
 class AdapterManifestTests(unittest.TestCase):
@@ -77,6 +78,16 @@ class AdapterManifestTests(unittest.TestCase):
         registry.register_verified(self.adapter, self.signed, self.trust)
         selected = registry.select(protocol="https")
         self.assertEqual(selected.adapter_id, "https-main")
+
+    def test_registry_invalidates_prepared_adapter_after_signer_revocation(self):
+        registry = AdapterRegistry()
+        registry.register_verified(self.adapter, self.signed, self.trust)
+        registry.prepare(self.adapter.adapter_id)
+        self.assertTrue(self.trust.revoke(self.key_id))
+        with self.assertRaises(NoCompatibleAdapter):
+            registry.select(protocol="https")
+        self.assertEqual(self.adapter.closed, 1)
+        self.assertFalse(verify_signed_adapter_manifest(self.signed, self.trust))
 
     def test_registry_rejects_manifest_for_different_adapter(self):
         registry = AdapterRegistry()
