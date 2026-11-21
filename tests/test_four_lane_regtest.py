@@ -84,8 +84,10 @@ class FourLaneRegtestTests(unittest.TestCase):
             completed = next(future for future in pending if future.lane == 0)
             return {completed}, set(pending) - {completed}
 
-        with patch("src.ingestion.four_lane_regtest.ThreadPoolExecutor", FakeExecutor), \\
-             patch("src.ingestion.four_lane_regtest.wait", fake_wait):
+        with (
+            patch("src.ingestion.four_lane_regtest.ThreadPoolExecutor", FakeExecutor),
+            patch("src.ingestion.four_lane_regtest.wait", fake_wait),
+        ):
             report = run_four_lane_regtest(
                 self.header_prefix,
                 nonce_start=0,
