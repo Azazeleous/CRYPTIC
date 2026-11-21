@@ -88,7 +88,7 @@ Cloudflare Tunnel is a suitable origin-routing layer for a private service: it e
 - [ ] Byte-exact NIST ACVP known-answer tests for ML-KEM-768 and ML-DSA-65.
 - [ ] Independent cross-provider interoperability and cryptographic security review.
 - [x] Optional ML-DSA-65 signed regtest receipts with in-process verification.
-- [ ] Signed adapter-manifest verification and public-key trust-anchor management.
+- [x] ML-DSA-65 signed adapter manifests, pinned trust anchors, revocation, and verified registry enrollment.
 - [ ] Concrete HTTPS/WebSocket/WebRTC adapters and protocol conformance tests.
 - [ ] Bitcoin Core local regtest node integration and accepted-block verification.
 - [ ] Public-page CSP/dependency audit and SOS visual integration.
