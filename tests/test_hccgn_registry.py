@@ -35,6 +35,15 @@ class HCCGNRegistryTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    class MemoryAnchor:
+        def __init__(self): self.values = {}
+        def read_sequence(self, network_id): return self.values.get(network_id)
+        def advance_sequence(self, network_id, sequence, policy_hash):
+            current = self.values.get(network_id)
+            if current is not None and sequence <= current[0]: return False
+            self.values[network_id] = (sequence, policy_hash)
+            return True
+
     def signed_policy(self, **overrides):
         body = {
             "schema": POLICY_SCHEMA, "profile_id": "HCCGN-WORK/1",
@@ -62,6 +71,37 @@ class HCCGNRegistryTests(unittest.TestCase):
         with self.assertRaisesRegex(HCCGNRegistryError, "persistent_database_required"):
             HCCGNActiveTargetPolicy(":memory:", trusted_public_key=self.public,
                                     trusted_signer_id="GOD-ROOT-1", clock=lambda: self.now)
+
+    def test_external_sequence_anchor_required_and_enforced(self):
+        no_anchor = HCCGNActiveTargetPolicy(
+            Path(self.temp.name) / "anchored-required.sqlite3",
+            trusted_public_key=self.public, trusted_signer_id="GOD-ROOT-1",
+            clock=lambda: self.now, require_external_anchor=True,
+        )
+        with self.assertRaisesRegex(HCCGNRegistryError, "external_sequence_anchor_required"):
+            no_anchor.install(self.signed_policy())
+        anchor = self.MemoryAnchor()
+        anchored = HCCGNActiveTargetPolicy(
+            Path(self.temp.name) / "anchored.sqlite3",
+            trusted_public_key=self.public, trusted_signer_id="GOD-ROOT-1",
+            clock=lambda: self.now, sequence_anchor=anchor,
+            require_external_anchor=True,
+        )
+        anchored.install(self.signed_policy())
+        self.assertEqual(anchored.resolve({
+            "network_id": "gaia-testnet", "height": 1, "epoch": 1,
+            "issued_at": self.now,
+        }), self.target)
+        restored_old = HCCGNActiveTargetPolicy(
+            Path(self.temp.name) / "restored-old.sqlite3",
+            trusted_public_key=self.public, trusted_signer_id="GOD-ROOT-1",
+            clock=lambda: self.now, sequence_anchor=anchor,
+            require_external_anchor=True,
+        )
+        self.assertIsNone(restored_old.resolve({
+            "network_id": "gaia-testnet", "height": 1, "epoch": 1,
+            "issued_at": self.now,
+        }))
 
     def test_proof_store_content_addressed_round_trip_and_integrity(self):
         proof = self.proof()

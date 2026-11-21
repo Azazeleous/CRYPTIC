@@ -14,7 +14,7 @@ import sqlite3
 import time
 from pathlib import Path
 from contextlib import closing
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
@@ -33,6 +33,12 @@ POLICY_FIELDS = {
 
 class HCCGNRegistryError(ValueError):
     """A proof-store or authenticated target-policy failure."""
+
+
+class HCCGNSequenceAnchor(Protocol):
+    """Externally protected monotonic checkpoint for policy sequence/hash."""
+    def read_sequence(self, network_id: str) -> tuple[int, str] | None: ...
+    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool: ...
 
 
 def _canonical(value: Any) -> bytes:
@@ -147,7 +153,8 @@ class HCCGNActiveTargetPolicy:
     """
     def __init__(self, database: str | os.PathLike[str], *,
                  trusted_public_key: bytes, trusted_signer_id: str,
-                 clock=time.time):
+                 clock=time.time, sequence_anchor: HCCGNSequenceAnchor | None = None,
+                 require_external_anchor: bool = False):
         if not isinstance(trusted_public_key, bytes) or len(trusted_public_key) != 32:
             raise HCCGNRegistryError("trusted_public_key_invalid")
         if not isinstance(trusted_signer_id, str) or not trusted_signer_id:
@@ -161,7 +168,11 @@ class HCCGNActiveTargetPolicy:
             )
         self.public_key = Ed25519PublicKey.from_public_bytes(trusted_public_key)
         self.signer_id = trusted_signer_id
+        if not isinstance(require_external_anchor, bool):
+            raise HCCGNRegistryError("require_external_anchor_invalid")
         self.clock = clock
+        self.sequence_anchor = sequence_anchor
+        self.require_external_anchor = require_external_anchor
         with closing(_connect(self.database)) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS hccgn_target_policies (
@@ -216,6 +227,34 @@ class HCCGNActiveTargetPolicy:
         network = policy["network_id"]
         seq = policy["sequence"]
         encoded = _canonical(dict(snapshot))
+        anchor = self.sequence_anchor
+        if self.require_external_anchor and anchor is None:
+            raise HCCGNRegistryError("external_sequence_anchor_required")
+        if anchor is not None:
+            try:
+                anchored = anchor.read_sequence(network)
+                if anchored is None:
+                    if anchor.advance_sequence(network, seq, digest) is not True:
+                        raise HCCGNRegistryError("external_sequence_anchor_update_failed")
+                else:
+                    if not isinstance(anchored, tuple) or len(anchored) != 2:
+                        raise HCCGNRegistryError("external_sequence_anchor_response_invalid")
+                    anchored_sequence = _uint(anchored[0], "anchor_sequence", 1)
+                    anchored_hash = anchored[1]
+                    if not isinstance(anchored_hash, str) or len(anchored_hash) != 64:
+                        raise HCCGNRegistryError("external_sequence_anchor_response_invalid")
+                    try:
+                        bytes.fromhex(anchored_hash)
+                    except ValueError as exc:
+                        raise HCCGNRegistryError("external_sequence_anchor_response_invalid") from exc
+                    if seq < anchored_sequence or (seq == anchored_sequence and digest != anchored_hash):
+                        raise HCCGNRegistryError("external_sequence_anchor_rollback")
+                    if seq > anchored_sequence and anchor.advance_sequence(network, seq, digest) is not True:
+                        raise HCCGNRegistryError("external_sequence_anchor_update_failed")
+            except HCCGNRegistryError:
+                raise
+            except Exception as exc:
+                raise HCCGNRegistryError("external_sequence_anchor_unavailable") from exc
         conn = _connect(self.database)
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -259,6 +298,27 @@ class HCCGNActiveTargetPolicy:
             return None
         if not isinstance(network, str) or not network:
             return None
+        anchor = self.sequence_anchor
+        if self.require_external_anchor and anchor is None:
+            return None
+        if anchor is not None:
+            try:
+                anchored = anchor.read_sequence(network)
+                if not isinstance(anchored, tuple) or len(anchored) != 2:
+                    return None
+                anchored_sequence = _uint(anchored[0], "anchor_sequence", 1)
+                anchored_hash = anchored[1]
+                if not isinstance(anchored_hash, str) or len(anchored_hash) != 64:
+                    return None
+                with closing(_connect(self.database)) as check_conn:
+                    latest = check_conn.execute(
+                        "SELECT sequence,policy_hash FROM hccgn_target_policies WHERE network_id=? ORDER BY sequence DESC LIMIT 1",
+                        (network,),
+                    ).fetchone()
+                if latest is None or latest[0] != anchored_sequence or latest[1] != anchored_hash:
+                    return None
+            except Exception:
+                return None
         with closing(_connect(self.database)) as conn:
             row = conn.execute(
                 """SELECT target,issued_at,expires_at FROM hccgn_target_policies
