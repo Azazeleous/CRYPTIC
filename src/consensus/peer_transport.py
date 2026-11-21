@@ -17,7 +17,7 @@ from typing import Any, Mapping
 
 from src.consensus.gcf import (
     GCFError, VOTE_DOMAIN, ValidatorSet, canonical_bytes,
-    sign_object, verify_object,
+    public_key_hex, sign_object, verify_object,
 )
 
 P2P_SCHEMA = "GCF-P2P/1"
@@ -56,6 +56,8 @@ class GCFPeerNode:
                  replay_db_path: str | Path, clock=time.time):
         if node_id not in validator_set.validators:
             raise PeerTransportError("LOCAL_NODE_NOT_IN_VALIDATOR_SET")
+        if public_key_hex(private_key_hex) != validator_set.validators[node_id].public_key_hex:
+            raise PeerTransportError("LOCAL_PRIVATE_KEY_DOES_NOT_MATCH_VALIDATOR_ID")
         self.engine = engine
         self.validator_set = validator_set
         self.node_id = node_id
