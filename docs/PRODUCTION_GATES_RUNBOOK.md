@@ -84,3 +84,59 @@ Each provider signs a response bound to the exact request digest, signer identit
 CI contract tests verify the client cryptography, request binding, anchor compare-and-swap semantics, remote signer output, mutual-TLS loopback transport, and ADAM process-crash recovery. They do not certify external services or production hardware.
 
 Production activation is permitted only when all five gates have signed, independently reviewable evidence. Until then, configure all missing providers as absent and keep proposal acceptance fail-closed.
+
+
+## Runtime composition example
+
+The following shows the software wiring only. The endpoint URLs, public keys, signer IDs, and certificate paths must come from the independently administered production services; do not substitute test keys or guessed endpoints.
+
+~~~python
+from src.consensus.runtime import build_consensus_runtime
+from src.governance.remote_providers import (
+    GODHTTPSGate,
+    HTTPSJusticeProviders,
+    HTTPSSequenceAnchor,
+    SignedHTTPSDecisionClient,
+)
+
+god_client = SignedHTTPSDecisionClient(
+    GOD_DECISION_URL,
+    signer_id=GOD_SIGNER_ID,
+    trusted_public_key=GOD_PUBLIC_KEY,
+)
+anchor = HTTPSSequenceAnchor(
+    SEQUENCE_ANCHOR_URL,
+    signer_id=ANCHOR_SIGNER_ID,
+    trusted_public_key=ANCHOR_PUBLIC_KEY,
+)
+justice = HTTPSJusticeProviders(
+    policy=SignedHTTPSDecisionClient(
+        JUSTICE_POLICY_URL,
+        signer_id=JUSTICE_POLICY_SIGNER_ID,
+        trusted_public_key=JUSTICE_POLICY_PUBLIC_KEY,
+    ),
+    evidence=SignedHTTPSDecisionClient(
+        JUSTICE_EVIDENCE_URL,
+        signer_id=JUSTICE_EVIDENCE_SIGNER_ID,
+        trusted_public_key=JUSTICE_EVIDENCE_PUBLIC_KEY,
+    ),
+)
+
+runtime = build_consensus_runtime(
+    network_id=NETWORK_ID,
+    epoch=VALIDATOR_EPOCH,
+    validators=AUTHENTICATED_VALIDATOR_SET,
+    data_dir=PRIVATE_RUNTIME_DATA_DIR,
+    god_trust_root_path=GOD_ROOT_PIN_FILE,
+    god_signer_id=GOD_SIGNER_ID,
+    god_trust_root_fingerprint=GOD_ROOT_FINGERPRINT_FROM_INDEPENDENT_CHANNEL,
+    sequence_anchor=anchor,
+    god_gate=GODHTTPSGate(god_client),
+    policy_evidence_verifier=justice.verify_policy,
+    justice_evidence_verifier=justice.verify_evidence,
+    consensus_endpoint=CONSENSUS_ENDPOINT,
+    require_external_anchor=True,
+)
+~~~
+
+Validator proposal/vote signing is a separate call path. Construct HTTPSHSMEd25519Signer with the approved HSM endpoint, mTLS client certificate/private key, key ID, and independently pinned validator public key. Pass that signer to make_proposal_with_signer() and make_vote_with_signer(). The consensus process receives signatures and public keys, not raw validator private-key bytes.
