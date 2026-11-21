@@ -257,9 +257,17 @@ class BoundedIngestionRuntime:
         if len(prepared) > capacity:
             raise IngestionRuntimeError("selected prepared adapters exceed bounded worker window")
 
+        # Lease every adapter with lifecycle hooks. Some adapters need cleanup
+        # without a separate preparation step; omitting those would leak their
+        # transport resources on both waiting and non-waiting shutdown.
+        managed = [
+            item for item in adapters
+            if callable(getattr(item, "prepare", None))
+            or callable(getattr(item, "close", None))
+        ]
         newly_leased: list[object] = []
         try:
-            for adapter in prepared:
+            for adapter in managed:
                 key = id(adapter)
                 if key not in self._leased_adapters:
                     _lease_adapter(adapter)  # Startup remains before collection_started.
