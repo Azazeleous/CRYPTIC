@@ -73,7 +73,7 @@ gates before commitment. It checks that:
 - the proposal parent hash equals the current committed state hash;
 - the certificate and validation receipt are durably stored in SQLite.
 
-The database uses WAL mode and FULL synchronous writes. This is a local durable
+The database uses WAL mode and FULL synchronous writes. Validator vote locks are persisted by network, epoch, height, round, vote phase, and validator identity to reject equivocation. Proposal expiry is enforced on vote admission; historical finality certificates remain verifiable after expiry. SQLite connections are closed after each operation. The HTTP JSON parser rejects duplicate object keys and enforces a 1 MiB request bound. This is a local durable
 database implementation, not a claim of WORM storage, distributed replication,
 or crash-proof operation on every filesystem.
 
