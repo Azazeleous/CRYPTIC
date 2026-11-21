@@ -198,6 +198,7 @@ def mine_trophy_ladder(
         raise ValueError("attempt budget must be positive and remain within the 32-bit nonce space")
 
     run_started = int(time.time())
+    monotonic_started = time.perf_counter()
     run_id = secrets.token_hex(16)
     header = build_trophy_header(challenge_id, seed, ruleset_id, run_started, run_id)
     stop_nonce = start_nonce + attempts
@@ -254,7 +255,7 @@ def mine_trophy_ladder(
         key=lambda item: item.nonce,
     )
     run_finished = int(time.time())
-    elapsed = max(time.perf_counter() - (run_started), 1e-12)
+    elapsed = max(time.perf_counter() - monotonic_started, 1e-12)
     attempts_per_second = attempts / elapsed
 
     lane_evidence = {
