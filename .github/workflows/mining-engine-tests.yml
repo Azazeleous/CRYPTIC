@@ -29,5 +29,7 @@ jobs:
           go-version: "1.22"
       - name: Run independent Go HCCGN conformance vectors
         run: cd conformance/go && go test ./...
+      - name: Run HCCGN midstate kernel benchmark and reference check
+        run: python scripts/benchmark_hccgn_work.py --attempts 100000 --start-nonce 0
       - name: Run bounded benchmark
         run: python scripts/benchmark_sha256d.py --attempts 1000000 --workers 2 --chunk-size 50000
