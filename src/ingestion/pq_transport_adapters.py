@@ -7,6 +7,7 @@ must delegate cryptography to a vetted implementation of the named standard.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import threading
 import time
 from typing import Protocol
@@ -152,7 +153,10 @@ class AdapterRegistry:
     ) -> bytes:
         if not isinstance(payload, bytes):
             raise TypeError("payload_must_be_bytes")
-        if not isinstance(deadline_monotonic, (int, float)) or deadline_monotonic <= 0:
+        if (isinstance(deadline_monotonic, bool)
+                or not isinstance(deadline_monotonic, (int, float))
+                or not math.isfinite(deadline_monotonic)
+                or deadline_monotonic <= 0):
             raise ValueError("absolute_monotonic_deadline_required")
         with self._lock:
             adapter = self._adapters.get(selection.adapter_id)
@@ -166,8 +170,7 @@ class AdapterRegistry:
             if time.monotonic() >= deadline_monotonic:
                 raise AdapterDeadlineExceeded("deadline_expired_before_dispatch")
             if selection.adapter_id not in self._prepared:
-                adapter.prepare()
-                self._prepared.add(selection.adapter_id)
+                raise AdapterError("adapter_must_be_prepared_before_exchange")
 
         response = adapter.exchange(payload, deadline_monotonic=deadline_monotonic)
         if time.monotonic() >= deadline_monotonic:
