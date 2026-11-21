@@ -102,6 +102,9 @@ class AdapterRegistry:
             try:
                 if adapter is not None:
                     adapter.close()
+            except Exception:
+                # Revocation remains fail-closed even if best-effort cleanup fails.
+                pass
             finally:
                 self._prepared.discard(adapter_id)
         return False
@@ -130,9 +133,19 @@ class AdapterRegistry:
             raise ValueError("adapter_manifest_signature_invalid")
         if not manifest_matches_adapter(signed_manifest, adapter):
             raise ValueError("manifest_adapter_mismatch")
-        self.register(adapter)
+        adapter_id = getattr(adapter, "adapter_id", "")
+        capabilities = getattr(adapter, "capabilities", None)
+        if not isinstance(adapter_id, str) or not adapter_id.strip():
+            raise ValueError("adapter_id_required")
+        if not isinstance(capabilities, AdapterCapabilities):
+            raise ValueError("adapter_capabilities_required")
         with self._lock:
-            self._verified_signers[adapter.adapter_id] = (
+            if adapter_id in self._adapters:
+                raise ValueError("adapter_id_already_registered")
+            # Publish adapter and signer binding atomically; no unsigned selection
+            # window exists between registration and trust metadata installation.
+            self._adapters[adapter_id] = adapter
+            self._verified_signers[adapter_id] = (
                 trust_store, signed_manifest.signer_key_id
             )
 
