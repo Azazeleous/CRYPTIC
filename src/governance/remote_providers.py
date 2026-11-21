@@ -10,6 +10,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
+import stat
 import secrets
 import time
 import urllib.error
@@ -321,8 +323,17 @@ class HTTPSSequenceAnchor:
 def load_independently_pinned_root(path: str, *, expected_fingerprint: str,
                                    expected_signer_id: str) -> bytes:
     """Load public root bytes while requiring a fingerprint supplied separately."""
+    descriptor = -1
     try:
-        with open(path, "rb") as handle:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise RemoteProviderError("root_pin_must_be_regular_file")
+        if info.st_mode & 0o022:
+            raise RemoteProviderError("root_pin_group_or_world_writable")
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            raise RemoteProviderError("root_pin_owner_mismatch")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
             raw = handle.read(4097)
         if len(raw) > 4096:
             raise RemoteProviderError("root_pin_file_too_large")
@@ -331,6 +342,9 @@ def load_independently_pinned_root(path: str, *, expected_fingerprint: str,
         raise
     except (OSError, json.JSONDecodeError) as exc:
         raise RemoteProviderError("root_pin_file_unavailable_or_invalid") from exc
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
     if (not isinstance(record, dict)
             or set(record) != {"schema", "signer_id", "public_key_hex"}
             or record["schema"] != "CRYPTIC-GOD-ROOT-PIN/1"
