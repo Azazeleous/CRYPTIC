@@ -26,7 +26,7 @@ class ResearchCommitmentTests(unittest.TestCase):
     def test_nan_and_non_json_values_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "unsupported_canonical_value"):
             canonical_experiment_bytes({"value": float("nan")})
-        with self.assertRaisesRegex(ValueError, "finite_json"):
+        with self.assertRaisesRegex(ValueError, "unsupported_canonical_value"):
             canonical_experiment_bytes({"value": object()})
 
     def test_canonical_metadata_rejects_floats_and_unsafe_integers(self):
