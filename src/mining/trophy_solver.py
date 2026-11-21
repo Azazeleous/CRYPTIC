@@ -16,7 +16,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from .gaia_fabric import build_lane_plan, compute_difficulty_stratified_guarantees
+from .gaia_fabric import (
+    build_lane_plan,
+    compute_difficulty_stratified_guarantees,
+    discrete_divergence,
+    hodge_star_sign,
+    schlafli_cycle,
+)
 from .receipt_wallet import append_to_wallet, create_receipt
 from .sha256d import (
     Candidate,
@@ -245,7 +251,7 @@ def mine_trophy_ladder(
     reverse_candidates = list(reverse_result["candidates"])
 
     # L2 and L4 are shadow lanes: they independently recompute every candidate.
-    l2_verified = all(verify_candidate(header, candidate) for candidate in forward_candidates)
+    l2_verified = all(verify_candidate(header, candidate) for candidate in reversed(forward_candidates))
     l4_verified = all(verify_candidate(header, candidate) for candidate in reverse_candidates)
     if not l2_verified or not l4_verified:
         raise RuntimeError("shadow-lane verification failed; no trophy receipts will be promoted")
@@ -307,6 +313,18 @@ def mine_trophy_ladder(
         attempts=attempts,
         confidence=confidence,
     )
+    star_cycle = schlafli_cycle(5, 2)
+    geometry_attestation = {
+        "schlafli_symbol": "{5/2}",
+        "schlafli_cycle": list(star_cycle),
+        "unit_cycle_divergence": list(discrete_divergence(5, 2, [1] * 5)),
+        "hodge_star_signs": {
+            "dimension_3_degree_1": hodge_star_sign(3, 1),
+            "dimension_4_degree_1": hodge_star_sign(4, 1),
+            "dimension_4_degree_2": hodge_star_sign(4, 2),
+        },
+        "scope": "discrete graph and Hodge-star parity checks only; no full manifold cohomology claim",
+    }
     wallet_path = Path(wallet_file).expanduser()
     manifests_path = Path(manifest_dir).expanduser()
     trophies: list[dict[str, Any]] = []
@@ -340,6 +358,7 @@ def mine_trophy_ladder(
             "difficulty_guarantees": guarantees,
             "lane_evidence": lane_evidence,
             "arithmetic_fabric": lane_plan,
+            "geometry_attestation": geometry_attestation,
             "routing_semantics": "routing metadata only; every nonce in the assigned interval is scanned exactly once",
         }
         receipt = create_receipt(
