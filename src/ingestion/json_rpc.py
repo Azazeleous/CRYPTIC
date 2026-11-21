@@ -7,14 +7,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import itertools
-import json
+import math
 import re
 import time
 from typing import Any, Mapping
 from threading import Lock
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+from .transport_codec import (
+    TransportCodecError,
+    canonical_json_bytes,
+    decode_json_document,
+)
+
+from .supervised_http import (
+    SupervisedHttpTransport,
+    SupervisedTransportDeadlineExceeded,
+    SupervisedTransportError,
+)
 
 from .source_registry import (
     HealthReport,
@@ -31,6 +42,8 @@ class JsonRpcError(SourceAdapterError):
 
 class JsonRpcDeadlineExceeded(TimeoutError):
     """The shared monotonic deadline expired during transport coordination."""
+
+    deadline_exceeded = True
 
 
 class JsonRpcRemoteError(JsonRpcError):
@@ -95,11 +108,6 @@ class _RateGate:
             self._lock.release()
 
 
-class _NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, response, code, message, headers, new_url):
-        return None
-
-
 class JsonRpcClient:
     """HTTP JSON-RPC 2.0 client restricted to a caller-supplied method set."""
 
@@ -125,6 +133,8 @@ class JsonRpcClient:
             parsed.scheme == "http" and hostname in {"localhost", "127.0.0.1", "::1"}
         ):
             raise SourceRegistryError("JSON-RPC requires HTTPS or loopback HTTP")
+        if len(endpoint) > 2_048:
+            raise SourceRegistryError("JSON-RPC endpoint exceeds maximum length")
         if not hostname or parsed.username is not None or parsed.password is not None:
             raise SourceRegistryError("JSON-RPC endpoint host is invalid or embeds credentials")
         if parsed.query or parsed.fragment:
@@ -137,14 +147,27 @@ class JsonRpcClient:
         self.endpoint = endpoint
         self.allowed_methods = allowed_methods
         self._rate_gate = _RateGate(self.policy.rate_limit_per_minute)
+        self._supervised_transport: SupervisedHttpTransport | None = None
+
+    def prepare(self) -> None:
+        """Start the whole-request worker before the collection deadline."""
+        if self._supervised_transport is None:
+            self._supervised_transport = SupervisedHttpTransport()
+        if not self._supervised_transport.healthy:
+            raise SupervisedTransportError("worker_unavailable")
+
+    def close(self) -> None:
+        if self._supervised_transport is not None:
+            self._supervised_transport.close()
+            self._supervised_transport = None
 
     @staticmethod
     def parse_response(payload: bytes, expected_id: int, max_bytes: int) -> Any:
-        if not isinstance(payload, bytes) or len(payload) > max_bytes:
-            raise JsonRpcError("response_size_invalid")
         try:
-            document = json.loads(payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+            document = decode_json_document(payload, max_bytes=max_bytes)
+        except TransportCodecError as exc:
+            if str(exc) == "payload_too_large":
+                raise JsonRpcError("response_size_invalid") from None
             raise JsonRpcError("response_json_invalid") from None
         if not isinstance(document, dict) or document.get("jsonrpc") != "2.0":
             raise JsonRpcError("response_envelope_invalid")
@@ -166,18 +189,33 @@ class JsonRpcClient:
         return document["result"]
 
     def call(self, method: str, params: list[Any] | None = None) -> Any:
-        return self._call(method, params, deadline_monotonic=None)
+        # Cold worker startup has its own bounded startup timeout and occurs
+        # before the direct request's timeout budget begins.
+        if not isinstance(method, str) or method not in self.allowed_methods:
+            raise JsonRpcError("rpc_method_not_allowlisted")
+        self.prepare()
+        return self._call(
+            method, params,
+            deadline_monotonic=time.monotonic() + self.policy.timeout_seconds,
+        )
 
     def call_until(self, method: str, params: list[Any] | None = None, *,
                    deadline_monotonic: float) -> Any:
-        if isinstance(deadline_monotonic, bool) or not isinstance(deadline_monotonic, (int, float)):
+        """Execute against a prepared worker and caller-owned absolute deadline."""
+        if (isinstance(deadline_monotonic, bool)
+                or not isinstance(deadline_monotonic, (int, float))
+                or not math.isfinite(deadline_monotonic)):
             raise JsonRpcError("rpc_deadline_invalid")
         if deadline_monotonic <= time.monotonic():
             raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
+        if self._supervised_transport is None:
+            raise JsonRpcError("rpc_transport_not_prepared")
         return self._call(method, params, deadline_monotonic=float(deadline_monotonic))
 
     def _call(self, method: str, params: list[Any] | None, *,
               deadline_monotonic: float | None) -> Any:
+        if deadline_monotonic is None:
+            raise JsonRpcError("rpc_deadline_required")
         if not isinstance(method, str) or method not in self.allowed_methods:
             raise JsonRpcError("rpc_method_not_allowlisted")
         if params is None:
@@ -185,16 +223,17 @@ class JsonRpcClient:
         if not isinstance(params, list):
             raise JsonRpcError("rpc_params_must_be_array")
         request_id = next(self._ids)
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
-            separators=(",", ":"),
-        ).encode("utf-8")
-        request = Request(
-            self.endpoint,
-            data=body,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
+        try:
+            body = canonical_json_bytes(
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                max_bytes=65_536,
+            )
+        except TransportCodecError as exc:
+            if str(exc) == "encoded_payload_too_large":
+                raise JsonRpcError("request_size_invalid") from None
+            raise JsonRpcError("rpc_params_invalid") from None
+        if self._supervised_transport is None or not self._supervised_transport.healthy:
+            raise JsonRpcError("rpc_transport_not_prepared")
         for attempt in range(self.policy.max_retries + 1):
             self._rate_gate.wait(deadline_monotonic=deadline_monotonic)
             timeout = self.policy.timeout_seconds
@@ -204,12 +243,19 @@ class JsonRpcClient:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 timeout = min(timeout, remaining)
             try:
-                opener = build_opener(_NoRedirect())
-                with opener.open(request, timeout=timeout) as response:
-                    payload = response.read(self.policy.max_response_bytes + 1)
+                assert self._supervised_transport is not None
+                status, payload = self._supervised_transport.request(
+                    self.endpoint, body, timeout_seconds=timeout,
+                    max_response_bytes=self.policy.max_response_bytes,
+                    deadline_monotonic=deadline_monotonic,
+                )
+                if status != 200:
+                    raise HTTPError(self.endpoint, status, "http_status", None, None)
                 if deadline_monotonic is not None and time.monotonic() >= deadline_monotonic:
                     raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded")
                 return self.parse_response(payload, request_id, self.policy.max_response_bytes)
+            except SupervisedTransportDeadlineExceeded:
+                raise JsonRpcDeadlineExceeded("rpc_deadline_exceeded") from None
             except HTTPError as exc:
                 retryable = exc.code == 429 or 500 <= exc.code <= 599
                 if not retryable or attempt >= self.policy.max_retries:
@@ -237,9 +283,8 @@ _READ_ONLY_METHODS = _EVM_METHODS | _SOLANA_METHODS
 class EvmReadOnlyAdapter:
     """EVM chain identity and finalized-head observation; no write methods."""
 
-    # urllib's resolver can block outside the socket timeout. Do not advertise
-    # this adapter as runtime-deadline-enforced until resolver isolation exists.
-    deadline_enforced = False
+    # All deadline-aware calls use the supervised whole-request process.
+    deadline_enforced = True
 
     def __init__(
         self,
@@ -260,6 +305,12 @@ class EvmReadOnlyAdapter:
         )
         self.descriptor.validate()
         self.client = JsonRpcClient(endpoint, allowed_methods=_EVM_METHODS, policy=policy)
+
+    def prepare(self) -> None:
+        self.client.prepare()
+
+    def close(self) -> None:
+        self.client.close()
 
     @staticmethod
     def _hex_quantity(value: Any, field: str) -> int:
@@ -316,8 +367,13 @@ class EvmReadOnlyAdapter:
 
     def health_check(self) -> HealthReport:
         started = time.monotonic()
+        probe = JsonRpcClient(
+            self.client.endpoint,
+            allowed_methods=self.client.allowed_methods,
+            policy=self.client.policy,
+        )
         try:
-            chain_id = self._hex_quantity(self.client.call("eth_chainId"), "chain_id")
+            chain_id = self._hex_quantity(probe.call("eth_chainId"), "chain_id")
             return HealthReport(
                 self.descriptor.source_id, True, int(time.time()),
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
@@ -326,6 +382,8 @@ class EvmReadOnlyAdapter:
         except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()),
                                 reason="rpc_unavailable")
+        finally:
+            probe.close()
 
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
@@ -389,9 +447,8 @@ class EvmReadOnlyAdapter:
 class SolanaReadOnlyAdapter:
     """Solana genesis identity and finalized head observation; no write methods."""
 
-    # urllib's resolver can block outside the socket timeout; remain ineligible
-    # for the coordinator until that boundary is isolated.
-    deadline_enforced = False
+    # All deadline-aware calls use the supervised whole-request process.
+    deadline_enforced = True
 
     def __init__(
         self,
@@ -413,6 +470,12 @@ class SolanaReadOnlyAdapter:
         self.descriptor.validate()
         self.client = JsonRpcClient(endpoint, allowed_methods=_SOLANA_METHODS, policy=policy)
 
+    def prepare(self) -> None:
+        self.client.prepare()
+
+    def close(self) -> None:
+        self.client.close()
+
     def observe(self) -> dict[str, Any]:
         options = [{"commitment": "finalized"}]
         genesis_hash = self.client.call("getGenesisHash")
@@ -427,8 +490,13 @@ class SolanaReadOnlyAdapter:
 
     def health_check(self) -> HealthReport:
         started = time.monotonic()
+        probe = JsonRpcClient(
+            self.client.endpoint,
+            allowed_methods=self.client.allowed_methods,
+            policy=self.client.policy,
+        )
         try:
-            genesis_hash = self.client.call("getGenesisHash")
+            genesis_hash = probe.call("getGenesisHash")
             if not isinstance(genesis_hash, str) or not genesis_hash:
                 raise JsonRpcError("genesis_hash_invalid")
             return HealthReport(
@@ -439,6 +507,8 @@ class SolanaReadOnlyAdapter:
         except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()),
                                 reason="rpc_unavailable")
+        finally:
+            probe.close()
 
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
