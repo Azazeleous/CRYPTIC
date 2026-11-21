@@ -58,6 +58,7 @@ class HCCGNWorkHeader:
     version: int = 1
 
     def encode(self) -> bytes:
+        _u(self.version, 16, "version", 1)
         if self.version != 1:
             raise HCCGNWorkError("work_version_unsupported")
         _b32(self.network_id_hash, "network_id_hash")
