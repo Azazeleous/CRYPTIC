@@ -106,7 +106,7 @@ def _gate(gate: Callable | None, *args: Any) -> bool:
         result = gate(*args)
     except Exception:
         return False
-    return bool(result.allowed) if hasattr(result, "allowed") else result is True
+    return result.allowed is True if hasattr(result, "allowed") else result is True
 
 
 def _proposal_digest(proposal: Mapping[str, Any]) -> str:
@@ -236,7 +236,9 @@ def verify_certificate(certificate: Any, *,
         digest = _verify_proposal(proposal, network_id, epoch)
         if certificate["candidate_digest"] != digest:
             raise IndependentVerificationError("CANDIDATE_DIGEST_MISMATCH")
-        if certificate["height"] != proposal["height"] or certificate["round"] != proposal["round"]:
+        cert_height = _integer(certificate["height"], "CERTIFICATE_HEIGHT", 1)
+        cert_round = _integer(certificate["round"], "CERTIFICATE_ROUND")
+        if cert_height != proposal["height"] or cert_round != proposal["round"]:
             raise IndependentVerificationError("CERTIFICATE_POSITION_MISMATCH")
 
         validators, total_weight, set_hash = _validator_set(
@@ -291,9 +293,11 @@ def verify_certificate(certificate: Any, *,
             precommit_weight += validators[validator_id]["weight"]
         if precommit_weight < quorum:
             raise IndependentVerificationError("PRECOMMIT_QUORUM_NOT_REACHED")
-        if certificate["total_voting_weight"] != total_weight:
+        declared_total = _integer(certificate["total_voting_weight"], "TOTAL_VOTING_WEIGHT", 1)
+        declared_precommit = _integer(certificate["precommit_weight"], "PRECOMMIT_WEIGHT", 0)
+        if declared_total != total_weight:
             raise IndependentVerificationError("TOTAL_WEIGHT_MISMATCH")
-        if certificate["precommit_weight"] != precommit_weight:
+        if declared_precommit != precommit_weight:
             raise IndependentVerificationError("PRECOMMIT_WEIGHT_MISMATCH")
         return {
             "valid": True, "reason": "independent_finality_verified",
