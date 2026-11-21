@@ -281,6 +281,8 @@ class GCFEngine:
             raise GCFError("proposer_id_invalid")
         if not isinstance(proposal["nonce"], str) or not 16 <= len(proposal["nonce"]) <= 128:
             raise GCFError("nonce_invalid")
+        if not isinstance(proposal["justice_commitment"], Mapping):
+            raise GCFError("justice_commitment_invalid")
         public = _hex(proposal["proposer_public_key"], "proposer_public_key", 32).hex()
         body = _unsigned(proposal)
         if not verify_object(public, proposal["signature"], PROPOSAL_DOMAIN, body):
@@ -506,9 +508,13 @@ def verify_finality_certificate(certificate: Mapping[str, Any], *,
             return fail("validator_set_hash_mismatch")
         engine = object.__new__(GCFEngine)
         engine.validator_set = vset
-        engine.clock = clock
+        # A finalized certificate must remain independently verifiable after
+        # proposal expiry. Verify that it was valid at its signed issue time.
+        engine.clock = lambda: proposal["issued_at"]
         engine.max_clock_skew = 30
         digest, normalized = engine._validate_proposal(proposal)
+        if certificate["height"] != proposal["height"] or certificate["round"] != proposal["round"]:
+            return fail("certificate_round_or_height_mismatch")
         if digest != certificate["candidate_digest"]:
             return fail("candidate_digest_mismatch")
         for gate, args, code in (
@@ -524,8 +530,12 @@ def verify_finality_certificate(certificate: Mapping[str, Any], *,
         def check_votes(votes, kind, expected_polc=None):
             seen = set()
             for vote in votes:
+                # Historical votes are checked cryptographically, not against
+                # the verifier's current wall clock.
+                engine.clock = lambda issued=vote.get("issued_at"): issued
                 parsed = engine._verify_vote(vote, normalized)
-                if parsed["vote_type"] != kind or parsed["validator_id"] in seen:
+                if (parsed["vote_type"] != kind or not parsed["approve"]
+                        or parsed["validator_id"] in seen):
                     return False
                 seen.add(parsed["validator_id"])
                 if expected_polc is not None and parsed["approve"] and parsed["polc_digest"] != expected_polc:
