@@ -12,6 +12,7 @@ import json
 from typing import Any, Callable, Mapping
 
 SCHEMA = "GCF/1"
+MAX_SQLITE_INT = (1 << 63) - 1
 PROPOSAL_DOMAIN = b"GCF/1|PROPOSAL|ED25519\x00"
 VOTE_DOMAIN = b"GCF/1|VOTE|ED25519\x00"
 CERT_DOMAIN = b"GCF/1|FINALITY-CERTIFICATE\x00"
@@ -81,7 +82,7 @@ def _hash32(value: Any, field: str) -> str:
 
 
 def _integer(value: Any, field: str, minimum: int = 0) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > MAX_SQLITE_INT:
         raise IndependentVerificationError(f"{field}_INVALID_INTEGER")
     return value
 
@@ -182,6 +183,8 @@ def _validator_set(raw: Any, network_id: str, epoch: int) -> tuple[dict, int, st
     if set_hash != _hash32(raw["validator_set_hash"], "VALIDATOR_SET_HASH"):
         raise IndependentVerificationError("VALIDATOR_SET_HASH_MISMATCH")
     total = sum(x["weight"] for x in parsed.values())
+    if total > MAX_SQLITE_INT:
+        raise IndependentVerificationError("VALIDATOR_TOTAL_WEIGHT_OVERFLOW")
     return parsed, total, set_hash
 
 
