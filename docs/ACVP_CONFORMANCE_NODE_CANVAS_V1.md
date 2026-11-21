@@ -39,6 +39,35 @@ Do not treat a moving Internet-Draft or repository schema as an immutable normat
 - Validate every supported vector group and parameter-set declaration. Do not substitute random key generation for deterministic vector inputs.
 - Keep negative and malformed-input robustness tests supplemental and separate from ACVP AFT coverage.
 
+
+
+### ML-KEM decapsulation (FIPS 203 Algorithm 18; ACVP encapDecap / VAL)
+
+Register decapsulation as a first-class cryptographic operation named `KEM_DECAPSULATE`. It belongs to the key-encapsulation/key-establishment family, not to generic message decryption. The operation consumes a validly encoded ML-KEM decapsulation key and a ciphertext and returns a 32-byte shared secret. It does not return plaintext and does not expose an accept/reject bit.
+
+Required ACVP validation coverage for each supported parameter set:
+
+- **Valid decapsulation:** use the supplied decapsulation key and unmodified ciphertext; compare the returned shared secret with the ACVP expected value byte-for-byte.
+- **Modified-ciphertext decapsulation:** use the supplied decapsulation key and modified, correctly sized ciphertext; compare the returned shared secret with the ACVP expected implicit-rejection value byte-for-byte. The implementation must still return a 32-byte shared secret and must not surface the internal implicit-reject flag.
+- **Decapsulation-key check:** valid key accepted; a key with modified embedded hash value rejected according to FIPS 203 §7.3.
+- **Input validation:** incorrect key/ciphertext type or length is reported as an input-validation failure according to the public API contract. Do not conflate malformed-length inputs with the correctly sized modified-ciphertext implicit-rejection test.
+
+The harness must distinguish the two negative cases: (1) a correctly sized but modified ciphertext follows implicit rejection and returns the derived fallback shared secret; (2) an invalidly encoded or wrong-length input is rejected at the API validation boundary. Never log secret keys, fallback values, or internal validity flags.
+
+### Decapsulation self-test evidence
+
+For a FIPS 140-3 module implementation that supports ML-KEM decapsulation, include decapsulation conditional algorithm self-test evidence for both the ordinary/non-rejection path and the implicit-rejection path, as required by the applicable CMVP Implementation Guidance. Record the test vector digest, parameter set, implementation/build identity, execution result, and evidence reference. The self-test must not disclose its internal path-selection flag. A local test result is preparation evidence only; it does not establish CMVP validation.
+
+### Cryptographic operation registry addition
+
+Add the following typed operation to the registry contract:
+
+| Operation ID | Family | Input | Output | ACVP evidence |
+|---|---|---|---|---|
+| `KEM_DECAPSULATE` | Key encapsulation / key establishment | ML-KEM decapsulation key + ciphertext | 32-byte shared secret | ML-KEM encapDecap VAL: valid and modified-ciphertext cases |
+
+Keep this separate from generic `DECRYPT` / `AEAD_DECRYPT` operations. ML-KEM decapsulation does not decrypt application payloads; the returned shared secret is subsequently used by a separately specified key-derivation and authenticated-encryption protocol. No custom prime-pool or prime-hash material may enter the decapsulation key, implicit-rejection value, or approved entropy path.
+
 ### ML-DSA-65 (FIPS 204)
 
 - keyGen AFT: deterministic key generation from vector-provided seed; compare public and private key encodings byte-for-byte.
