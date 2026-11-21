@@ -1,0 +1,57 @@
+name: gaia-local-trophy-mining
+
+on:
+  push:
+    branches:
+      - feat/gaia-instant-trophy-solver-v1
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-trophy-ladder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout CRYPTIC
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare isolated trophy output
+        run: mkdir -p "$RUNNER_TEMP/gaia-trophy/manifests"
+
+      - name: Mine GAIA/NEXUS difficulty ladder
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m src.mining.trophy_solver \
+            --challenge-id "gaia-nexus-${{ github.run_id }}" \
+            --seed "GAIA-NEXUS-CRYPTIC-LOCAL-TROPHY-CHALLENGE-v1" \
+            --min-difficulty 4 \
+            --max-difficulty 16 \
+            --confidence 0.9999 \
+            --workers 2 \
+            --wallet "$RUNNER_TEMP/gaia-trophy/wallet.jsonl" \
+            --manifests "$RUNNER_TEMP/gaia-trophy/manifests" \
+            > "$RUNNER_TEMP/gaia-trophy/report.json"
+
+          python -c 'import json,sys; r=json.load(open(sys.argv[1], encoding="utf-8")); assert r["status"] == "complete", r; assert r["trophy_count"] == 13, r; print("TROPHY LADDER VERIFIED:", r["trophy_count"], "tiers; aggregate H/s:", round(r["aggregate_hashes_per_second"], 2))' \
+            "$RUNNER_TEMP/gaia-trophy/report.json"
+
+          cat "$RUNNER_TEMP/gaia-trophy/report.json"
+
+      - name: Upload local trophy receipts and manifests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gaia-local-proof-trophies-${{ github.run_id }}
+          path: ${{ runner.temp }}/gaia-trophy/
+          if-no-files-found: warn
+          retention-days: 30
