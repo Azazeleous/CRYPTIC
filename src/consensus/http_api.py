@@ -121,6 +121,10 @@ class GCFWSGI:
                 ("GOD_POLICY_DENIED", "MINER_PROOF_INVALID", "JUSTICE_VALIDATION_FAILED")
             ) else "409 Conflict" if "REPLAY" in message or "DUPLICATE" in message else "400 Bad Request"
             return self._response(start_response, status, {"error": message})
+        except ValueError as exc:
+            # Domain validation failures (including APEX continuity checks) are
+            # client-visible conflicts, not opaque internal-server errors.
+            return self._response(start_response, "409 Conflict", {"error": str(exc)[:180]})
         except Exception:
             # Do not disclose database paths, key material, or internal exceptions.
             return self._response(start_response, "500 Internal Server Error",
