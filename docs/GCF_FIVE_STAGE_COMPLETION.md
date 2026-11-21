@@ -138,3 +138,17 @@ Still external, and therefore not honestly completable by repository code alone:
 
 Stage 2/4 code boundaries are strengthened and CI-tested; production trust, justice authority, and physical durability remain deployment gates. Do not label them production-complete until the external evidence above is recorded.
 
+
+
+## Current-mainline rebased verification (2026-11-21)
+
+Workflow run: `44941497738`  
+Commit: `245687496b49e2b9c58937953fe6caff03b33b94`  
+Result: successful.
+
+- Python unit suite: 368 tests, 2 skipped; all non-skipped tests passed.
+- Independent Go HCCGN-WORK/1 conformance vectors: passed.
+- HCCGN midstate kernel: 100,000 hashes in 0.051038959 seconds (1,959,287.61 hashes/second); full SHA-256 reference matched.
+- Bounded SHA-256d benchmark: passed.
+
+The benchmark is a GitHub-hosted runner measurement of the midstate kernel. It is not a target-device benchmark, a target-search throughput claim, or production mining capacity. The external GOD trust root, independently protected monotonic anchor, live GAIA-JUSTICE providers, live multi-host validator interoperability, power-loss/filesystem durability review, and key-custody security review remain required before production activation.
