@@ -228,13 +228,15 @@ class HTTPSSequenceAnchor:
             raise RemoteProviderError("anchor_network_id_invalid")
         return self.endpoint + "/v1/anchors/" + urllib.parse.quote(network_id, safe="")
 
-    def _signed(self, raw: bytes, network_id: str) -> dict:
+    def _signed(self, raw: bytes, network_id: str, *, update: bool = False) -> dict:
         try:
             response = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
             raise RemoteProviderError("anchor_json_invalid") from exc
         required = {"schema", "signer_id", "network_id", "sequence",
                     "policy_hash", "issued_at", "nonce", "signature"}
+        if update:
+            required.add("accepted")
         if not isinstance(response, dict) or set(response) != required:
             raise RemoteProviderError("anchor_response_schema_invalid")
         if response["schema"] != ANCHOR_SCHEMA or response["signer_id"] != self.signer_id:
@@ -306,7 +308,7 @@ class HTTPSSequenceAnchor:
             return False
         if status != 200:
             raise RemoteProviderError(f"anchor_http_status_{status}")
-        response = self._signed(raw, network_id)
+        response = self._signed(raw, network_id, update=True)
         if (response.get("accepted") is not True or response["sequence"] != sequence
                 or response["policy_hash"] != policy_hash):
             raise RemoteProviderError("anchor_update_not_confirmed")
