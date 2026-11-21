@@ -13,7 +13,8 @@ from src.governance.remote_providers import (
     ANCHOR_DOMAIN, ANCHOR_SCHEMA, DECISION_SCHEMA, RESPONSE_DOMAIN,
     HTTPSSequenceAnchor, HTTPSJusticeProviders, RemoteProviderError,
     SignedHTTPSDecisionClient, load_independently_pinned_root,
-    _canonical,
+    HTTPSHSMEd25519Signer, GODHTTPSGate, make_proposal_with_signer,
+    make_vote_with_signer, _canonical,
 )
 
 
@@ -183,6 +184,71 @@ class RemoteProviderTests(unittest.TestCase):
             transport=transport,
         )
         self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64))
+
+    def test_god_gate_uses_signed_remote_decision(self):
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            request_hash = hashlib.sha256(
+                b"CRYPTIC-REMOTE-REQUEST/1\x00" + _canonical(request)
+            ).hexdigest()
+            body = {
+                "schema": DECISION_SCHEMA, "signer_id": "god-root",
+                "request_hash": request_hash, "decision": True,
+                "issued_at": self.now, "expires_at": self.now + 30,
+                "nonce": request["request_id"],
+            }
+            return 200, {}, _canonical({
+                **body, "signature": self.signed(self.private, RESPONSE_DOMAIN, body)
+            })
+        client = SignedHTTPSDecisionClient(
+            "https://god.example/authorize", signer_id="god-root",
+            trusted_public_key=self.public, clock=lambda: self.now,
+            transport=transport,
+        )
+        decision = GODHTTPSGate(client).runnable(
+            "gcf.consensus.propose", "https://validator.example"
+        )
+        self.assertTrue(decision["allowed"])
+
+    def test_remote_signer_produces_locally_verified_gcf_signatures(self):
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            message = base64.b64decode(request["message_b64"], validate=True)
+            signature = self.private.sign(message)
+            return 200, {}, _canonical({
+                "schema": "CRYPTIC-ED25519-SIGN/1",
+                "key_id": "validator-key-1",
+                "request_id": request["request_id"],
+                "signature": base64.b64encode(signature).decode("ascii"),
+            })
+        signer = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key", transport=transport,
+        )
+        fields = {
+            "network_id": "test-net", "epoch": 1, "height": 1, "round": 0,
+            "parent_hash": "0" * 64, "payload_hash": "1" * 64,
+            "proof_hash": "2" * 64, "justice_commitment": {"justice_profile": "GAIA-JUSTICE/1"},
+            "proposer_id": "validator-1", "nonce": "a" * 32,
+            "issued_at": self.now, "expires_at": self.now + 60,
+        }
+        proposal = make_proposal_with_signer(signer=signer, **fields)
+        from src.consensus.gcf import PROPOSAL_DOMAIN, verify_object
+        unsigned = {k: v for k, v in proposal.items() if k != "signature"}
+        self.assertTrue(verify_object(
+            signer.public_key_hex, proposal["signature"],
+            PROPOSAL_DOMAIN, unsigned,
+        ))
+        vote = make_vote_with_signer(
+            signer=signer, validator_id="validator-1", proposal=proposal,
+            vote_type="PREVOTE", issued_at=self.now,
+        )
+        from src.consensus.gcf import VOTE_DOMAIN
+        unsigned_vote = {k: v for k, v in vote.items() if k != "signature"}
+        self.assertTrue(verify_object(
+            signer.public_key_hex, vote["signature"], VOTE_DOMAIN, unsigned_vote
+        ))
 
     def test_root_pin_requires_independent_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
