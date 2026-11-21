@@ -1,10 +1,9 @@
 """HCCGN proof-provider boundary for GCF/1.
 
-No HCCGN wire profile is inferred here. The uploaded project notes establish
-prime/residue traversal parameters and reversible indexing, but do not define
-the canonical network work-header, digest preimage, target byte order, or test
-vectors. A provider must implement those rules and resolve proof_hash to the
-actual proof material.
+The canonical newly defined HCCGN-WORK/1 profile is implemented in
+hccgn_work.py. Deployments connect its HCCGNWorkProofProvider with an
+independent proof-envelope resolver and authenticated active-target resolver.
+This adapter pins the profile ID and the proposal proof commitment.
 """
 from __future__ import annotations
 
