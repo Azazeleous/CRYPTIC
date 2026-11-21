@@ -62,10 +62,18 @@ class GCFPeerNode:
         self.validator_set = validator_set
         self.node_id = node_id
         self.private_key_hex = private_key_hex
-        self.peer_fingerprints = {
-            key.lower().replace(":", ""): value
-            for key, value in peer_certificate_fingerprints.items()
-        }
+        self.peer_fingerprints = {}
+        for fingerprint, peer_id in peer_certificate_fingerprints.items():
+            normalized = fingerprint.lower().replace(":", "")
+            if len(normalized) != 64:
+                raise PeerTransportError("PEER_CERTIFICATE_FINGERPRINT_INVALID")
+            try:
+                bytes.fromhex(normalized)
+            except ValueError as exc:
+                raise PeerTransportError("PEER_CERTIFICATE_FINGERPRINT_INVALID") from exc
+            if peer_id not in validator_set.validators:
+                raise PeerTransportError("PEER_ID_NOT_IN_VALIDATOR_SET")
+            self.peer_fingerprints[normalized] = peer_id
         self.clock = clock
         self.replay_db_path = str(replay_db_path)
         Path(self.replay_db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -133,6 +141,8 @@ class GCFPeerNode:
         payload = envelope["payload"]
         if not isinstance(payload, Mapping):
             raise PeerTransportError("MESSAGE_PAYLOAD_INVALID")
+        if envelope["message_type"] not in {"PROPOSAL", "VOTE"}:
+            raise PeerTransportError("MESSAGE_TYPE_UNSUPPORTED")
         body = {k: v for k, v in envelope.items() if k != "signature"}
         public_key = self.validator_set.validators[sender].public_key_hex
         if not verify_object(public_key, envelope["signature"], P2P_DOMAIN, body):
@@ -157,12 +167,20 @@ class GCFPeerNode:
                 db.execute("ROLLBACK")
                 raise
 
-        if envelope["message_type"] == "PROPOSAL":
-            result = self.engine.submit_proposal(payload)
-        elif envelope["message_type"] == "VOTE":
-            result = self.engine.submit_vote(payload)
-        else:
-            raise PeerTransportError("MESSAGE_TYPE_UNSUPPORTED")
+        try:
+            if envelope["message_type"] == "PROPOSAL":
+                result = self.engine.submit_proposal(payload)
+            else:
+                result = self.engine.submit_vote(payload)
+        except Exception:
+            # A transient dispatch failure must not permanently consume the
+            # sender's message ID. Successful GCF admission remains replay-safe.
+            with self._db() as db:
+                db.execute(
+                    "DELETE FROM peer_messages WHERE sender_id=? AND message_id=?",
+                    (sender, message_id),
+                )
+            raise
         return {"accepted": True, "message_id": message_id, "result": result}
 
     async def _handle_connection(self, reader: asyncio.StreamReader,
