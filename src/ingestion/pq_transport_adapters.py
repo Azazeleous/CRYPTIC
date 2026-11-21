@@ -131,7 +131,8 @@ class AdapterRegistry:
             chosen = sorted(candidates)[0]
             caps = self._adapters[chosen].capabilities
             return AdapterSelection(
-                chosen, protocol, kem_algorithm, caps.deadline_enforced, caps.authenticated
+                chosen, protocol, kem_algorithm, caps.deadline_enforced, caps.authenticated,
+                require_authenticated, require_deadline
             )
 
     def prepare(self, adapter_id: str) -> None:
@@ -165,6 +166,10 @@ class AdapterRegistry:
             caps = adapter.capabilities
             if selection.protocol not in caps.protocols or selection.kem_algorithm not in caps.kem_algorithms:
                 raise NoCompatibleAdapter("selection_capabilities_changed")
+            if selection.require_authenticated and not caps.authenticated:
+                raise NoCompatibleAdapter("adapter_authentication_requirement_not_met")
+            if selection.require_deadline and not caps.deadline_enforced:
+                raise NoCompatibleAdapter("adapter_deadline_requirement_not_met")
             if len(payload) > caps.max_request_bytes:
                 raise AdapterProtocolError("request_exceeds_adapter_limit")
             if time.monotonic() >= deadline_monotonic:
