@@ -258,6 +258,8 @@ class RemoteProviderTests(unittest.TestCase):
                 "signer_id": "GOD-ROOT-1",
                 "public_key_hex": self.public.hex(),
             }))
+            import os
+            os.chmod(path, 0o600)
             fingerprint = hashlib.sha256(self.public).hexdigest()
             self.assertEqual(
                 load_independently_pinned_root(
