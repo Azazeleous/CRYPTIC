@@ -20,20 +20,20 @@ The header is exactly 184 bytes with no optional fields or padding.
 | 0 | 8 | magic | ASCII HCCGNW01 |
 | 8 | 2 | version | u16; exactly 1 |
 | 10 | 32 | network_id_hash | SHA-256(UTF-8 network_id) |
-| 42 | 8 | epoch | u64; >= 1 |
-| 50 | 8 | height | u64; >= 1 |
+| 42 | 8 | height | u64; >= 1 |
+| 50 | 8 | sequence | u64; >= 1; binds to GCF proposal epoch |
 | 58 | 8 | timestamp | u64 Unix seconds |
 | 66 | 32 | parent_hash | raw 32-byte digest |
 | 98 | 32 | payload_hash | raw 32-byte digest |
-| 130 | 4 | primary_modulus | u32; exactly 97,152 |
-| 134 | 4 | compact_modulus | u32; exactly 1,518 |
-| 138 | 4 | primary_stride | u32; 1..97,151 and gcd(stride,97,152)=1 |
-| 142 | 2 | compact_stride | u16; 1..1,517 and gcd(stride,1,518)=1 |
+| 130 | 4 | param_a / primary_modulus | u32; exactly 97,152 |
+| 134 | 4 | param_b / compact_modulus | u32; exactly 1,518 |
+| 138 | 4 | param_c / primary_stride | u32; 1..97,151 and gcd(stride,97,152)=1 |
+| 142 | 2 | flags / compact_stride | u16; 1..1,517 and gcd(stride,1,518)=1; this field is a stride, not a bitmask |
 | 144 | 8 | nonce | u64 |
 | 152 | 32 | target | unsigned 256-bit big-endian threshold |
 
 Canonical struct format: >8sH32sQQQ32s32sIIIHQ32s.
-The target field is not self-authorizing. The verifier must compare it byte-for-byte with the active target resolved from authenticated network policy. A proposer cannot choose its own easier target.
+The target field is not self-authorizing. The verifier must compare it byte-for-byte with the active target resolved from authenticated network policy. A proposer cannot choose its own easier target. The nonce begins at header offset 144.
 
 ## Digest and acceptance
 
@@ -46,6 +46,10 @@ target_integer = OS2IP_BE(header.target)
 valid_work = work_integer <= target_integer
 
 The comparison is inclusive and big-endian. Exactly one SHA-256 invocation is used, not SHA-256d. No display-endian reversal is permitted.
+
+## Midstate nonce mining
+
+The full SHA-256 input is 13-byte WORK_DOMAIN followed by the 184-byte header. The nonce begins at absolute stream offset 157 (13 + 144). Therefore the first 128 bytes are invariant across nonce attempts and can be hashed once. For each candidate, copy the SHA-256 state after those two complete blocks, overwrite the nonce at tail offset 29, update with the remaining 69 bytes, and finalize. The implementation in `src/consensus/hccgn_work.py` uses this bounded midstate loop and refuses nonce-range wraparound. The optimization must be checked against full SHA-256 for multiple nonce values; it does not change the digest or protocol.
 
 ## Residue traversal projection
 
@@ -70,7 +74,7 @@ The GCF proposal proof_hash is SHA256(exact_proof_envelope_bytes). The provider 
 
 ## GCF proposal binding
 
-The provider requires header network hash = SHA-256(UTF-8 proposal.network_id); epoch, height, parent_hash and payload_hash equal the proposal fields; timestamp equals proposal.issued_at; target equals the independently resolved active target; proof envelope hash equals proposal.proof_hash; and work digest satisfies the inclusive target comparison. GCF expiry and clock-skew checks remain independent.
+The provider requires header network hash = SHA-256(UTF-8 proposal.network_id); header height = proposal.height; header sequence = proposal.epoch; parent_hash and payload_hash equal the proposal fields; timestamp equals proposal.issued_at; target equals the independently resolved active target; proof envelope hash equals proposal.proof_hash; and work digest satisfies the inclusive target comparison. GCF expiry and clock-skew checks remain independent.
 
 ## Fail-closed behavior
 
@@ -78,7 +82,7 @@ Reject wrong length, magic, version, malformed hashes, wrong modulus, non-coprim
 
 ## Known-answer vector
 
-Inputs: network ID gaia-testnet; epoch 1; height 1; timestamp 1700000000; parent hash 11 repeated 32 bytes; payload hash 22 repeated 32 bytes; strides 5 and 7; nonce 42; maximum 256-bit target. This is a serialization/digest vector, not a production difficulty setting.
+Inputs: network ID gaia-testnet; height 1; sequence 1 (GCF epoch 1); timestamp 1700000000; parent hash 11 repeated 32 bytes; payload hash 22 repeated 32 bytes; strides 5 and 7; nonce 42; maximum 256-bit target. This is a serialization/digest vector, not a production difficulty setting.
 
 Header length: 184 bytes.
 Header hex:
