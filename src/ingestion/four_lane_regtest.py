@@ -153,13 +153,23 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
             if future.done():
                 reports[lane] = future.result()
             else:
-                future.cancel()
+                # A successfully cancelled future will never produce a worker report.
+                # Record that terminal state immediately so every lane is represented.
+                if future.cancel():
+                    reports[lane] = LaneReport(
+                        lane, f"partition-{lane}", 0, 0, 0.0, "cancelled"
+                    )
         for future, lane in futures.items():
             if lane not in reports and not future.cancelled():
                 try:
                     reports[lane] = future.result(timeout=max(0.05, time_budget_seconds))
                 except Exception:
                     reports[lane] = LaneReport(lane, f"partition-{lane}", 0, 0, 0.0, "not_completed")
+        # Defensive completeness invariant: report assembly below is total over all lanes.
+        for lane in range(LANE_COUNT):
+            reports.setdefault(
+                lane, LaneReport(lane, f"partition-{lane}", 0, 0, 0.0, "not_completed")
+            )
     finally:
         stop.set()
         executor.shutdown(wait=True, cancel_futures=True)
