@@ -9,6 +9,7 @@ from __future__ import annotations
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 import hashlib
+import json
 import math
 import threading
 import time
@@ -75,7 +76,9 @@ def _lane_worker(lane_id: int, header_prefix: bytes, nonce_start: int,
 def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
                           nonce_end: int, target: int,
                           time_budget_seconds: float = 5.0,
-                          experiment_commitment: str | None = None) -> dict[str, Any]:
+                          experiment_commitment: str | None = None,
+                          receipt_signing_secret_key: bytes | None = None,
+                          receipt_signing_public_key: bytes | None = None) -> dict[str, Any]:
     """Run four disjoint nonce partitions with a central timed verifier.
 
     Three stages:
@@ -97,6 +100,13 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
     for name, value in (("nonce_start", nonce_start), ("nonce_end", nonce_end)):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= UINT32_MAX:
             raise RegtestError(f"{name}_out_of_uint32_range")
+    if (receipt_signing_secret_key is None) != (receipt_signing_public_key is None):
+        raise RegtestError("receipt_signing_keypair_must_be_supplied_together")
+    if receipt_signing_secret_key is not None:
+        if not isinstance(receipt_signing_secret_key, bytes) or len(receipt_signing_secret_key) != 4032:
+            raise RegtestError("ml_dsa_65_secret_key_length_invalid")
+        if not isinstance(receipt_signing_public_key, bytes) or len(receipt_signing_public_key) != 1952:
+            raise RegtestError("ml_dsa_65_public_key_length_invalid")
     if nonce_start > nonce_end:
         raise RegtestError("nonce_range_reversed")
     if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target <= UINT256_MAX:
@@ -206,6 +216,28 @@ def run_four_lane_regtest(header_prefix: bytes, *, nonce_start: int,
             "experiment_commitment": experiment_commitment,
             "verification": "independent_sha256d_recomputation_passed",
         }
+        if receipt_signing_secret_key is not None and receipt_signing_public_key is not None:
+            from src.ingestion.pq_security import MLDSA65, RECEIPT_CONTEXT
+
+            unsigned_bytes = json.dumps(
+                receipt, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False,
+            ).encode("utf-8")
+            signature = MLDSA65.sign(
+                receipt_signing_secret_key, unsigned_bytes, context=RECEIPT_CONTEXT
+            )
+            if not MLDSA65.verify(
+                receipt_signing_public_key, unsigned_bytes, signature,
+                context=RECEIPT_CONTEXT,
+            ):
+                raise RegtestError("ml_dsa_65_receipt_signature_self_verification_failed")
+            receipt["signature"] = {
+                "algorithm": "ML-DSA-65",
+                "context": RECEIPT_CONTEXT.decode("ascii"),
+                "public_key_hex": receipt_signing_public_key.hex(),
+                "signature_hex": signature.hex(),
+                "signed_payload": "receipt_fields_without_signature",
+            }
     stage_converge_ms = (time.monotonic() - stage_converge_started) * 1000
     elapsed_ms = (time.monotonic() - run_started) * 1000
     return {
