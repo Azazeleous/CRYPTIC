@@ -329,7 +329,7 @@ def load_independently_pinned_root(path: str, *, expected_fingerprint: str,
         info = os.fstat(descriptor)
         if not stat.S_ISREG(info.st_mode):
             raise RemoteProviderError("root_pin_must_be_regular_file")
-        if info.st_mode & 0o022:
+        if os.name == "posix" and info.st_mode & 0o022:
             raise RemoteProviderError("root_pin_group_or_world_writable")
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise RemoteProviderError("root_pin_owner_mismatch")
