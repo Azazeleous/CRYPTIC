@@ -5,14 +5,38 @@ import hashlib
 import json
 from typing import Any
 
+MAX_SAFE_INTEGER = (1 << 53) - 1
+
 DOMAIN = b"CRYPTIC-RESEARCH-EXPERIMENT-V1\x00"
 HEADER_PREFIX_BYTES = 76
 MERKLE_ROOT_START = 36
 MERKLE_ROOT_END = 68
 
 
+def _validate_canonical_value(value: Any, path: str = "$") -> None:
+    """Restrict metadata to an interoperable JSON subset with safe integers."""
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if isinstance(value, int) and not isinstance(value, bool):
+        if not -MAX_SAFE_INTEGER <= value <= MAX_SAFE_INTEGER:
+            raise ValueError(f"unsafe_integer_at_{path}")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_canonical_value(item, f"{path}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.isascii():
+                raise ValueError(f"object_keys_must_be_ascii_strings_at_{path}")
+            _validate_canonical_value(item, f"{path}.{key}")
+        return
+    raise ValueError(f"unsupported_canonical_value_at_{path}")
+
+
 def canonical_experiment_bytes(document: Any) -> bytes:
-    """Serialize JSON-compatible experiment metadata deterministically."""
+    """Serialize restricted JSON metadata deterministically across runtimes."""
+    _validate_canonical_value(document)
     try:
         encoded = json.dumps(
             document,
