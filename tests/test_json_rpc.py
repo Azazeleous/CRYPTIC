@@ -342,6 +342,23 @@ class JsonRpcProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(SourceRegistryError, "one unfiltered"):
             adapter.fetch_page(limit=1, filters={"address": "not-accepted-here"})
 
+    def test_direct_health_checks_close_their_one_shot_workers(self):
+        from unittest.mock import MagicMock
+
+        evm = EvmReadOnlyAdapter("https://rpc.example.org")
+        evm_probe = MagicMock()
+        evm_probe.call.return_value = "0x1"
+        with patch("src.ingestion.json_rpc.JsonRpcClient", return_value=evm_probe):
+            self.assertTrue(evm.health_check().healthy)
+        evm_probe.close.assert_called_once_with()
+
+        solana = SolanaReadOnlyAdapter("https://rpc.example.org")
+        solana_probe = MagicMock()
+        solana_probe.call.return_value = "genesis-hash"
+        with patch("src.ingestion.json_rpc.JsonRpcClient", return_value=solana_probe):
+            self.assertTrue(solana.health_check().healthy)
+        solana_probe.close.assert_called_once_with()
+
     def test_adapters_register_with_shared_registry(self):
         registry = __import__("src.ingestion.source_registry", fromlist=["SourceRegistry"]).SourceRegistry()
         registry.register(EvmReadOnlyAdapter("https://evm.example.org"))
