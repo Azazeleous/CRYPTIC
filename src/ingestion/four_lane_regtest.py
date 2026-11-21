@@ -1,0 +1,222 @@
+"""Four-lane, deadline-bounded SHA-256d regtest.
+
+This is a finite nonce-window worker and verification harness, not a digest
+inverter. The coordinator owns the HCCGN-style monotonic deadline, independently
+verifies every proposed winner, and emits exactly one accepted receipt.
+"""
+from __future__ import annotations
+
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import asdict, dataclass
+import hashlib
+import threading
+import time
+from typing import Any
+
+LANE_COUNT = 4
+UINT32_MAX = (1 << 32) - 1
+UINT256_MAX = (1 << 256) - 1
+
+
+class RegtestError(ValueError):
+    """Invalid regtest parameters or execution state."""
+
+
+@dataclass(frozen=True, slots=True)
+class LaneReport:
+    lane_id: int
+    role: str
+    candidates_checked: int
+    elapsed_ms: int
+    hashes_per_second: float
+    status: str
+    proposed_nonce: int | None = None
+    proposed_digest: str | None = None
+
+
+def sha256d(header_prefix: bytes, nonce: int) -> bytes:
+    """Bitcoin-style double SHA-256 of a 76-byte prefix plus LE uint32 nonce."""
+    if not isinstance(header_prefix, bytes) or len(header_prefix) != 76:
+        raise RegtestError("header_prefix_must_be_76_bytes")
+    if isinstance(nonce, bool) or not isinstance(nonce, int) or not 0 <= nonce <= UINT32_MAX:
+        raise RegtestError("nonce_out_of_uint32_range")
+    header = header_prefix + nonce.to_bytes(4, "little")
+    return hashlib.sha256(hashlib.sha256(header).digest()).digest()
+
+
+def _lane_worker(
+    lane_id: int,
+    header_prefix: bytes,
+    nonce_start: int,
+    nonce_end: int,
+    target: int,
+    deadline: float,
+    stop: threading.Event,
+) -> LaneReport:
+    started = time.monotonic()
+    checked = 0
+    first = nonce_start + ((lane_id - nonce_start) % LANE_COUNT)
+    for nonce in range(first, nonce_end + 1, LANE_COUNT):
+        if stop.is_set():
+            break
+        if time.monotonic() >= deadline:
+            return LaneReport(lane_id, f"partition-{lane_id}", checked,
+                              int((time.monotonic() - started) * 1000),
+                              checked / max(time.monotonic() - started, 1e-9),
+                              "deadline")
+        digest = sha256d(header_prefix, nonce)
+        checked += 1
+        # Bitcoin-style target interpretation: raw digest as a little-endian integer.
+        if int.from_bytes(digest, "little") <= target:
+            return LaneReport(lane_id, f"partition-{lane_id}", checked,
+                              int((time.monotonic() - started) * 1000),
+                              checked / max(time.monotonic() - started, 1e-9),
+                              "candidate", nonce, digest.hex())
+    status = "cancelled" if stop.is_set() else "exhausted"
+    elapsed = max(time.monotonic() - started, 1e-9)
+    return LaneReport(lane_id, f"partition-{lane_id}", checked,
+                      int(elapsed * 1000), checked / elapsed, status)
+
+
+def run_four_lane_regtest(
+    header_prefix: bytes,
+    *,
+    nonce_start: int,
+    nonce_end: int,
+    target: int,
+    time_budget_seconds: float = 5.0,
+) -> dict[str, Any]:
+    """Run four disjoint nonce partitions with a central timed verifier.
+
+    Three stages:
+      1. REDUCE: assign the finite nonce interval to four disjoint residue lanes.
+      2. SOLVE: lanes compute SHA-256d candidates under one monotonic deadline.
+      3. CONVERGE: the center verifies one candidate and solidifies one receipt.
+    """
+    if not isinstance(header_prefix, bytes) or len(header_prefix) != 76:
+        raise RegtestError("header_prefix_must_be_76_bytes")
+    for name, value in (("nonce_start", nonce_start), ("nonce_end", nonce_end)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= UINT32_MAX:
+            raise RegtestError(f"{name}_out_of_uint32_range")
+    if nonce_start > nonce_end:
+        raise RegtestError("nonce_range_reversed")
+    if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target <= UINT256_MAX:
+        raise RegtestError("target_out_of_uint256_range")
+    if isinstance(time_budget_seconds, bool) or not isinstance(time_budget_seconds, (int, float)) or time_budget_seconds <= 0:
+        raise RegtestError("time_budget_must_be_positive")
+
+    run_started = time.monotonic()
+    deadline = run_started + float(time_budget_seconds)
+    stop = threading.Event()
+    stage_reduce_ms = (time.monotonic() - run_started) * 1000
+    reports: dict[int, LaneReport] = {}
+    winner: dict[str, Any] | None = None
+    stage_solve_started = time.monotonic()
+
+    executor = ThreadPoolExecutor(max_workers=LANE_COUNT, thread_name_prefix="cryptic-lane")
+    futures = {
+        executor.submit(_lane_worker, lane, header_prefix, nonce_start,
+                        nonce_end, target, deadline, stop): lane
+        for lane in range(LANE_COUNT)
+    }
+    try:
+        pending = set(futures)
+        while pending and winner is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, pending = wait(pending, timeout=remaining, return_when=FIRST_COMPLETED)
+            if not done:
+                break
+            for future in done:
+                lane = futures[future]
+                report = future.result()
+                reports[lane] = report
+                if report.status == "candidate":
+                    nonce = report.proposed_nonce
+                    if nonce is None:
+                        raise RegtestError("candidate_missing_nonce")
+                    # Center lane: independently recompute the complete header digest.
+                    verified = sha256d(header_prefix, nonce)
+                    if verified.hex() != report.proposed_digest:
+                        raise RegtestError("center_digest_reverification_failed")
+                    if int.from_bytes(verified, "little") > target:
+                        raise RegtestError("center_target_verification_failed")
+                    winner = {
+                        "lane_id": lane,
+                        "nonce": nonce,
+                        "digest": verified.hex(),
+                        "target": f"{target:064x}",
+                        "target_encoding": "raw_digest_little_endian_integer",
+                    }
+                    stop.set()
+                    break
+        if winner is None:
+            stop.set()
+        for future, lane in futures.items():
+            if lane in reports:
+                continue
+            if future.done():
+                reports[lane] = future.result()
+            else:
+                future.cancel()
+        # Collect running workers after cooperative stop; their loops are bounded.
+        for future, lane in futures.items():
+            if lane not in reports and not future.cancelled():
+                try:
+                    reports[lane] = future.result(timeout=max(0.05, time_budget_seconds))
+                except Exception:
+                    reports[lane] = LaneReport(lane, f"partition-{lane}", 0, 0, 0.0, "not_completed")
+    finally:
+        stop.set()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+    stage_solve_ms = (time.monotonic() - stage_solve_started) * 1000
+    stage_converge_started = time.monotonic()
+    lane_rows = [asdict(reports[i]) for i in range(LANE_COUNT)]
+    accepted = winner is not None
+    receipt = None
+    if accepted:
+        receipt = {
+            "schema": "cryptic.fgr-ice.regtest-receipt.v1",
+            "accepted": True,
+            "winner_lane": winner["lane_id"],
+            "nonce": winner["nonce"],
+            "digest": winner["digest"],
+            "target": winner["target"],
+            "target_encoding": winner["target_encoding"],
+            "header_prefix_sha256": hashlib.sha256(header_prefix).hexdigest(),
+            "verification": "independent_sha256d_recomputation_passed",
+        }
+    stage_converge_ms = (time.monotonic() - stage_converge_started) * 1000
+    elapsed_ms = (time.monotonic() - run_started) * 1000
+    return {
+        "schema": "cryptic.fgr-ice.four-lane-regtest.v1",
+        "status": "accepted" if accepted else ("timed_out" if time.monotonic() >= deadline else "exhausted"),
+        "process": ["REDUCE", "SOLVE", "CONVERGE"],
+        "lane_count": LANE_COUNT,
+        "lanes": lane_rows,
+        "winner_count": 1 if accepted else 0,
+        "winner": winner,
+        "receipt": receipt,
+        "metrics": {
+            "nonce_start": nonce_start,
+            "nonce_end": nonce_end,
+            "domain_size": nonce_end - nonce_start + 1,
+            "candidates_checked": sum(row["candidates_checked"] for row in lane_rows),
+            "elapsed_ms": round(elapsed_ms, 3),
+            "hashes_per_second": round(
+                sum(row["candidates_checked"] for row in lane_rows) / max(elapsed_ms / 1000, 1e-9), 3
+            ),
+            "hccgn_timer": {
+                "clock": "time.monotonic",
+                "budget_seconds": float(time_budget_seconds),
+                "deadline_enforced": True,
+                "stage_ms": {
+                    "reduce": round(stage_reduce_ms, 3),
+                    "solve": round(stage_solve_ms, 3),
+                    "converge_and_receipt": round(stage_converge_ms, 3),
+                },
+            },
+        },
+    }
