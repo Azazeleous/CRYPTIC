@@ -29,6 +29,14 @@ class ResearchCommitmentTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "finite_json"):
             canonical_experiment_bytes({"value": object()})
 
+    def test_canonical_metadata_rejects_floats_and_unsafe_integers(self):
+        with self.assertRaisesRegex(ValueError, "unsupported_canonical_value"):
+            canonical_experiment_bytes({"value": 1.25})
+        with self.assertRaisesRegex(ValueError, "unsafe_integer"):
+            canonical_experiment_bytes({"value": 1 << 60})
+        with self.assertRaisesRegex(ValueError, "ascii_strings"):
+            canonical_experiment_bytes({"é": "value"})
+
     def test_commitment_binds_header_root_slot(self):
         prefix = bytes(range(76))
         commitment = compute_experiment_commitment({"ring": {"q": 3329, "n": 256}})
