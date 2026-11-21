@@ -112,3 +112,29 @@ Result: successful.
 - Existing bounded SHA-256d benchmark: passed separately; it remains a distinct local trophy-miner benchmark.
 
 This evidence verifies the reference implementation and deterministic CI environment. It is not a hardware benchmark for the user's devices, not a target-search performance claim, and not proof of a live validator network.
+
+## Follow-up hardening — trust, justice, and ADAM (2026-11-21)
+
+The code-level portion of stages 2, 3, and 4 has been extended and reverified:
+
+- APEX now validates that state input is bytes-like and within the 1 MiB limit before hashing or invoking finality verification. It no longer coerces arbitrary values with `bytes(value)`.
+- GAIA-JUSTICE commitment digests must use canonical lowercase 64-character hexadecimal encoding. Missing providers, provider exceptions, and any result other than the exact boolean `True` remain denials.
+- ADAM tests now cover WAL-backed close/reopen recovery, a database-triggered insert failure with transaction rollback followed by successful recovery, and APEX rejection of non-byte state input.
+- The test run confirms the new recovery and justice cases execute successfully.
+
+Latest CI evidence:
+- Workflow run: `44939293680` (mining-engine-tests), successful.
+- Commit: `9085160216e85cf0729ed6517d8b8334d070049e`.
+- Python suite: 270 tests run, 2 skipped; all non-skipped tests passed.
+- The two skips are live EVM and Solana RPC checks because their endpoint environment variables are not configured.
+- HCCGN Go conformance and both bounded benchmark steps completed successfully in the same workflow.
+
+Still external, and therefore not honestly completable by repository code alone:
+- Provision the real GOD-authorized Ed25519 public root and its authenticated activation/rotation process.
+- Implement and operate a genuinely independent monotonic sequence anchor (hardware-backed or separately protected service); the in-memory test anchor is test-only.
+- Connect actual GAIA-JUSTICE policy/evidence retrieval services and validate their authority, provenance, freshness, and failure behavior.
+- Perform power-loss/process-kill crash testing and storage/filesystem durability review on the deployment filesystem; the CI trigger test proves transactional rollback and reopen recovery, not physical power-loss guarantees.
+- Complete live multi-host validator and key-custody security review.
+
+Stage 2/4 code boundaries are strengthened and CI-tested; production trust, justice authority, and physical durability remain deployment gates. Do not label them production-complete until the external evidence above is recorded.
+
