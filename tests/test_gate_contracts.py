@@ -138,7 +138,8 @@ class RuntimeCompositionTests(unittest.TestCase):
         runtime = build_consensus_runtime(
             network_id="gaia-testnet", epoch=1,
             validators={"validator-a": {"public_key_hex": "11" * 32, "weight": 1}},
-            data_dir=private_dir, god_trust_root_path=self.key_path,
+            data_dir=private_dir, god_trust_root_path=self.root_pin_path,
+            god_trust_root_fingerprint=hashlib.sha256(self.public_key).hexdigest(),
             god_signer_id="GOD-ROOT-1", sequence_anchor=self.Anchor(),
             god_gate=None, policy_evidence_verifier=None,
             justice_evidence_verifier=None,
