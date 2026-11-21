@@ -89,6 +89,21 @@ class AdapterManifestTests(unittest.TestCase):
         self.assertEqual(self.adapter.closed, 1)
         self.assertFalse(verify_signed_adapter_manifest(self.signed, self.trust))
 
+    def test_revoked_signer_blocks_existing_selection(self):
+        import time
+        from src.ingestion.pq_transport_adapters import NoCompatibleAdapter
+
+        registry = AdapterRegistry()
+        registry.register_verified(self.adapter, self.signed, self.trust)
+        selection = registry.select(protocol="https")
+        registry.prepare(self.adapter.adapter_id)
+        self.assertTrue(self.trust.revoke(self.key_id))
+        with self.assertRaises(NoCompatibleAdapter):
+            registry.exchange(
+                selection, b"request", deadline_monotonic=time.monotonic() + 1
+            )
+        self.assertEqual(self.adapter.closed, 1)
+
     def test_registry_rejects_manifest_for_different_adapter(self):
         registry = AdapterRegistry()
         with self.assertRaisesRegex(ValueError, "manifest_adapter_mismatch"):
