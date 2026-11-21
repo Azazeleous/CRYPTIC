@@ -71,6 +71,109 @@ class BoundedRuntimeTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_adapter_preparation_precedes_collection_deadline(self):
+        class PreparedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.prepared_at = None
+                self.prepared_before_collection = False
+
+            def prepare(self):
+                self.prepared_at = time.monotonic()
+
+            def health_check_until(self, *, deadline_monotonic):
+                collection_started = deadline_monotonic - 5.0
+                self.prepared_before_collection = self.prepared_at is not None and self.prepared_at < collection_started
+                if not self.prepared_before_collection:
+                    raise RuntimeError("adapter_not_prepared_before_collection")
+                return HealthReport(self.descriptor.source_id, True, 1, 1)
+
+        adapter = PreparedAdapter("prepared")
+        self.registry.register(adapter)
+        policy = IngestionPolicy(max_workers=1, max_queue_size=0, max_pages=1,
+                                 max_observations=1, max_page_size=1,
+                                 max_duration_seconds=5.0)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            report = runtime.run(self.journal, ["prepared"])
+        self.assertEqual(report["status"], "complete")
+        self.assertTrue(adapter.prepared_before_collection)
+
+    def test_non_waiting_shutdown_closes_adapter_transport(self):
+        class ClosableAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        adapter = ClosableAdapter("closable")
+        self.registry.register(adapter)
+        runtime = BoundedIngestionRuntime(self.registry)
+        runtime.run(self.journal, ["closable"])
+        runtime.close(wait_for_workers=False)
+        self.assertTrue(adapter.closed)
+
+    def test_prepared_adapter_count_is_capped_by_submission_window(self):
+        class PreparedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.prepare_count = 0
+            def prepare(self):
+                self.prepare_count += 1
+        first, second = PreparedAdapter("first"), PreparedAdapter("second")
+        self.registry.register(first)
+        self.registry.register(second)
+        policy = IngestionPolicy(max_workers=1, max_queue_size=0)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            with self.assertRaisesRegex(IngestionRuntimeError, "bounded worker window"):
+                runtime.run(self.journal, ["first", "second"])
+        self.assertEqual(first.prepare_count, 0)
+        self.assertEqual(second.prepare_count, 0)
+
+    def test_prepared_adapter_cap_applies_across_runtime_reuse(self):
+        class PreparedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.prepare_count = 0
+            def prepare(self):
+                self.prepare_count += 1
+
+        first = PreparedAdapter("first-lifetime")
+        second = PreparedAdapter("second-lifetime")
+        self.registry.register(first)
+        self.registry.register(second)
+        policy = IngestionPolicy(max_workers=1, max_queue_size=0, max_pages=2,
+                                 max_observations=2, max_page_size=1)
+        with BoundedIngestionRuntime(self.registry, policy) as runtime:
+            runtime.run(self.journal, ["first-lifetime"])
+            with self.assertRaisesRegex(IngestionRuntimeError, "prepared adapter leases"):
+                runtime.run(self.journal, ["second-lifetime"])
+        self.assertEqual(first.prepare_count, 1)
+        self.assertEqual(second.prepare_count, 0)
+
+    def test_shared_adapter_is_closed_only_after_last_runtime_releases_it(self):
+        class SharedAdapter(DeadlineAdapter):
+            def __init__(self, source_id):
+                super().__init__(source_id)
+                self.closed = False
+                self.prepare_count = 0
+            def prepare(self):
+                self.prepare_count += 1
+            def close(self):
+                self.closed = True
+        adapter = SharedAdapter("shared")
+        self.registry.register(adapter)
+        first = BoundedIngestionRuntime(self.registry)
+        second = BoundedIngestionRuntime(self.registry)
+        first.run(self.journal, ["shared"])
+        second.run(self.journal, ["shared"])
+        self.assertEqual(adapter.prepare_count, 1)
+        first.close()
+        self.assertFalse(adapter.closed)
+        second.close()
+        self.assertTrue(adapter.closed)
+
     def test_legacy_adapter_is_rejected(self):
         self.registry.register(LegacyAdapter("legacy"))
         with BoundedIngestionRuntime(self.registry) as runtime:
@@ -176,6 +279,18 @@ class BoundedRuntimeTests(unittest.TestCase):
         self.assertEqual(report["status"], "partial")
         self.assertEqual(report["sources"][0]["status"], "timed_out")
         self.assertEqual(report["sources"][0]["error_kind"], "adapter_timeout")
+
+    def test_rpc_deadline_signal_marks_session_timed_out_not_partial(self):
+        class RpcDeadline(TimeoutError):
+            deadline_exceeded = True
+        class DeadlineSignalingAdapter(DeadlineAdapter):
+            def health_check_until(self, *, deadline_monotonic):
+                raise RpcDeadline("rpc_deadline_exceeded")
+        self.registry.register(DeadlineSignalingAdapter("rpc-deadline"))
+        with BoundedIngestionRuntime(self.registry) as runtime:
+            report = runtime.run(self.journal, ["rpc-deadline"])
+        self.assertEqual(report["status"], "timed_out")
+        self.assertEqual(report["sources"][0]["error_kind"], "deadline_exceeded")
 
     def test_report_discloses_deadline_scope_and_bounded_submission(self):
         for name in ("a", "b", "c"):
