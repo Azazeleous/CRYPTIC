@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from contextlib import contextmanager
 import json
 import sqlite3
 import threading
@@ -217,8 +218,16 @@ class GCFEngine:
         db.execute("PRAGMA synchronous=FULL")
         return db
 
+    @contextmanager
+    def _db(self):
+        db = self._connect()
+        try:
+            yield db
+        finally:
+            db.close()
+
     def _init_db(self):
-        with self._connect() as db:
+        with self._db() as db:
             db.executescript("""
             CREATE TABLE IF NOT EXISTS proposals(
               candidate_digest TEXT PRIMARY KEY,
@@ -505,7 +514,7 @@ class GCFEngine:
                 "certificate_digest": cert_digest, "precommit_weight": weight}
 
     def get_status(self, candidate_digest: str) -> dict:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute(
                 "SELECT status FROM proposals WHERE candidate_digest=?", (candidate_digest,)
             ).fetchone()
