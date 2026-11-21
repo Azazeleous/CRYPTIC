@@ -13,6 +13,38 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol
 
+_ADAPTER_LEASE_LOCK = threading.Lock()
+_ADAPTER_LEASES: dict[int, tuple[object, int]] = {}
+
+
+def _lease_adapter(adapter: object) -> None:
+    """Prepare an adapter once and reference-count runtimes sharing it."""
+    key = id(adapter)
+    with _ADAPTER_LEASE_LOCK:
+        current = _ADAPTER_LEASES.get(key)
+        if current is not None and current[0] is adapter:
+            _ADAPTER_LEASES[key] = (adapter, current[1] + 1)
+            return
+        prepare = getattr(adapter, "prepare", None)
+        if callable(prepare):
+            prepare()
+        _ADAPTER_LEASES[key] = (adapter, 1)
+
+
+def _release_adapter(adapter: object) -> None:
+    key = id(adapter)
+    with _ADAPTER_LEASE_LOCK:
+        current = _ADAPTER_LEASES.get(key)
+        if current is None or current[0] is not adapter:
+            return
+        if current[1] > 1:
+            _ADAPTER_LEASES[key] = (adapter, current[1] - 1)
+            return
+        del _ADAPTER_LEASES[key]
+        close = getattr(adapter, "close", None)
+        if callable(close):
+            close()
+
 from .observation_log import append_page, audit_journal
 from .replay import replay_journal
 from .source_registry import HealthReport, SourceAdapterError, SourceDescriptor, SourcePage, SourceRegistry
@@ -151,9 +183,11 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
         return _WorkerResult(source_id, {"healthy": False, "reason": "deadline_exceeded"},
                              tuple(pages), "timed_out", "deadline_exceeded",
                              max(0, int((time.monotonic() - started) * 1000)))
-    except TimeoutError:
-        return _WorkerResult(source_id, {"healthy": False, "reason": "adapter_timeout"},
-                             tuple(pages), "timed_out", "adapter_timeout",
+    except TimeoutError as exc:
+        deadline_signal = getattr(exc, "deadline_exceeded", False) is True
+        reason = "deadline_exceeded" if deadline_signal else "adapter_timeout"
+        return _WorkerResult(source_id, {"healthy": False, "reason": reason},
+                             tuple(pages), "timed_out", reason,
                              max(0, int((time.monotonic() - started) * 1000)))
     except Exception as exc:
         return _WorkerResult(source_id, {"healthy": False, "reason": "worker_failed"},
@@ -164,9 +198,9 @@ def _worker(adapter: DeadlineAwareAdapter, *, page_quota: int, observation_quota
 class BoundedIngestionRuntime:
     """Bounded worker coordinator; only its caller thread writes the journal.
 
-    Python cannot forcibly terminate a blocked thread. This runtime requires
-    cooperative adapters whose transports bound rate waits, retries, DNS,
-    connect, and reads against the passed absolute monotonic deadline.
+    Python cannot forcibly terminate a blocked thread. Network adapters must
+    prepare a supervised transport before collection and enforce the shared
+    deadline at a process boundary for every blocking network operation.
     """
     def __init__(self, registry: SourceRegistry, policy: IngestionPolicy | None = None) -> None:
         if not isinstance(registry, SourceRegistry):
@@ -179,11 +213,17 @@ class BoundedIngestionRuntime:
         self._session_lock = threading.Lock()
         self._closed = False
         self._poisoned = False
+        self._leased_adapters: dict[int, object] = {}
 
     def close(self, *, wait_for_workers: bool = True) -> None:
         if not self._closed:
             self._closed = True
             self._executor.shutdown(wait=wait_for_workers, cancel_futures=True)
+            # Release only adapters this runtime selected. Shared adapters remain
+            # alive until the final runtime releases its lease.
+            for adapter in tuple(self._leased_adapters.values()):
+                _release_adapter(adapter)
+            self._leased_adapters.clear()
 
     def __enter__(self) -> "BoundedIngestionRuntime":
         if self._closed:
@@ -212,6 +252,43 @@ class BoundedIngestionRuntime:
             ):
                 raise IngestionRuntimeError(f"source {source_id} lacks deadline-aware adapter methods")
             adapters.append(adapter)
+
+        # Each prepared RPC adapter owns a process and a fixed shared-memory
+        # allocation. Cap those resources by the same submission window.
+        capacity = self.policy.max_workers + self.policy.max_queue_size
+        prepared_leased = sum(
+            1 for item in self._leased_adapters.values()
+            if callable(getattr(item, "prepare", None))
+        )
+        prepared_new = [
+            item for item in adapters
+            if callable(getattr(item, "prepare", None))
+            and id(item) not in self._leased_adapters
+        ]
+        if prepared_leased + len(prepared_new) > capacity:
+            raise IngestionRuntimeError("prepared adapter leases exceed bounded worker window")
+
+        # Lease every adapter with lifecycle hooks. Some adapters need cleanup
+        # without a separate preparation step; omitting those would leak their
+        # transport resources on both waiting and non-waiting shutdown.
+        managed = [
+            item for item in adapters
+            if callable(getattr(item, "prepare", None))
+            or callable(getattr(item, "close", None))
+        ]
+        newly_leased: list[object] = []
+        try:
+            for adapter in managed:
+                key = id(adapter)
+                if key not in self._leased_adapters:
+                    _lease_adapter(adapter)  # Startup remains before collection_started.
+                    self._leased_adapters[key] = adapter
+                    newly_leased.append(adapter)
+        except Exception:
+            for adapter in reversed(newly_leased):
+                self._leased_adapters.pop(id(adapter), None)
+                _release_adapter(adapter)
+            raise
         return adapters
 
     def run(self, journal_path: str | Path, source_ids: Sequence[str], *,
@@ -289,6 +366,14 @@ class BoundedIngestionRuntime:
                             source_id, {"healthy": False, "reason": "worker_failed"},
                             (), "failed", type(exc).__name__, 0,
                         )
+            rpc_deadline_failed = any(
+                result.error_kind == "deadline_exceeded" for result in results.values()
+            )
+            if rpc_deadline_failed:
+                timed_out = True
+                # A supervised RPC worker that crossed its absolute deadline is
+                # terminated and cannot be safely reused by this runtime.
+                self._poisoned = True
             if timed_out:
                 if submitted:
                     self._poisoned = True
