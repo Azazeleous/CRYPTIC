@@ -148,6 +148,12 @@ class RuntimeCompositionTests(unittest.TestCase):
                 consensus_endpoint="https://consensus.invalid",
             )
 
+    def test_raw_trust_root_preserves_leading_and_trailing_whitespace_bytes(self):
+        key = b" " + (b"\x01" * 30) + b"\n"
+        self.key_path.write_bytes(key)
+        os.chmod(self.key_path, 0o600)
+        self.assertEqual(load_pinned_ed25519_public_key(self.key_path), key)
+
     def test_trust_root_rejects_group_or_world_writable_file(self):
         os.chmod(self.key_path, 0o666)
         with self.assertRaisesRegex(RuntimeConfigurationError, "group_or_world_writable"):
