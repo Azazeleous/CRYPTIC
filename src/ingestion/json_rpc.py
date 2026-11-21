@@ -367,8 +367,13 @@ class EvmReadOnlyAdapter:
 
     def health_check(self) -> HealthReport:
         started = time.monotonic()
+        probe = JsonRpcClient(
+            self.client.endpoint,
+            allowed_methods=self.client.allowed_methods,
+            policy=self.client.policy,
+        )
         try:
-            chain_id = self._hex_quantity(self.client.call("eth_chainId"), "chain_id")
+            chain_id = self._hex_quantity(probe.call("eth_chainId"), "chain_id")
             return HealthReport(
                 self.descriptor.source_id, True, int(time.time()),
                 latency_ms=max(0, int((time.monotonic() - started) * 1000)),
@@ -377,6 +382,8 @@ class EvmReadOnlyAdapter:
         except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()),
                                 reason="rpc_unavailable")
+        finally:
+            probe.close()
 
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
@@ -483,8 +490,13 @@ class SolanaReadOnlyAdapter:
 
     def health_check(self) -> HealthReport:
         started = time.monotonic()
+        probe = JsonRpcClient(
+            self.client.endpoint,
+            allowed_methods=self.client.allowed_methods,
+            policy=self.client.policy,
+        )
         try:
-            genesis_hash = self.client.call("getGenesisHash")
+            genesis_hash = probe.call("getGenesisHash")
             if not isinstance(genesis_hash, str) or not genesis_hash:
                 raise JsonRpcError("genesis_hash_invalid")
             return HealthReport(
@@ -495,6 +507,8 @@ class SolanaReadOnlyAdapter:
         except Exception:
             return HealthReport(self.descriptor.source_id, False, int(time.time()),
                                 reason="rpc_unavailable")
+        finally:
+            probe.close()
 
     def health_check_until(self, *, deadline_monotonic: float) -> HealthReport:
         started = time.monotonic()
