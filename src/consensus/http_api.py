@@ -119,7 +119,11 @@ class GCFWSGI:
             message = str(exc)
             status = "403 Forbidden" if message.startswith(
                 ("GOD_POLICY_DENIED", "MINER_PROOF_INVALID", "JUSTICE_VALIDATION_FAILED")
-            ) else "409 Conflict" if "REPLAY" in message or "DUPLICATE" in message else "400 Bad Request"
+            ) else "409 Conflict" if message.startswith((
+                "PROPOSAL_REPLAY_OR_DUPLICATE",
+                "DUPLICATE_VOTE_OR_EQUIVOCATION",
+                "VALIDATOR_EQUIVOCATION_DETECTED",
+            )) else "400 Bad Request"
             return self._response(start_response, status, {"error": message})
         except ValueError as exc:
             # Domain validation failures (including APEX continuity checks) are
