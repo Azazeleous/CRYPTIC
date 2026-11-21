@@ -16,13 +16,13 @@ It does not instantiate \`GCFEngine\` or call its private proposal/vote validati
 
 ## Stage 2 — Canonical HCCGN proof integration
 
-Status: new canonical HCCGN-WORK/1 profile and reference verifier implemented; conformance tests added; CI verification pending.
+Status: canonical HCCGN-WORK/1 profile, parser/verifier, proof envelope, and bounded midstate nonce miner implemented; targeted conformance tests added; CI verification pending.
 
 Added \`src/consensus/hccgn_adapter.py\`. It requires a separately implemented provider to resolve the proposal's proof hash, verify the canonical work header and digest, apply the target comparison, and return a profile identifier and matching proof commitment. Missing providers, missing pinned profile IDs, mismatched profiles, and mismatched proof hashes are denied.
 
 The supplied project source \`Correct HCCGN Integration Equation (2).txt\` specifies computational graph and residue-space context, including primary modulus 97,152, totient 28,160, compact modulus 1,518, totient 440, and forward/reverse coprime traversal. It explicitly distinguishes reversible index reconstruction from SHA-256 inversion. The supplied \`Branch · Valuate Ancestry Solver\` material describes a shared computation record containing input, algorithm parameters, hash output, quotient/residue, stride/inverse, candidate result, and target.
 
-The uploaded sources still do not specify a historical network header, so HCCGN-WORK/1 is explicitly a newly defined protocol profile rather than a claim about prior wire behavior. The existing 80-byte Bitcoin SHA-256d scanner remains separate and is not substituted. Conformance tests must pass before this stage is marked E3; production activation additionally requires authenticated proof storage, active-target policy resolution, GOD-authorized epoch/height activation, and cross-language interoperability.
+The uploaded source now supplies the exact field semantics and a midstate miner strategy; HCCGN-WORK/1 adopts that 184-byte binary layout while explicitly defining its network bindings and independently authenticated target rule. This remains a newly versioned profile, not a claim about prior wire behavior. The existing 80-byte Bitcoin SHA-256d scanner remains separate. CI must pass before this stage is marked E3; production activation additionally requires authenticated proof storage, active-target policy resolution, GOD-authorized epoch/height activation, and cross-language interoperability.
 
 ## Stage 3 — Distributed validator networking
 
@@ -84,6 +84,6 @@ Additional required tests before production:
 
 A successful local CI run demonstrates the implemented code and tests. It does not demonstrate live HCCGN proof compatibility, a deployed distributed validator mesh, authorization by the operator's actual GOD policy, production justice evidence, or production storage durability.
 
-Do not mark Stage 2 fully complete until the canonical HCCGN network specification and independent known-answer vectors are present. Do not mark Stage 3 production-complete until live multi-node interoperability, failure recovery, and security review pass.
+Do not mark Stage 2 E3 until its dedicated tests and cross-language known-answer vectors pass. Do not mark Stage 2 production-complete until authenticated proof storage, active-target policy resolution, GOD-authorized activation, and live profile interoperability are verified. Do not mark Stage 3 production-complete until live multi-node interoperability, failure recovery, and security review pass.
 
 The Architect / Nexus / Cryptic News LLC / Project: The Nexus Generation: GaiaSSoul / SERIES: The Nexus of Gaia / ID: 137451921129154222|040592|433855274
