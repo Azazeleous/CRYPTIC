@@ -8,7 +8,8 @@ from __future__ import annotations
 import hashlib
 import math
 import struct
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
 PROFILE_ID = "HCCGN-WORK/1"
@@ -46,8 +47,8 @@ def _b32(value: bytes, field: str) -> bytes:
 @dataclass(frozen=True)
 class HCCGNWorkHeader:
     network_id_hash: bytes
-    epoch: int
     height: int
+    sequence: int
     timestamp: int
     parent_hash: bytes
     payload_hash: bytes
@@ -65,8 +66,8 @@ class HCCGNWorkHeader:
         _b32(self.parent_hash, "parent_hash")
         _b32(self.payload_hash, "payload_hash")
         _b32(self.target, "target")
-        _u(self.epoch, 64, "epoch", 1)
         _u(self.height, 64, "height", 1)
+        _u(self.sequence, 64, "sequence", 1)
         _u(self.timestamp, 64, "timestamp")
         _u(self.nonce, 64, "nonce")
         _u(self.primary_stride, 32, "primary_stride", 1)
@@ -76,7 +77,7 @@ class HCCGNWorkHeader:
         if self.compact_stride >= COMPACT_MODULUS or math.gcd(self.compact_stride, COMPACT_MODULUS) != 1:
             raise HCCGNWorkError("compact_stride_not_coprime")
         return struct.pack(HEADER_FORMAT, HEADER_MAGIC, self.version, self.network_id_hash,
-            self.epoch, self.height, self.timestamp, self.parent_hash, self.payload_hash,
+            self.height, self.sequence, self.timestamp, self.parent_hash, self.payload_hash,
             PRIMARY_MODULUS, COMPACT_MODULUS, self.primary_stride, self.compact_stride,
             self.nonce, self.target)
 
@@ -85,7 +86,7 @@ class HCCGNWorkHeader:
         if not isinstance(raw, bytes) or len(raw) != HEADER_SIZE:
             raise HCCGNWorkError("header_length_invalid")
         values = struct.unpack(HEADER_FORMAT, raw)
-        (magic, version, network_id_hash, epoch, height, timestamp, parent_hash,
+        (magic, version, network_id_hash, height, sequence, timestamp, parent_hash,
          payload_hash, primary_modulus, compact_modulus, primary_stride,
          compact_stride, nonce, target) = values
         if magic != HEADER_MAGIC:
@@ -94,7 +95,7 @@ class HCCGNWorkHeader:
             raise HCCGNWorkError("work_version_unsupported")
         if primary_modulus != PRIMARY_MODULUS or compact_modulus != COMPACT_MODULUS:
             raise HCCGNWorkError("residue_modulus_mismatch")
-        header = cls(network_id_hash, epoch, height, timestamp, parent_hash, payload_hash,
+        header = cls(network_id_hash, height, sequence, timestamp, parent_hash, payload_hash,
                      primary_stride, compact_stride, nonce, target, version)
         header.encode()
         return header
@@ -134,8 +135,8 @@ def verify_proof(proof: bytes, *, expected_network_id: str, expected_target: byt
     if header.network_id_hash != network_hash(expected_network_id):
         raise HCCGNWorkError("network_id_mismatch")
     if proposal is not None:
-        bindings = ((header.epoch, proposal.get('epoch'), 'epoch'),
-                    (header.height, proposal.get('height'), 'height'),
+        bindings = ((header.height, proposal.get('height'), 'height'),
+                    (header.sequence, proposal.get('epoch'), 'sequence/epoch'),
                     (header.timestamp, proposal.get('issued_at'), 'timestamp'),
                     (header.parent_hash.hex(), proposal.get('parent_hash'), 'parent_hash'),
                     (header.payload_hash.hex(), proposal.get('payload_hash'), 'payload_hash'))
@@ -183,3 +184,50 @@ class HCCGNWorkProofProvider:
             return result
         except Exception as exc:
             return {'valid': False, 'reason': f'verification_error:{type(exc).__name__}'}
+
+
+def mine_nonce(
+    header: HCCGNWorkHeader,
+    *,
+    start_nonce: int = 0,
+    max_attempts: int = 10_000_000,
+) -> tuple[HCCGNWorkHeader, bytes, bytes, str, int, float]:
+    """Mine a bounded nonce interval using a reusable SHA-256 midstate.
+
+    The first 128 bytes of WORK_DOMAIN || header are invariant across nonces.
+    The nonce begins at absolute stream offset len(WORK_DOMAIN)+144 == 157,
+    hence byte offset 29 in the tail after the first 128 bytes.
+    No nonce wrap is allowed: a range crossing 2**64 fails rather than
+    revisiting nonce values.
+    Returns (solved_header, digest, proof, proof_hash_hex, attempts, seconds).
+    """
+    _u(start_nonce, 64, "start_nonce")
+    _u(max_attempts, 64, "max_attempts", 1)
+    if start_nonce + max_attempts > (1 << 64):
+        raise HCCGNWorkError("nonce_range_overflow")
+
+    raw = header.encode()
+    target_int = int.from_bytes(header.target, "big")
+    stream = bytearray(WORK_DOMAIN + raw)
+    nonce_offset = len(WORK_DOMAIN) + 144
+    prefix_size = 128
+    midstate = hashlib.sha256(stream[:prefix_size])
+    tail = stream[prefix_size:]
+    tail_nonce_offset = nonce_offset - prefix_size
+    pack_u64_into = struct.Struct(">Q").pack_into
+    started = time.perf_counter()
+
+    for attempt in range(max_attempts):
+        nonce = start_nonce + attempt
+        pack_u64_into(tail, tail_nonce_offset, nonce)
+        current = midstate.copy()
+        current.update(tail)
+        digest = current.digest()
+        if int.from_bytes(digest, "big") <= target_int:
+            solved = replace(header, nonce=nonce)
+            proof = build_proof(solved)
+            proof_hash = proof_commitment(proof)
+            elapsed = time.perf_counter() - started
+            return solved, digest, proof, proof_hash, attempt + 1, elapsed
+
+    raise RuntimeError(f"No valid nonce found within {max_attempts:,} attempts.")
