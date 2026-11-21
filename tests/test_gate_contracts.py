@@ -7,7 +7,8 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from src.consensus.gcf import GCFEngine, GateResult
+from src.consensus.gcf import GCFEngine, GateResult, _require_int
+from src.consensus.independent_verifier import _integer, IndependentVerificationError
 from src.consensus.runtime import (
     RuntimeConfigurationError, build_consensus_runtime,
     load_pinned_ed25519_public_key,
@@ -16,6 +17,15 @@ from src.governance.justice_adapter import JusticeEvidenceVerifier
 
 
 class GateContractTests(unittest.TestCase):
+    def test_consensus_integer_values_fit_sqlite_signed_range(self):
+        maximum = (1 << 63) - 1
+        self.assertEqual(_require_int(maximum, "height", 1), maximum)
+        with self.assertRaisesRegex(ValueError, "height"):
+            _require_int(maximum + 1, "height", 1)
+        self.assertEqual(_integer(maximum, "HEIGHT", 1), maximum)
+        with self.assertRaisesRegex(IndependentVerificationError, "HEIGHT_INVALID_INTEGER"):
+            _integer(maximum + 1, "HEIGHT", 1)
+
     def test_gcf_gate_accepts_only_exact_boolean_or_valid_gate_result(self):
         engine = object.__new__(GCFEngine)
         self.assertTrue(engine._gate(lambda: True).allowed)
