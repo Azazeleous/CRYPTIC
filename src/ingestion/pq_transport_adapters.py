@@ -63,6 +63,8 @@ class AdapterSelection:
     kem_algorithm: str
     deadline_enforced: bool
     authenticated: bool
+    require_authenticated: bool = True
+    require_deadline: bool = True
 
 
 class AdapterRegistry:
