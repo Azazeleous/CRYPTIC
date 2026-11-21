@@ -198,7 +198,11 @@ def open_envelope(secret_key: bytes, envelope: PQEnvelope, *,
     _require_bytes(context, "context")
     if not isinstance(envelope, PQEnvelope):
         raise TypeError("envelope_must_be_PQEnvelope")
-    if envelope.version != 1 or envelope.kem != ML_KEM_ALGORITHM or envelope.aead != AEAD_ALGORITHM:
+    for field_name in ("encapsulated_key", "salt", "nonce", "ciphertext"):
+        _require_bytes(getattr(envelope, field_name), f"envelope_{field_name}")
+    if isinstance(envelope.version, bool) or envelope.version != 1:
+        raise PQProviderError("unsupported_pq_envelope_version")
+    if envelope.kem != ML_KEM_ALGORITHM or envelope.aead != AEAD_ALGORITHM:
         raise PQProviderError("unsupported_pq_envelope_profile")
     if len(envelope.salt) != 32 or len(envelope.nonce) != 12:
         raise PQProviderError("pq_envelope_salt_or_nonce_length_invalid")
