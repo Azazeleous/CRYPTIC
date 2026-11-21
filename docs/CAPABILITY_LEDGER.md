@@ -47,4 +47,9 @@
 | PQ transport adapter registry | implemented (E2) | ML-DSA-signed manifests, pinned trust store, explicit KEM/signature capability declarations, authenticated/deadline-gated selection, and signer-revocation invalidation; real network adapters and external trust operations remain unintegrated |
 | Negacyclic ring and SHA-256 inverse research | research implementation (E2) | finite arithmetic/research prototypes with tests; not a cryptographic hash inversion claim and not a consensus primitive |
 
+| GCF/1 five-stage completion | implemented (E3 reference; current-mainline CI pending) | Independent finality verifier, proposal/vote stages, strict weighted quorum, PREVOTE/PRECOMMIT lock and certificate checks, ADAM/APEX integration; no live validator network claim |
+| HCCGN-WORK/1 canonical proof profile | implemented (E3 reference; current-mainline CI pending) | 184-byte big-endian header, domain-separated SHA-256, authenticated active-target comparison, content-addressed proof envelope, Python/Go known-answer vectors and midstate/full-hash equivalence; external GOD root and independent monotonic anchor remain deployment gates |
+| GCF-P2P/1 direct validator transport | implemented (E2; current-mainline CI pending) | Mutual TLS, pinned peer certificate fingerprints, Ed25519 signed envelopes, bounded frames and replay protection; peer discovery/gossip, round-change, live multi-host interoperability and key-custody review remain open |
+| ADAM/APEX historical-chain recovery audit | implemented (E3 reference; current-mainline CI pending) | State bytes/size/digest validation, contiguous height and parent-state continuity, WAL reopen/rollback tests, and full persisted-chain revalidation; physical power-loss and filesystem durability are not claimed |
+
 Update this ledger only with reproducible evidence. Never mark a feature complete because its directory, interface, or design document exists.
