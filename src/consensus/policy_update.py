@@ -38,6 +38,7 @@ class GCFPolicyUpdateCoordinator:
         sequence_anchor: HCCGNSequenceAnchor,
         proposer_id: str,
         proposer_signer: Any,
+        peer_mesh: Any | None = None,
         clock: Callable[[], float] = time.time,
     ):
         if not isinstance(proposer_id, str) or not proposer_id:
@@ -57,6 +58,12 @@ class GCFPolicyUpdateCoordinator:
         self.sequence_anchor = sequence_anchor
         self.proposer_id = proposer_id
         self.proposer_signer = proposer_signer
+        self.peer_mesh = peer_mesh
+        if peer_mesh is not None:
+            peer_node = getattr(peer_mesh, "node", None)
+            if (getattr(peer_node, "validator_set", None) is None
+                    or peer_node.validator_set.digest != engine.validator_set.digest):
+                raise PolicyUpdateError("peer_mesh_validator_set_mismatch")
         self.clock = clock
 
     def prepare(
@@ -133,6 +140,27 @@ class GCFPolicyUpdateCoordinator:
             }
         except (GCFError, HCCGNRegistryError) as exc:
             raise PolicyUpdateError(str(exc)) from exc
+
+    async def prepare_and_broadcast(self, snapshot: Mapping[str, Any], **proposal_fields) -> dict:
+        """Submit locally, then fan the signed proposal out to configured peers."""
+        if self.peer_mesh is None:
+            raise PolicyUpdateError("peer_mesh_not_configured")
+        prepared = self.prepare(snapshot, **proposal_fields)
+        fanout = await self.peer_mesh.broadcast("PROPOSAL", prepared["proposal"])
+        return {**prepared, "peer_broadcast": fanout}
+
+    async def broadcast_vote(self, vote: Mapping[str, Any]) -> dict:
+        """Relay this node's independently signed vote to its configured peers."""
+        if self.peer_mesh is None:
+            raise PolicyUpdateError("peer_mesh_not_configured")
+        peer_node = self.peer_mesh.node
+        if (not isinstance(vote, Mapping)
+                or vote.get("validator_id") != peer_node.node_id
+                or vote.get("network_id") != self.engine.validator_set.network_id
+                or vote.get("epoch") != self.engine.validator_set.epoch
+                or vote.get("vote_type") not in {"PREVOTE", "PRECOMMIT"}):
+            raise PolicyUpdateError("local_validator_vote_binding_invalid")
+        return await self.peer_mesh.broadcast("VOTE", vote)
 
     def finalize_and_install(
         self,
