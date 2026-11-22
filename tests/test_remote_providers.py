@@ -218,8 +218,18 @@ class RemoteProviderTests(unittest.TestCase):
         self.assertTrue(anchor.advance_sequence("test-net", 2, digest2))
         self.assertEqual(anchor.read_sequence("test-net"), (2, digest2))
 
+    def test_policy_transition_client_requires_caller_authentication(self):
+        with self.assertRaisesRegex(RemoteProviderError, "request_authentication_required"):
+            SignedHTTPSPolicyTransitionClient(
+                "https://god.example/v1/anchor-transitions",
+                signer_id="god-policy-root", policy_id="cryptic-main-policy-v1",
+                trusted_public_key=self.god_public, clock=lambda: self.now,
+                transport=lambda *_: self.fail("transport must not be called"),
+            )
+
     def test_policy_transition_client_verifies_exact_signed_god_response(self):
         def transport(method, url, headers, raw, timeout):
+            self.assertEqual(headers.get("Authorization"), "Bearer " + "G" * 40)
             request = json.loads(raw)
             body = {
                 "schema": POLICY_TRANSITION_SCHEMA,
@@ -244,7 +254,8 @@ class RemoteProviderTests(unittest.TestCase):
         client = SignedHTTPSPolicyTransitionClient(
             "https://god.example/v1/anchor-transitions",
             signer_id="god-policy-root", policy_id="cryptic-main-policy-v1",
-            trusted_public_key=self.god_public, clock=lambda: self.now,
+            trusted_public_key=self.god_public, request_token="G" * 40,
+            clock=lambda: self.now,
             transport=transport,
         )
         authorization = client.authorize_transition({
@@ -281,7 +292,8 @@ class RemoteProviderTests(unittest.TestCase):
         client = SignedHTTPSPolicyTransitionClient(
             "https://god.example/v1/anchor-transitions",
             signer_id="god-policy-root", policy_id="cryptic-main-policy-v1",
-            trusted_public_key=self.god_public, clock=lambda: self.now,
+            trusted_public_key=self.god_public, request_token="G" * 40,
+            clock=lambda: self.now,
             transport=transport,
         )
         with self.assertRaisesRegex(RemoteProviderError, "binding_mismatch"):
