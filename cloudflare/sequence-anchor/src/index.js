@@ -1,7 +1,8 @@
 const ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1";
 const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
 const ZERO_HASH = "0".repeat(64);
-const MAX_BODY_BYTES = 1_048_576;
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+const MAX_PROPOSAL_BYTES = 4 * 1024 * 1024;
 const HEX_256 = /^[0-9a-f]{64}$/;
 const NONCE = /^[0-9a-f]{32}$/;
 function canonical(value) {
