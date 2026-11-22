@@ -275,5 +275,35 @@ class RemoteProviderTests(unittest.TestCase):
                 )
 
 
+    def test_justice_rejects_shared_signing_key_even_with_distinct_signer_ids(self):
+        policy = SignedHTTPSDecisionClient(
+            "https://policy.example/check", signer_id="policy-root",
+            trusted_public_key=self.public, clock=lambda: self.now,
+            transport=lambda *_: (500, {}, b""),
+        )
+        evidence = SignedHTTPSDecisionClient(
+            "https://evidence.example/check", signer_id="evidence-root",
+            trusted_public_key=self.public, clock=lambda: self.now,
+            transport=lambda *_: (500, {}, b""),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "must_be_independent"):
+            HTTPSJusticeProviders(policy=policy, evidence=evidence)
+
+    def test_justice_rejects_shared_endpoint_even_with_distinct_keys(self):
+        _other_private, other_public = keypair()
+        policy = SignedHTTPSDecisionClient(
+            "https://justice.example/check", signer_id="policy-root",
+            trusted_public_key=self.public, clock=lambda: self.now,
+            transport=lambda *_: (500, {}, b""),
+        )
+        evidence = SignedHTTPSDecisionClient(
+            "https://justice.example/check", signer_id="evidence-root",
+            trusted_public_key=other_public, clock=lambda: self.now,
+            transport=lambda *_: (500, {}, b""),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "must_be_independent"):
+            HTTPSJusticeProviders(policy=policy, evidence=evidence)
+
+
 if __name__ == "__main__":
     unittest.main()
