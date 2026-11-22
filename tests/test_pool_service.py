@@ -84,6 +84,15 @@ class PoolCoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(PoolServiceError, "worker_identity"):
             self.pool.submit_share(submission, authenticated_worker_id="worker-b")
 
+    def test_job_is_only_retrievable_by_assigned_worker(self):
+        job = self.issue()
+        with self.assertRaisesRegex(PoolServiceError, "not_assigned_to_worker"):
+            self.pool.get_job(job["job_id"], authenticated_worker_id="worker-b")
+        self.assertEqual(
+            self.pool.get_job(job["job_id"], authenticated_worker_id="worker-a")["job_id"],
+            job["job_id"],
+        )
+
     def test_policy_unavailable_fails_job_issuance(self):
         self.pool.resolve_active_target = lambda boundary: None
         with self.assertRaisesRegex(PoolServiceError, "active_target_unavailable"):
