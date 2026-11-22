@@ -12,8 +12,9 @@ import time
 from typing import Any, Callable, Mapping
 
 from src.consensus.gcf import (
-    CERT_DOMAIN, PROPOSAL_DOMAIN, SCHEMA, VOTE_DOMAIN, GCFEngine, GCFError,
-    ValidatorSet, canonical_bytes, sha256_hex, verify_object, _unsigned,
+    CERT_DOMAIN, PROPOSAL_DOMAIN, SCHEMA, VOTE_DOMAIN, MAX_SQLITE_INT,
+    GCFEngine, GCFError, ValidatorSet, canonical_bytes, sha256_hex,
+    verify_object, _unsigned,
 )
 
 ROUND_CHANGE_SCHEMA = "GCF-ROUND-CHANGE/1"
@@ -70,7 +71,8 @@ def verify_polc(polc: Mapping[str, Any], *, validator_set: ValidatorSet,
         if digest != polc["candidate_digest"]:
             return _fail("polc_candidate_mismatch")
         votes = polc["prevotes"]
-        if not isinstance(votes, list) or not votes:
+        if (not isinstance(votes, list) or not votes
+                or len(votes) > len(validator_set.validators)):
             return _fail("polc_votes_invalid")
         seen: set[str] = set()
         for vote in votes:
@@ -106,6 +108,13 @@ def verify_round_change_message(message: Mapping[str, Any], *,
                                 clock: Callable[[], float] = time.time,
                                 max_age_seconds: int = 300) -> dict:
     try:
+        if (isinstance(height, bool) or not isinstance(height, int)
+                or not 1 <= height <= MAX_SQLITE_INT
+                or isinstance(target_round, bool) or not isinstance(target_round, int)
+                or not 1 <= target_round <= MAX_SQLITE_INT
+                or isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int)
+                or not 1 <= max_age_seconds <= 3600):
+            return _fail("round_change_verifier_limits_invalid")
         required = {
             "schema", "network_id", "epoch", "height", "source_round",
             "target_round", "validator_id", "issued_at", "expires_at",
@@ -123,7 +132,8 @@ def verify_round_change_message(message: Mapping[str, Any], *,
         target = message["target_round"]
         for value in (source, target, message["height"], message["epoch"],
                       message["issued_at"], message["expires_at"]):
-            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or value < 0 or value > MAX_SQLITE_INT):
                 return _fail("round_change_integer_invalid")
         if target != target_round or target <= source:
             return _fail("round_change_target_invalid")
@@ -169,6 +179,11 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
                                     max_age_seconds: int = 300) -> dict:
     """Verify unique signed messages and strict weighted quorum, then select highest POLC."""
     try:
+        if (isinstance(height, bool) or not isinstance(height, int)
+                or not 1 <= height <= MAX_SQLITE_INT
+                or isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int)
+                or not 1 <= max_age_seconds <= 3600):
+            return _fail("round_change_verifier_limits_invalid")
         if not isinstance(certificate, Mapping) or set(certificate) != {
             "schema", "network_id", "epoch", "height", "target_round",
             "messages", "digest",
@@ -181,10 +196,12 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
                 or certificate["height"] != height):
             return _fail("round_change_certificate_context_mismatch")
         target = certificate["target_round"]
-        if isinstance(target, bool) or not isinstance(target, int) or target < 1:
+        if (isinstance(target, bool) or not isinstance(target, int)
+                or not 1 <= target <= MAX_SQLITE_INT):
             return _fail("round_change_certificate_target_invalid")
         messages = certificate["messages"]
-        if not isinstance(messages, list) or not messages:
+        if (not isinstance(messages, list) or not messages
+                or len(messages) > len(validator_set.validators)):
             return _fail("round_change_certificate_messages_invalid")
         ids: set[str] = set()
         nonce_ids: set[tuple[str, str]] = set()
