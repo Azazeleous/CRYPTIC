@@ -251,7 +251,7 @@ class GCFEngine:
               network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
               round INTEGER NOT NULL, vote_type TEXT NOT NULL,
               validator_id TEXT NOT NULL, candidate_digest TEXT NOT NULL,
-              PRIMARY KEY(network_id, epoch, height, round, vote_type, validator_id)
+              PRIMARY KEY(network_id, epoch, height, vote_type, validator_id)
             );
             CREATE TABLE IF NOT EXISTS certificates(
               candidate_digest TEXT PRIMARY KEY REFERENCES proposals(candidate_digest),
@@ -261,6 +261,46 @@ class GCFEngine:
               SELECT p.network_id,p.epoch,p.height,p.round,v.vote_type,v.validator_id,v.candidate_digest
               FROM votes v JOIN proposals p ON p.candidate_digest=v.candidate_digest;
             """)
+            # Upgrade databases created by the earlier round-scoped lock schema.
+            # If historical records show cross-round conflicting votes, refuse to
+            # start rather than silently choosing one lock and masking equivocation.
+            lock_columns = db.execute("PRAGMA table_info(vote_locks)").fetchall()
+            round_is_primary = any(row["name"] == "round" and row["pk"] for row in lock_columns)
+            if round_is_primary:
+                conflict = db.execute("""
+                    SELECT network_id,epoch,height,vote_type,validator_id
+                    FROM vote_locks
+                    GROUP BY network_id,epoch,height,vote_type,validator_id
+                    HAVING COUNT(DISTINCT candidate_digest) > 1
+                    LIMIT 1
+                """).fetchone()
+                if conflict is not None:
+                    raise GCFError("PERSISTED_CROSS_ROUND_EQUIVOCATION")
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    db.execute("""
+                        CREATE TABLE vote_locks_v2(
+                          network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                          height INTEGER NOT NULL, round INTEGER NOT NULL,
+                          vote_type TEXT NOT NULL, validator_id TEXT NOT NULL,
+                          candidate_digest TEXT NOT NULL,
+                          PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
+                        )
+                    """)
+                    db.execute("""
+                        INSERT INTO vote_locks_v2
+                        SELECT network_id,epoch,height,MIN(round),vote_type,
+                               validator_id,candidate_digest
+                        FROM vote_locks
+                        GROUP BY network_id,epoch,height,vote_type,
+                                 validator_id,candidate_digest
+                    """)
+                    db.execute("DROP TABLE vote_locks")
+                    db.execute("ALTER TABLE vote_locks_v2 RENAME TO vote_locks")
+                    db.execute("COMMIT")
+                except Exception:
+                    db.execute("ROLLBACK")
+                    raise
 
     def _gate(self, gate: Callable, *args) -> GateResult:
         try:
@@ -439,10 +479,10 @@ class GCFEngine:
                         raise GCFError("PRECOMMIT_POLC_MISMATCH")
                 lock = db.execute(
                     """SELECT candidate_digest FROM vote_locks
-                       WHERE network_id=? AND epoch=? AND height=? AND round=?
+                       WHERE network_id=? AND epoch=? AND height=?
                          AND vote_type=? AND validator_id=?""",
                     (normalized["network_id"], normalized["epoch"], normalized["height"],
-                     normalized["round"], normalized["vote_type"], normalized["validator_id"]),
+                     normalized["vote_type"], normalized["validator_id"]),
                 ).fetchone()
                 if lock is not None:
                     if lock["candidate_digest"] != digest:
