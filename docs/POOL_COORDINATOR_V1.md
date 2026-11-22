@@ -49,9 +49,13 @@ identity headers before constructing trusted WSGI environment fields.
 
 The adapter deliberately has no default authenticator and no public-server
 launcher. If authentication cannot be established, the request fails closed.
-The repository provides the adapter contract; deployment-specific certificate
-issuance, worker registration, revocation, gateway configuration, and
-multi-host identity custody remain operator responsibilities.
+The repository includes `MTLSWorkerAuthenticator`, which requires
+`SSL_CLIENT_VERIFY=SUCCESS`, hashes the supplied client certificate, and maps
+its SHA-256 fingerprint through an explicit worker allowlist. The TLS gateway
+must validate the chain and overwrite/strip all client-supplied `SSL_*` identity
+variables before invoking WSGI. Certificate issuance, allowlist distribution,
+revocation/rotation, gateway configuration, and multi-host identity custody
+remain operator responsibilities.
 
 ## Persistence and process model
 
