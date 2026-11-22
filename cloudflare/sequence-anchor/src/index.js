@@ -306,7 +306,10 @@ async function gcfValueDigest(proposal) {
   return sha256Hex(new TextEncoder().encode(canonical(value)));
 }
 
-async function verifyRoundChangeCertificate(roundChange, proposal, vset, verificationTime) {
+async function verifyRoundChangeCertificate(roundChange, proposal, vset, verificationTime, proofDepth = 0) {
+  if (!Number.isSafeInteger(proofDepth) || proofDepth < 0 || proofDepth > 8) {
+    return { ok: false, reason: "round_change_proof_depth_exceeded" };
+  }
   if (!roundChange || typeof roundChange !== "object" || Array.isArray(roundChange)) {
     return { ok: false, reason: "round_change_certificate_missing" };
   }
@@ -375,6 +378,17 @@ async function verifyRoundChangeCertificate(roundChange, proposal, vset, verific
         network_id: proposal.network_id, candidate_digest: polc.candidate_digest
       }, vset);
       if (!polcProposalResult.ok) return polcProposalResult;
+      if (polcProposal.round === 0) {
+        if (Object.hasOwn(polcProposal, "round_change_certificate")) {
+          return { ok: false, reason: "round_zero_has_round_change_certificate" };
+        }
+      } else {
+        const nested = await verifyRoundChangeCertificate(
+          polcProposal.round_change_certificate, polcProposal, vset,
+          verificationTime, proofDepth + 1
+        );
+        if (!nested.ok) return nested;
+      }
       const prevoteResult = await verifyGcfVoteSet(
         polc.prevotes, "PREVOTE", polcProposal, polcProposalResult.digest, vset
       );
