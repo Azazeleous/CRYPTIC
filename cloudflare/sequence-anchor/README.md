@@ -39,7 +39,7 @@ paste private key material or the write token into GitHub, chat, source code,
 D1, or shell history.
 
 The Worker requires these Cloudflare secrets/configuration:
-- `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`: independently pinned GOD Ed25519 public key (32-byte raw key as 64 lowercase hex characters).
+- `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`: GOD Ed25519 public key (32-byte raw key as 64 lowercase hex characters).\n- `ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256`: its SHA-256 fingerprint obtained independently from the key-distribution channel; the Worker recomputes and checks this pin before signature verification.
 - `ANCHOR_GOD_POLICY_SIGNER_ID`: exact authorized GOD policy signer identity.
 - `ANCHOR_POLICY_ID`: exact policy namespace permitted to advance this anchor.
 - `ANCHOR_SIGNING_KEY_PKCS8_B64`: base64 of the Ed25519 private key in PKCS#8 DER.
