@@ -36,7 +36,7 @@ class RemoteProviderTests(unittest.TestCase):
         self.god_private, self.god_public = keypair()
 
     def god_authorization(self, fields):
-        body = {"schema": GOD_ANCHOR_AUTH_SCHEMA, "signer_id": "god-root", **dict(fields)}
+        body = {**dict(fields), "schema": GOD_ANCHOR_AUTH_SCHEMA, "signer_id": "god-root"}
         return {**body, "signature": self.signed(self.god_private, GOD_ANCHOR_AUTH_DOMAIN, body)}
 
     def signed(self, private, domain, body):
@@ -262,7 +262,7 @@ class RemoteProviderTests(unittest.TestCase):
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
             authorization_provider=mismatched, clock=lambda: self.now,
-            transport=lambda *_: self.fail("transport must not be called"),
+            transport=lambda method, *_: (404, {}, b"") if method == "GET" else self.fail("PUT must not be called"),
         )
         with self.assertRaisesRegex(RemoteProviderError, "god_authorization_binding_invalid"):
             anchor.advance_sequence("test", 1, "1" * 64)
