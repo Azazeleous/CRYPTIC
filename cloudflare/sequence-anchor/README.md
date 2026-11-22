@@ -74,3 +74,22 @@ channels. Do not use the same channel to distribute both key and fingerprint.
 
 The Worker is an implementation component. It is not an independent operator,
 a GOD authorization authority, or proof of production finality by itself.
+
+## Staged Cloudflare deployment record
+
+On 2026-11-22, the Worker script was uploaded to the connected Cloudflare account
+`bc67ed84864df46b05d196cff28126bb` as
+`cryptic-production-sequence-anchor`.
+
+- Deployment ID: `697e0e25b28a4e109eda04dd98769e1b`
+- Script tag: `f4b9f90848404d10ac3efdb1f701d762`
+- Bound D1 database: `1d6199f8-8a49-45c4-abd6-ac816a91a487`
+- Workers.dev: verified disabled (`enabled=false`, `previews_enabled=false`)
+- Zone routes: verified no route points to this Worker
+- D1 schema: verified `anchors` table exists; row count is zero
+- Signing and write secrets: not provisioned
+- External endpoint: not published
+
+This is a real but dormant code deployment. It is not a live anchor service,
+does not establish an independently administered trust root, and cannot
+accept writes while secrets and a protected route remain absent.
