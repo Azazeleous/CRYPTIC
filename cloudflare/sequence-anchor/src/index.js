@@ -1,5 +1,7 @@
 const ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1";
 const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
+const GOD_AUTH_SCHEMA = "CRYPTIC-GOD-ANCHOR-AUTH/1";
+const GOD_AUTH_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-ANCHOR-AUTH/1\0");
 const ZERO_HASH = "0".repeat(64);
 const MAX_BODY_BYTES = 8192;
 const HEX_256 = /^[0-9a-f]{64}$/;
@@ -63,6 +65,60 @@ async function signRecord(record, env) {
   let binary = "";
   for (const byte of signature) binary += String.fromCharCode(byte);
   return { ...record, signature: btoa(binary) };
+}
+
+async function verifyGodAuthorization(authorization, body, env, now) {
+  const signerId = env.GOD_ANCHOR_AUTH_SIGNER_ID;
+  const publicKeyHex = env.GOD_ANCHOR_AUTH_PUBLIC_KEY_HEX;
+  const expectedFingerprint = env.GOD_ANCHOR_AUTH_KEY_FINGERPRINT;
+  if (!signerId || !publicKeyHex || !expectedFingerprint) {
+    return { ok: false, status: 503, error: "god_authority_not_configured" };
+  }
+  if (typeof publicKeyHex !== "string" || !/^[0-9a-f]{64}$/.test(publicKeyHex) ||
+      typeof expectedFingerprint !== "string" || !/^[0-9a-f]{64}$/.test(expectedFingerprint)) {
+    return { ok: false, status: 503, error: "god_trust_pin_invalid" };
+  }
+  const fields = ["schema", "signer_id", "network_id", "sequence", "policy_hash",
+    "expected_sequence", "expected_policy_hash", "issued_at", "nonce", "signature"];
+  if (!authorization || typeof authorization !== "object" || Array.isArray(authorization) ||
+      Object.keys(authorization).sort().join("|") !== fields.slice().sort().join("|")) {
+    return { ok: false, status: 403, error: "god_authorization_missing_or_malformed" };
+  }
+  if (authorization.schema !== GOD_AUTH_SCHEMA || authorization.signer_id !== signerId ||
+      authorization.network_id !== body.network_id ||
+      authorization.sequence !== body.sequence ||
+      authorization.policy_hash !== body.policy_hash ||
+      authorization.expected_sequence !== body.expected_sequence ||
+      authorization.expected_policy_hash !== body.expected_policy_hash ||
+      authorization.issued_at !== body.issued_at ||
+      authorization.nonce !== body.nonce ||
+      !validTimestamp(authorization.issued_at, now)) {
+    return { ok: false, status: 403, error: "god_authorization_binding_invalid" };
+  }
+  try {
+    const publicKey = Uint8Array.from(publicKeyHex.match(/../g), byte => parseInt(byte, 16));
+    const fingerprint = new Uint8Array(await crypto.subtle.digest("SHA-256", publicKey));
+    let fingerprintHex = "";
+    for (const byte of fingerprint) fingerprintHex += byte.toString(16).padStart(2, "0");
+    if (fingerprintHex !== expectedFingerprint) {
+      return { ok: false, status: 503, error: "god_trust_fingerprint_mismatch" };
+    }
+    const key = await crypto.subtle.importKey("raw", publicKey, { name: "Ed25519" }, false, ["verify"]);
+    const signature = decodeBase64(authorization.signature);
+    if (signature.length !== 64) throw new Error("signature_length_invalid");
+    const unsigned = { ...authorization };
+    delete unsigned.signature;
+    const payload = new TextEncoder().encode(canonical(unsigned));
+    const message = new Uint8Array(GOD_AUTH_DOMAIN.length + payload.length);
+    message.set(GOD_AUTH_DOMAIN);
+    message.set(payload, GOD_AUTH_DOMAIN.length);
+    const valid = await crypto.subtle.verify("Ed25519", key, signature, message);
+    return valid
+      ? { ok: true }
+      : { ok: false, status: 403, error: "god_authorization_signature_invalid" };
+  } catch {
+    return { ok: false, status: 403, error: "god_authorization_signature_invalid" };
+  }
 }
 
 async function authorized(request, env) {
@@ -141,7 +197,7 @@ async function advanceAnchor(request, networkId, env) {
   } catch { return json({ error: "invalid_json" }, 400); }
   if (canonical(body) !== decoded) return json({ error: "noncanonical_json" }, 400);
   const fields = ["schema", "network_id", "sequence", "policy_hash",
-    "expected_sequence", "expected_policy_hash", "issued_at", "nonce"];
+    "expected_sequence", "expected_policy_hash", "issued_at", "nonce", "authorization"];
   if (!body || typeof body !== "object" || Array.isArray(body) ||
       Object.keys(body).sort().join("|") !== fields.slice().sort().join("|")) {
     return json({ error: "request_schema_invalid" }, 400);
@@ -154,6 +210,8 @@ async function advanceAnchor(request, networkId, env) {
       !validTimestamp(body.issued_at, now) || !NONCE.test(body.nonce)) {
     return json({ error: "request_fields_invalid" }, 400);
   }
+  const godAuthorization = await verifyGodAuthorization(body.authorization, body, env, now);
+  if (!godAuthorization.ok) return json({ error: godAuthorization.error }, godAuthorization.status);
   const ifNoneMatch = request.headers.get("if-none-match");
   const ifMatch = request.headers.get("if-match");
   const condition = ifNoneMatch === "*" && ifMatch === null &&
@@ -208,7 +266,9 @@ export default {
     if (url.pathname === "/health") {
       return json({ service: "cryptic-sequence-anchor", schema: ANCHOR_SCHEMA,
         configured: Boolean(env.ANCHOR_DB && env.ANCHOR_SIGNER_ID &&
-          env.ANCHOR_SIGNING_KEY_PKCS8_B64 && env.ANCHOR_WRITE_TOKEN) });
+          env.ANCHOR_SIGNING_KEY_PKCS8_B64 && env.ANCHOR_WRITE_TOKEN &&
+          env.GOD_ANCHOR_AUTH_SIGNER_ID && env.GOD_ANCHOR_AUTH_PUBLIC_KEY_HEX &&
+          env.GOD_ANCHOR_AUTH_KEY_FINGERPRINT) });
     }
     const match = url.pathname.match(/^\/v1\/anchors\/([^/]+)$/);
     if (!match) return json({ error: "not_found" }, 404);
