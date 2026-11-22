@@ -247,6 +247,20 @@ test("rejects missing, forged, mismatched, wrong-policy and replayed GOD authori
   assert.equal(env.ANCHOR_DB.rows.get("test-net").sequence, 1);
 });
 
+test("rejects a GOD public key whose independently pinned fingerprint does not match", async () => {
+  const { env, godPrivateKey } = await setup();
+  env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256 = "0".repeat(64);
+  const body = writeBody("test-net", 1, "1".repeat(64), 0, ZERO);
+  body.authorization = await authorize(godPrivateKey, body, "31".repeat(16));
+  const response = await request(env, "PUT", "/v1/anchors/test-net", {
+    headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
+      "content-type": "application/json" }, body,
+  });
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).error, "god_policy_fingerprint_pin_mismatch");
+  assert.equal(env.ANCHOR_DB.rows.size, 0);
+});
+
 test("rejects malformed nonce, malformed request and wrong bearer token", async () => {
   const { env } = await setup();
   const badNonce = await request(env, "GET", "/v1/anchors/test-net", {
