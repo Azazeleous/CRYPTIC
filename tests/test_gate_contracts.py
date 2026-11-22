@@ -78,6 +78,7 @@ class GateContractTests(unittest.TestCase):
         )(proposal).allowed)
 
 
+@unittest.skipUnless(os.name == "posix", "runtime filesystem permission assertions require POSIX mode semantics")
 class RuntimeCompositionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -135,7 +136,7 @@ class RuntimeCompositionTests(unittest.TestCase):
 
     def test_runtime_data_directory_is_private(self):
         private_dir = self.root / "private-data"
-        runtime = build_consensus_runtime(
+        build_consensus_runtime(
             network_id="gaia-testnet", epoch=1,
             validators={"validator-a": {"public_key_hex": "11" * 32, "weight": 1}},
             data_dir=private_dir, god_trust_root_path=self.root_pin_path,
@@ -162,7 +163,7 @@ class RuntimeCompositionTests(unittest.TestCase):
             )
 
     def test_raw_trust_root_preserves_leading_and_trailing_whitespace_bytes(self):
-        key = b" " + (b"\x01" * 30) + b"\n"
+        key = b" " + (b"\\x01" * 30) + b"\\n"
         self.key_path.write_bytes(key)
         os.chmod(self.key_path, 0o600)
         self.assertEqual(load_pinned_ed25519_public_key(self.key_path), key)
