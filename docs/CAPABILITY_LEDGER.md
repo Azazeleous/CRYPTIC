@@ -73,3 +73,5 @@ Update this ledger only with reproducible evidence. Never mark a feature complet
 
 
 | End-to-end HCCGN policy-update coordinator | implemented in branch (E2; CI verified on code commit 5923dfb) | `GCFPolicyUpdateCoordinator` verifies the signed policy snapshot, binds policy digest + anchor sequence + prior anchor hash into a signed GCF proposal, submits through normal admission gates, waits for externally submitted validator votes via existing GCF endpoints, finalizes only after both weighted quorums, installs the exact certificate, and checks the final anchor tuple. Runtime exposes `policy_update` when configured with an approved validator proposer signer. It does not fabricate remote votes or claim live peer orchestration. |
+
+| GCF/1 cross-round vote-lock invariant | implemented in branch (E2; head CI pending) | Validator vote locks now span all rounds for the same network/epoch/height/phase/validator. Legacy round-scoped SQLite locks migrate only when historical rows are consistent; cross-round historical conflicts fail startup closed. Tests cover cross-round equivocation and migration. No round-change unlock or live multi-host BFT claim. |
