@@ -202,4 +202,8 @@ Verification on code commit 8db70bca3a68c8c3dc9678a041c6fbc876d52e74:
 
 This closes the gap between the earlier fan-out test double and a real local TLS socket round trip. It remains a loopback integration test: it does not demonstrate independent hosts, internet routing, operator separation, certificate rotation/revocation, packet loss, partition recovery, or production key custody.
 
-**Verification status:** the new test is committed, but its corrected-head CI result is pending. Do not treat earlier workflow runs as evidence for this test.
+**Corrected-head verification on commit 78e6ef56e4d67c268d050c4bf34bd766ef25260e:**
+- [CRYPTIC CI](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028097) passed 404 tests (2 skipped); the new real mutual-TLS test passed.
+- [Production-gate contracts](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028122) passed on Ubuntu and Windows, including the mTLS peer interoperability contract.
+- [Mining-engine tests](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028107) passed 404 tests (2 skipped).
+- [GAIA local trophy](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028140) passed.
