@@ -87,6 +87,10 @@ async function readAnchor(networkId, nonce, env) {
     "SELECT sequence, policy_hash FROM anchors WHERE network_id = ?"
   ).bind(networkId).first();
   if (!row) return new Response(null, { status: 404, headers: { "cache-control": "no-store" } });
+  if (!Number.isSafeInteger(row.sequence) || row.sequence < 1 ||
+      typeof row.policy_hash !== "string" || !HEX_256.test(row.policy_hash)) {
+    throw new Error("anchor_storage_record_invalid");
+  }
   const record = await signRecord({
     schema: ANCHOR_SCHEMA, signer_id: env.ANCHOR_SIGNER_ID,
     network_id: networkId, sequence: row.sequence,
@@ -130,9 +134,12 @@ async function advanceAnchor(request, networkId, env) {
   let raw;
   try { raw = await readBoundedBody(request); }
   catch { return json({ error: "body_too_large" }, 413); }
-  let body;
-  try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)); }
-  catch { return json({ error: "invalid_json" }, 400); }
+  let body, decoded;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true }).decode(raw);
+    body = JSON.parse(decoded);
+  } catch { return json({ error: "invalid_json" }, 400); }
+  if (canonical(body) !== decoded) return json({ error: "noncanonical_json" }, 400);
   const fields = ["schema", "network_id", "sequence", "policy_hash",
     "expected_sequence", "expected_policy_hash", "issued_at", "nonce"];
   if (!body || typeof body !== "object" || Array.isArray(body) ||
