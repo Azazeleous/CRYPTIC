@@ -54,7 +54,7 @@ async function verifyPolicyAuthorization(authorization, transition, networkId, e
     const fingerprint = Array.from(fingerprintBytes, byte => byte.toString(16).padStart(2, "0")).join("");
     if (!/^[0-9a-f]{64}$/.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) ||
         fingerprint !== env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) {
-      return { ok: false, reason: "god_policy_fingerprint_pin_mismatch" };
+      return { ok: false, reason: "god_policy_trust_fingerprint_pin_mismatch" };
     }
     let publicKey;
     try {
