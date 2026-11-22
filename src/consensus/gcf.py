@@ -608,10 +608,17 @@ class GCFEngine:
         observed_weight = self.validator_set.weight_of({
             item["validator_id"] for item in messages
         })
+        certificate_status = (
+            "verified" if result["valid"] else
+            "awaiting_quorum" if result["reason"] == "round_change_quorum_missing" else
+            "rejected"
+        )
         return {
             "accepted": True, "validator_id": checked["validator_id"],
             "height": height, "target_round": target,
             "quorum_reached": bool(result["valid"]),
+            "certificate_status": certificate_status,
+            "certificate_reason": result["reason"],
             "voting_weight": observed_weight,
             "quorum_weight": self.validator_set.quorum_weight(),
             "message_count": len(messages),
