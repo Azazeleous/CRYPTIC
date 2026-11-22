@@ -16,7 +16,7 @@ from src.governance.remote_providers import (
     SignedHTTPSDecisionClient, SignedHTTPSPolicyTransitionClient,
     load_independently_pinned_root, HTTPSHSMEd25519Signer, GODHTTPSGate,
     make_proposal_with_signer,
-    make_vote_with_signer, _canonical,
+    make_vote_with_signer, PersistentGCFVoteSigner, _canonical,
 )
 
 
@@ -390,15 +390,103 @@ class RemoteProviderTests(unittest.TestCase):
             signer.public_key_hex, proposal["signature"],
             PROPOSAL_DOMAIN, unsigned,
         ))
-        vote = make_vote_with_signer(
-            signer=signer, validator_id="validator-1", proposal=proposal,
-            vote_type="PREVOTE", issued_at=self.now,
+        from src.consensus.gcf import VOTE_DOMAIN, ValidatorSet
+        validator_set = ValidatorSet("test-net", 1, {
+            "validator-1": {"public_key_hex": signer.public_key_hex, "weight": 1},
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            vote_signer = PersistentGCFVoteSigner(
+                signer, validator_id="validator-1", validator_set=validator_set,
+                db_path=Path(directory) / "vote-locks.sqlite3",
+            )
+            vote = make_vote_with_signer(
+                signer=vote_signer, validator_id="validator-1", proposal=proposal,
+                vote_type="PREVOTE", issued_at=self.now,
+            )
+            unsigned_vote = {k: v for k, v in vote.items() if k != "signature"}
+            self.assertTrue(verify_object(
+                signer.public_key_hex, vote["signature"], VOTE_DOMAIN, unsigned_vote
+            ))
+
+    def test_persistent_vote_signer_blocks_cross_round_signature_and_survives_restart(self):
+        signer_calls = []
+
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            message = base64.b64decode(request["message_b64"], validate=True)
+            signer_calls.append(message)
+            return 200, {}, _canonical({
+                "schema": "CRYPTIC-ED25519-SIGN/1",
+                "key_id": "validator-key-1",
+                "request_id": request["request_id"],
+                "signature": base64.b64encode(self.private.sign(message)).decode("ascii"),
+            })
+
+        signer = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key", transport=transport,
         )
-        from src.consensus.gcf import VOTE_DOMAIN
-        unsigned_vote = {k: v for k, v in vote.items() if k != "signature"}
-        self.assertTrue(verify_object(
-            signer.public_key_hex, vote["signature"], VOTE_DOMAIN, unsigned_vote
-        ))
+        from src.consensus.gcf import ValidatorSet
+        validator_set = ValidatorSet("test-net", 1, {
+            "validator-1": {"public_key_hex": signer.public_key_hex, "weight": 1},
+        })
+        common = {
+            "network_id": "test-net", "epoch": 1, "height": 8, "round": 0,
+            "parent_hash": "0" * 64, "payload_hash": "1" * 64,
+            "proof_hash": "2" * 64,
+            "justice_commitment": {"justice_profile": "GAIA-JUSTICE/1"},
+            "proposer_id": "validator-1", "issued_at": self.now,
+            "expires_at": self.now + 60,
+        }
+        proposal_0 = make_proposal_with_signer(
+            signer=signer, **common, nonce="a" * 32,
+        )
+        proposal_1 = make_proposal_with_signer(
+            signer=signer, **{**common, "round": 1}, nonce="b" * 32,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "vote-locks.sqlite3"
+            guarded = PersistentGCFVoteSigner(
+                signer, validator_id="validator-1",
+                validator_set=validator_set, db_path=db_path,
+            )
+            make_vote_with_signer(
+                signer=guarded, validator_id="validator-1",
+                proposal=proposal_0, vote_type="PREVOTE", issued_at=self.now,
+            )
+            signed_count = len(signer_calls)
+            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
+                make_vote_with_signer(
+                    signer=guarded, validator_id="validator-1",
+                    proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
+                )
+            self.assertEqual(len(signer_calls), signed_count)
+
+            restarted = PersistentGCFVoteSigner(
+                signer, validator_id="validator-1",
+                validator_set=validator_set, db_path=db_path,
+            )
+            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
+                make_vote_with_signer(
+                    signer=restarted, validator_id="validator-1",
+                    proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
+                )
+            self.assertEqual(len(signer_calls), signed_count)
+
+    def test_vote_builder_rejects_unlocked_remote_signer(self):
+        signer = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key",
+            transport=lambda *_: (500, {}, b""),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "durable_vote_signing_lock_required"):
+            make_vote_with_signer(
+                signer=signer, validator_id="validator-1",
+                proposal={"network_id": "test-net", "epoch": 1, "height": 1, "round": 0},
+                vote_type="PREVOTE", issued_at=self.now,
+            )
 
     def test_root_pin_requires_independent_fingerprint(self):
         with tempfile.TemporaryDirectory() as directory:
