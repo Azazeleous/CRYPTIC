@@ -34,7 +34,10 @@ def admit_pool_submission(submission:Mapping[str,Any],*,trusted_issuer_public_ke
     except Exception as exc: raise PoolAdmissionError("proof_encoding_invalid") from exc
     if not proof or len(proof)>MAX_PROOF_BYTES: raise PoolAdmissionError("proof_size_invalid")
     if proof_commitment(proof)!=proof_hash: raise PoolAdmissionError("proof_commitment_mismatch")
-    try: active_target=active_target_resolver(job)
+    # Resolve against current policy time, not only the historical job issue time.
+    # A policy update must invalidate outstanding jobs whose target is no longer active.
+    active_boundary=dict(job); active_boundary["issued_at"]=now
+    try: active_target=active_target_resolver(active_boundary)
     except Exception as exc: raise PoolAdmissionError("active_target_unavailable") from exc
     if not isinstance(active_target,bytes) or len(active_target)!=32: raise PoolAdmissionError("active_target_invalid")
     if active_target.hex()!=job["target"]: raise PoolAdmissionError("job_target_not_active")
