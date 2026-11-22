@@ -11,9 +11,9 @@ class PoolAdmissionTests(unittest.TestCase):
         self.private_hex=key.private_bytes(serialization.Encoding.Raw,serialization.PrivateFormat.Raw,serialization.NoEncryption()).hex()
         self.public_hex=key.public_key().public_bytes(serialization.Encoding.Raw,serialization.PublicFormat.Raw).hex()
         self.job=issue_pool_job(private_key_hex=self.private_hex,issuer_id="issuer",pool_id="gaia-internal",network_id="hccgn-test",epoch=1,height=1,issued_at=1000,expires_at=1120,parent_hash="00"*32,payload_hash="11"*32,target="ff"*32,primary_stride=3037,compact_stride=5,nonce_start=0,max_attempts=8,job_id="cd"*16)
-        self.submission=execute_pool_job(self.job,trusted_issuer_public_key_hex=self.public_hex,expected_pool_id="gaia-internal",expected_network_id="hccgn-test",worker_id="worker-a",now=1001)
+        self.submission=execute_pool_job(self.job,trusted_issuer_public_key_hex=self.public_hex,expected_issuer_id="issuer",expected_pool_id="gaia-internal",expected_network_id="hccgn-test",worker_id="worker-a",now=1001)
     def admit(self,submission=None,target=None,worker="worker-a"):
-        return admit_pool_submission(submission or self.submission,trusted_issuer_public_key_hex=self.public_hex,expected_pool_id="gaia-internal",expected_network_id="hccgn-test",authenticated_worker_id=worker,active_target_resolver=lambda job:bytes.fromhex(target or job["target"]),now=1002)
+        return admit_pool_submission(submission or self.submission,trusted_issuer_public_key_hex=self.public_hex,expected_issuer_id="issuer",expected_pool_id="gaia-internal",expected_network_id="hccgn-test",authenticated_worker_id=worker,active_target_resolver=lambda job:bytes.fromhex(target or job["target"]),now=1002)
     def test_independent_verifier_accepts_real_hccgn_proof(self):
         result=self.admit()
         self.assertTrue(result["accepted"])
