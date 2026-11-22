@@ -321,7 +321,8 @@ class HTTPSSequenceAnchor:
             "sequence": sequence, "policy_hash": policy_hash,
             "expected_sequence": expected_sequence,
             "expected_policy_hash": expected_hash,
-            "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),\n            "authorization": dict(authorization),\n        }
+            "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),
+            "authorization": dict(authorization),\n        }
         status, _headers, raw = self.transport(
             "PUT", self._url(network_id),
             {"Content-Type": "application/json", "Accept": "application/json",
