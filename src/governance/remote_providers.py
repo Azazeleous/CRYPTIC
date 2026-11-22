@@ -29,6 +29,7 @@ RESPONSE_DOMAIN = b"CRYPTIC-REMOTE-RESPONSE/1\x00"
 ANCHOR_DOMAIN = b"CRYPTIC-SEQUENCE-ANCHOR/1\x00"
 GOD_ANCHOR_AUTH_DOMAIN = b"CRYPTIC-GOD-ANCHOR-AUTH/1\x00"
 GOD_ANCHOR_AUTH_SCHEMA = "CRYPTIC-GOD-ANCHOR-AUTH/1"
+GOD_ANCHOR_AUTH_REQUEST_SCHEMA = "CRYPTIC-GOD-ANCHOR-AUTH-REQUEST/1"
 DECISION_SCHEMA = "CRYPTIC-REMOTE-DECISION/1"
 ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1"
 MAX_RESPONSE_BYTES = 65_536
@@ -200,6 +201,76 @@ class HTTPSJusticeProviders:
         return self.evidence.verify_decision(
             "GAIA-JUSTICE-EVIDENCE/1", self._payload(commitment, proposal)
         )
+
+
+class SignedHTTPSAnchorAuthorizationClient:
+    """Obtain and verify a GOD-signed authorization for one exact anchor update.
+
+    The GOD endpoint accepts CRYPTIC-GOD-ANCHOR-AUTH-REQUEST/1 and returns
+    CRYPTIC-GOD-ANCHOR-AUTH/1 with the exact requested tuple and an Ed25519
+    signature under GOD_ANCHOR_AUTH_DOMAIN. The Worker independently verifies
+    the same signature against its separately provisioned trust pin.
+    """
+
+    def __init__(self, endpoint: str, *, signer_id: str, trusted_public_key: bytes,
+                 timeout: float = 5.0, clock: Callable[[], float] = time.time,
+                 transport: Callable | None = None):
+        self.endpoint = _https_endpoint(endpoint)
+        if not isinstance(signer_id, str) or not signer_id:
+            raise RemoteProviderError("god_anchor_signer_id_invalid")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
+            raise RemoteProviderError("timeout_invalid")
+        self.signer_id = signer_id
+        self.key = _public_key(trusted_public_key)
+        self.timeout = float(timeout)
+        self.clock = clock
+        self.transport = transport or _default_transport
+
+    def __call__(self, update: Mapping[str, Any]) -> Mapping[str, Any]:
+        expected_update_fields = {
+            "schema", "network_id", "sequence", "policy_hash",
+            "expected_sequence", "expected_policy_hash", "issued_at", "nonce",
+        }
+        if not isinstance(update, Mapping) or set(update) != expected_update_fields:
+            raise RemoteProviderError("god_anchor_request_schema_invalid")
+        if update.get("schema") != ANCHOR_SCHEMA:
+            raise RemoteProviderError("god_anchor_request_schema_invalid")
+        request = {
+            "schema": GOD_ANCHOR_AUTH_REQUEST_SCHEMA,
+            **{key: update[key] for key in expected_update_fields if key != "schema"},
+        }
+        status, _headers, raw = self.transport(
+            "POST", self.endpoint,
+            {"Content-Type": "application/json", "Accept": "application/json"},
+            _canonical(request), self.timeout,
+        )
+        if status != 200:
+            raise RemoteProviderError(f"god_anchor_http_status_{status}")
+        try:
+            response = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RemoteProviderError("god_anchor_response_json_invalid") from exc
+        required = {
+            "schema", "signer_id", "network_id", "sequence", "policy_hash",
+            "expected_sequence", "expected_policy_hash", "issued_at", "nonce",
+            "signature",
+        }
+        if not isinstance(response, dict) or set(response) != required:
+            raise RemoteProviderError("god_anchor_response_schema_invalid")
+        if response["schema"] != GOD_ANCHOR_AUTH_SCHEMA or response["signer_id"] != self.signer_id:
+            raise RemoteProviderError("god_anchor_identity_mismatch")
+        for field in ("network_id", "sequence", "policy_hash", "expected_sequence",
+                      "expected_policy_hash", "issued_at", "nonce"):
+            if response[field] != request[field]:
+                raise RemoteProviderError("god_anchor_request_binding_mismatch")
+        now = int(self.clock())
+        issued = response["issued_at"]
+        if (isinstance(issued, bool) or not isinstance(issued, int)
+                or abs(now - issued) > MAX_CLOCK_SKEW_SECONDS):
+            raise RemoteProviderError("god_anchor_attestation_stale")
+        unsigned = {key: value for key, value in response.items() if key != "signature"}
+        _verify_signature(self.key, response["signature"], GOD_ANCHOR_AUTH_DOMAIN, unsigned)
+        return response
 
 
 class HTTPSSequenceAnchor:
