@@ -20,6 +20,7 @@ from src.consensus.hccgn_registry import (
 )
 from src.consensus.hccgn_work import HCCGNWorkProofProvider, PROFILE_ID
 from src.consensus.http_api import GCFWSGI
+from src.consensus.policy_update import GCFPolicyUpdateCoordinator
 from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
 from src.governance.remote_providers import load_independently_pinned_root
@@ -73,6 +74,7 @@ class ConsensusRuntime:
     engine: GCFEngine
     adam_store: AdamCommitStore
     apex: APEXValidator
+    policy_update: GCFPolicyUpdateCoordinator | None
     http: GCFWSGI
 
     @property
@@ -97,6 +99,8 @@ def build_consensus_runtime(
     consensus_endpoint: str | None = None,
     clock=None,
     require_external_anchor: bool = True,
+    policy_update_proposer_id: str | None = None,
+    policy_update_signer: Any | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
@@ -110,6 +114,10 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("god_signer_id_invalid")
     if require_external_anchor and sequence_anchor is None:
         raise RuntimeConfigurationError("external_sequence_anchor_required")
+    if (policy_update_proposer_id is None) != (policy_update_signer is None):
+        raise RuntimeConfigurationError("policy_update_proposer_and_signer_must_be_paired")
+    if policy_update_signer is not None and sequence_anchor is None:
+        raise RuntimeConfigurationError("policy_update_requires_sequence_anchor")
     root = Path(data_dir).expanduser()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root_info = root.lstat()
@@ -178,6 +186,16 @@ def build_consensus_runtime(
         adam_store, hccgn_verifier=hccgn_gate,
         god_authorizer=god_authorizer, justice_verifier=justice_gate,
     )
+    policy_update = None
+    if policy_update_signer is not None:
+        policy_update = GCFPolicyUpdateCoordinator(
+            engine=engine,
+            target_policy=target_policy,
+            sequence_anchor=sequence_anchor,
+            proposer_id=policy_update_proposer_id,
+            proposer_signer=policy_update_signer,
+            clock=clock or __import__("time").time,
+        )
     http = GCFWSGI(engine, apex_validator=apex)
     for database_path in (
         root / "hccgn-proofs.sqlite3", root / "hccgn-target-policy.sqlite3",
@@ -189,5 +207,5 @@ def build_consensus_runtime(
             raise RuntimeConfigurationError("runtime_database_permissions_failed") from exc
     return ConsensusRuntime(
         proof_store, target_policy, work_provider, hccgn_gate, justice_gate,
-        god_authorizer, engine, adam_store, apex, http,
+        god_authorizer, engine, adam_store, apex, policy_update, http,
     )
