@@ -1,8 +1,33 @@
 # GCF/1 Round-Change Protocol — Safety Specification
 
-Status: **DESIGN ONLY — NOT IMPLEMENTED; NOT ENABLED**
+Status: **PARTIAL PROOF PRIMITIVES IMPLEMENTED — STATE MACHINE NOT IMPLEMENTED; NOT ENABLED**
 
 This document specifies the work required before GCF may safely advance a height across rounds while allowing a validator to change a previously selected value. It does not add a round-change wire message, unlock a validator, change the vote signer, or alter finality verification. The existing cross-round locks remain authoritative.
+
+## 1.1 Implemented proof-verification slice (not a complete round-change protocol)
+
+The branch now contains `src/consensus/round_change.py` and
+`tests/test_round_change.py`. The module provides pure, fail-closed
+verification for:
+
+- Signed `GCF-ROUND-CHANGE/1` messages with network/epoch/height/round,
+  validator identity, nonce, validity window, and Ed25519 domain separation.
+- Complete externally supplied POLCs: proposal signature, every affirmative
+  PREVOTE signature, unique validators, active validator-set hash, and
+  strict weighted quorum are independently recomputed.
+- Round-change certificates: unique validator messages, strict weighted
+  quorum, canonical digest, highest-POLC selection, and rejection of
+  same-round conflicting POLCs.
+
+The production-gate workflow now invokes `tests/test_round_change.py` on
+Ubuntu and Windows. These tests have **not yet been observed passing in CI**.
+
+This slice deliberately does **not** mutate consensus locks, release signing
+intents, add round-change to peer dispatch, alter proposal/finality schemas,
+change the HSM policy, or change the Cloudflare Worker. It is not yet safe to
+advance a live engine round. Existing cross-round locks remain authoritative.
+The module's verifier result is evidence about a supplied proof only; it is
+not authorization to sign or unlock.
 
 ## 1. Current implementation boundary
 
