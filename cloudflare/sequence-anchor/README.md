@@ -93,7 +93,9 @@ anchor Worker. Keep the anchor response-signing key separate from the GOD key.
   `cryptic.sequence_anchor.advance`; the Worker checks signer, policy, tuple,
   validity window, fingerprint, and one-time nonce before D1 mutation.
 - Successful writes return a signed record with `accepted: true`.
-- Stale or competing writes return 412. Missing credentials return 401.
+- Stale or competing writes return 412. Missing bearer credentials return 401.
+  Missing or inconsistent GOD trust configuration returns 503; an invalid or
+  unauthorized GOD proof returns 403.
 - `GET /health` reports configuration presence only; it is not a readiness
   or trust assertion.
 
