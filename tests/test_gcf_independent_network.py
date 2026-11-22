@@ -4,6 +4,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -516,7 +517,8 @@ class CrossRoundVoteLockTests(unittest.TestCase):
         self.engine.submit_vote(self._prevote(self.proposal_round_0))
         # PRECOMMIT is a distinct phase and is not conflated with PREVOTE.
         # Its own cross-round lock is enforced once a valid POLC exists.
-        columns = self.engine._connect().execute("PRAGMA table_info(vote_locks)").fetchall()
+        with self.engine._db() as db:
+            columns = db.execute("PRAGMA table_info(vote_locks)").fetchall()
         primary = {row["name"] for row in columns if row["pk"]}
         self.assertEqual(
             primary,
