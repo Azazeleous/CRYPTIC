@@ -108,12 +108,40 @@ class PoolShareLedger:
         finally: conn.close()
 
     def verify_chain(self)->bool:
+        """Verify event hashes and one-to-one correspondence with share rows."""
         with _connect(self.database) as conn:
-            rows=conn.execute("SELECT event_json,previous_hash,event_hash FROM pool_events ORDER BY event_id").fetchall()
+            events=conn.execute(
+                "SELECT event_type,event_json,previous_hash,event_hash FROM pool_events ORDER BY event_id"
+            ).fetchall()
+            shares=conn.execute(
+                "SELECT share_id,network_id,pool_id,job_id,worker_id,proof_hash,work_digest,nonce,accepted_at,event_hash FROM pool_shares"
+            ).fetchall()
+        if len(events)!=len(shares):
+            return False
+        by_event={row[9]:row[:9] for row in shares}
         previous=ZERO_HASH
-        for encoded,stored_previous,stored_hash in rows:
+        required=REQUIRED-{"accepted"}
+        for event_type,encoded,stored_previous,stored_hash in events:
             raw=bytes(encoded)
             if stored_previous!=previous or hashlib.sha256(bytes.fromhex(previous)+raw).hexdigest()!=stored_hash:
+                return False
+            try:
+                event=json.loads(raw.decode("ascii"))
+            except (UnicodeDecodeError,ValueError,TypeError):
+                return False
+            if _canonical(event)!=raw or set(event)!={"event_type","share"}:
+                return False
+            if event_type!="pool.share.accepted" or event.get("event_type")!=event_type:
+                return False
+            record=event.get("share")
+            if not isinstance(record,dict) or set(record)!=required:
+                return False
+            row=by_event.get(stored_hash)
+            if row is None:
+                return False
+            fields=("share_id","network_id","pool_id","job_id","worker_id",
+                    "proof_hash","work_digest","nonce","accepted_at")
+            if tuple(record[key] for key in fields)!=tuple(row):
                 return False
             previous=stored_hash
         return True
