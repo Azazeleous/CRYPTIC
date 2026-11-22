@@ -397,7 +397,8 @@ async function verifyRoundChangeCertificate(roundChange, proposal, vset, verific
         return { ok: false, reason: "round_change_polc_context_invalid" };
       }
       const polcProposalResult = await verifyGcfProposal(polcProposal, {
-        network_id: proposal.network_id, candidate_digest: polc.candidate_digest
+        network_id: proposal.network_id, epoch: proposal.epoch,
+        candidate_digest: polc.candidate_digest
       }, vset);
       if (!polcProposalResult.ok) return polcProposalResult;
       if (polcProposal.round === 0) {
