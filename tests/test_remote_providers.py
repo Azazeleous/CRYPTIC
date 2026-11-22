@@ -148,6 +148,7 @@ class RemoteProviderTests(unittest.TestCase):
 
     def test_anchor_initialization_and_monotonic_cas(self):
         state = {}
+        certificate = {"schema": "GCF/1", "candidate_digest": "c" * 64}
         def transport(method, url, headers, raw, timeout):
             network = unquote(url.rsplit("/", 1)[1])
             current = state.get(network)
@@ -168,18 +169,8 @@ class RemoteProviderTests(unittest.TestCase):
                 })
             self.assertEqual(headers.get("Authorization"), "Bearer " + "T" * 40)
             request = json.loads(raw)
-            authorization = request["authorization"]
-            signature = base64.b64decode(authorization["signature"], validate=True)
-            unsigned_authorization = {k: v for k, v in authorization.items() if k != "signature"}
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-            Ed25519PublicKey.from_public_bytes(self.god_public).verify(
-                signature, POLICY_TRANSITION_DOMAIN + _canonical(unsigned_authorization)
-            )
-            self.assertEqual(authorization["network_id"], network)
-            self.assertEqual(authorization["sequence"], request["sequence"])
-            self.assertEqual(authorization["policy_hash"], request["policy_hash"])
-            self.assertEqual(authorization["expected_sequence"], request["expected_sequence"])
-            self.assertEqual(authorization["expected_policy_hash"], request["expected_policy_hash"])
+            self.assertEqual(request["certificate"], certificate)
+            self.assertNotIn("authorization", request)
             if current is None:
                 if headers.get("If-None-Match") != "*":
                     return 412, {}, b""
@@ -206,16 +197,15 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
-            authorization_provider=self.anchor_authorization_provider(),
             clock=lambda: self.now, transport=transport,
         )
         self.assertIsNone(anchor.read_sequence("test-net"))
         digest1 = "1" * 64
         digest2 = "2" * 64
-        self.assertTrue(anchor.advance_sequence("test-net", 1, digest1))
+        self.assertTrue(anchor.advance_sequence("test-net", 1, digest1, certificate=certificate))
         self.assertEqual(anchor.read_sequence("test-net"), (1, digest1))
-        self.assertFalse(anchor.advance_sequence("test-net", 1, digest1))
-        self.assertTrue(anchor.advance_sequence("test-net", 2, digest2))
+        self.assertFalse(anchor.advance_sequence("test-net", 1, digest1, certificate=certificate))
+        self.assertTrue(anchor.advance_sequence("test-net", 2, digest2, certificate=certificate))
         self.assertEqual(anchor.read_sequence("test-net"), (2, digest2))
 
     def test_policy_transition_client_requires_caller_authentication(self):
@@ -302,14 +292,14 @@ class RemoteProviderTests(unittest.TestCase):
                 "expected_sequence": 7, "expected_policy_hash": "7" * 64,
             })
 
-    def test_anchor_write_fails_closed_without_god_authorization_provider(self):
+    def test_anchor_write_requires_gcf_finality_certificate(self):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
             clock=lambda: self.now,
             transport=lambda *_: self.fail("transport must not be called"),
         )
-        with self.assertRaisesRegex(RemoteProviderError, "authorization_provider_required"):
+        with self.assertRaisesRegex(RemoteProviderError, "gcf_finality_certificate_required"):
             anchor.advance_sequence("test-net", 1, "1" * 64)
 
     def test_anchor_write_requires_authentication(self):
@@ -339,10 +329,11 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
-            authorization_provider=self.anchor_authorization_provider(),
             clock=lambda: self.now, transport=transport,
         )
-        self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64))
+        self.assertFalse(anchor.advance_sequence(
+            "test", 6, "6" * 64, certificate={"schema": "GCF/1"}
+        ))
 
     def test_god_gate_uses_signed_remote_decision(self):
         def transport(method, url, headers, raw, timeout):
