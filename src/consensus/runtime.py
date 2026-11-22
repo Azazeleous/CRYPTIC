@@ -102,6 +102,7 @@ def build_consensus_runtime(
     require_external_anchor: bool = True,
     policy_update_proposer_id: str | None = None,
     policy_update_signer: Any | None = None,
+    policy_update_peer_mesh: Any | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
@@ -119,6 +120,8 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("policy_update_proposer_and_signer_must_be_paired")
     if policy_update_signer is not None and sequence_anchor is None:
         raise RuntimeConfigurationError("policy_update_requires_sequence_anchor")
+    if policy_update_peer_mesh is not None and policy_update_signer is None:
+        raise RuntimeConfigurationError("policy_update_peer_mesh_requires_coordinator")
     root = Path(data_dir).expanduser()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root_info = root.lstat()
@@ -195,6 +198,7 @@ def build_consensus_runtime(
             sequence_anchor=sequence_anchor,
             proposer_id=policy_update_proposer_id,
             proposer_signer=policy_update_signer,
+            peer_mesh=policy_update_peer_mesh,
             clock=clock or time.time,
         )
     http = GCFWSGI(engine, apex_validator=apex)
