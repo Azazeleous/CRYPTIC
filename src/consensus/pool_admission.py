@@ -12,7 +12,7 @@ MAX_PROOF_BYTES=4096
 class PoolAdmissionError(ValueError):
     """A submitted share failed an independent pool admission predicate."""
 
-def admit_pool_submission(submission:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,expected_pool_id:str,expected_network_id:str,authenticated_worker_id:str,active_target_resolver:Callable[[Mapping[str,Any]],bytes|None],now:int)->dict:
+def admit_pool_submission(submission:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,expected_issuer_id:str,expected_pool_id:str,expected_network_id:str,authenticated_worker_id:str,active_target_resolver:Callable[[Mapping[str,Any]],bytes|None],now:int)->dict:
     """Verify issuer job, authenticated worker binding, active target and HCCGN proof.
 
     The worker's measurements are deliberately ignored; only recomputed proof
@@ -23,7 +23,7 @@ def admit_pool_submission(submission:Mapping[str,Any],*,trusted_issuer_public_ke
     worker_id=submission.get("worker_id")
     if not isinstance(authenticated_worker_id,str) or not authenticated_worker_id or worker_id!=authenticated_worker_id: raise PoolAdmissionError("worker_identity_binding_failed")
     try:
-        job=verify_pool_job(submission["job"],trusted_issuer_public_key_hex=trusted_issuer_public_key_hex,expected_pool_id=expected_pool_id,expected_network_id=expected_network_id,now=now)
+        job=verify_pool_job(submission["job"],trusted_issuer_public_key_hex=trusted_issuer_public_key_hex,expected_issuer_id=expected_issuer_id,expected_pool_id=expected_pool_id,expected_network_id=expected_network_id,now=now)
     except (PoolJobError,KeyError) as exc: raise PoolAdmissionError("job_invalid:"+str(exc)) from exc
     if submission["pool_id"]!=job["pool_id"] or submission["job_id"]!=job["job_id"]: raise PoolAdmissionError("submission_job_binding_failed")
     submitted_at=submission["submitted_at"]
