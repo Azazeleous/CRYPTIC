@@ -1,0 +1,147 @@
+import unittest
+
+from src.consensus.gcf import (
+    ValidatorSet, make_proposal, make_vote, public_key_hex, sha256_hex,
+)
+from src.consensus.round_change import (
+    POLC_SCHEMA, make_round_change_certificate, make_round_change_message,
+    polc_digest, verify_polc, verify_round_change_certificate,
+    verify_round_change_message,
+)
+
+
+class RoundChangeProofTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 1_800_000_000
+        self.private = {f"v{i}": (bytes([i]) * 32).hex() for i in range(1, 5)}
+        self.vset = ValidatorSet("test-net", 7, {
+            name: {"public_key_hex": public_key_hex(key), "weight": 1}
+            for name, key in self.private.items()
+        })
+
+    def message(self, validator_id, *, source=0, target=1, polc=None, nonce=None):
+        return make_round_change_message(
+            validator_id=validator_id, private_key_hex=self.private[validator_id],
+            network_id="test-net", epoch=7, height=12,
+            source_round=source, target_round=target,
+            issued_at=self.now, expires_at=self.now + 60,
+            nonce=nonce or (str(list(self.private).index(validator_id) + 1) * 32),
+            highest_polc=polc,
+        )
+
+    def certificate(self, messages, target=1):
+        return make_round_change_certificate(
+            messages, network_id="test-net", epoch=7, height=12,
+            target_round=target,
+        )
+
+    def proposal(self, payload):
+        return make_proposal(
+            network_id="test-net", epoch=7, height=12, round=0,
+            parent_hash="0" * 64, payload_hash=payload * 64,
+            proof_hash="2" * 64, justice_commitment={"justice_profile": "GAIA-JUSTICE/1"},
+            proposer_id="v1", proposer_private_key_hex=self.private["v1"],
+            nonce=payload * 16, issued_at=self.now, expires_at=self.now + 600,
+        )
+
+    def polc(self, proposal, signers=("v1", "v2", "v3")):
+        votes = [
+            make_vote(
+                validator_id=validator, validator_private_key_hex=self.private[validator],
+                proposal=proposal, vote_type="PREVOTE", approve=True,
+                issued_at=self.now + 1,
+            )
+            for validator in signers
+        ]
+        item = {
+            "schema": POLC_SCHEMA,
+            "proposal": proposal,
+            "candidate_digest": sha256_hex(__import__(
+                "src.consensus.gcf", fromlist=["canonical_bytes"]
+            ).canonical_bytes(proposal)),
+            "validator_set_hash": self.vset.digest,
+            "prevotes": votes,
+        }
+        item["digest"] = polc_digest(item)
+        return item
+
+    def test_strict_weighted_quorum_rejects_two_of_four(self):
+        cert = self.certificate([self.message("v1"), self.message("v2")])
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_quorum_missing")
+
+    def test_three_of_four_round_change_certificate_is_verified(self):
+        cert = self.certificate([
+            self.message("v1"), self.message("v2"), self.message("v3"),
+        ])
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertTrue(result["valid"], result)
+        self.assertEqual(result["weight"], 3)
+        self.assertEqual(result["quorum_weight"], 3)
+
+    def test_signed_message_rejects_target_not_above_source(self):
+        message = self.message("v1", source=1, target=1)
+        result = verify_round_change_message(
+            message, validator_set=self.vset, height=12, target_round=1,
+            clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_target_invalid")
+
+    def test_certificate_rejects_duplicate_validator(self):
+        first = self.message("v1", nonce="a" * 32)
+        second = self.message("v1", nonce="b" * 32)
+        cert = self.certificate([first, second, self.message("v2")])
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_duplicate_validator")
+
+    def test_highest_polc_is_independently_verified_and_selected(self):
+        proposal = self.proposal("a")
+        polc = self.polc(proposal)
+        self.assertTrue(verify_polc(
+            polc, validator_set=self.vset, clock=lambda: self.now,
+        )["valid"])
+        cert = self.certificate([
+            self.message("v1", polc=polc),
+            self.message("v2", polc=polc),
+            self.message("v3", polc=polc),
+        ])
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertTrue(result["valid"], result)
+        self.assertEqual(result["highest_polc"]["digest"], polc["digest"])
+        self.assertEqual(result["highest_polc_round"], 0)
+
+    def test_invalid_polc_signature_fails_closed(self):
+        polc = self.polc(self.proposal("b"))
+        polc["prevotes"][0]["signature"] = "AA=="
+        polc["digest"] = polc_digest(polc)
+        result = verify_polc(polc, validator_set=self.vset, clock=lambda: self.now)
+        self.assertFalse(result["valid"])
+
+    def test_same_round_conflicting_polcs_fail_closed(self):
+        polc_a = self.polc(self.proposal("c"))
+        polc_b = self.polc(self.proposal("d"))
+        cert = self.certificate([
+            self.message("v1", polc=polc_a),
+            self.message("v2", polc=polc_b),
+            self.message("v3"),
+        ])
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_conflicting_same_round_polcs")
+
+
+if __name__ == "__main__":
+    unittest.main()
