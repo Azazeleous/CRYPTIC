@@ -111,6 +111,7 @@ from src.governance.remote_providers import (
     GODHTTPSGate,
     HTTPSJusticeProviders,
     HTTPSSequenceAnchor,
+    SignedHTTPSAnchorAuthorizationClient,
     SignedHTTPSDecisionClient,
 )
 
@@ -119,11 +120,17 @@ god_client = SignedHTTPSDecisionClient(
     signer_id=GOD_SIGNER_ID,
     trusted_public_key=GOD_PUBLIC_KEY,
 )
+god_anchor_authorizer = SignedHTTPSAnchorAuthorizationClient(
+    GOD_ANCHOR_AUTH_URL,
+    signer_id=GOD_ANCHOR_AUTH_SIGNER_ID,
+    trusted_public_key=GOD_ANCHOR_AUTH_PUBLIC_KEY,
+)
 anchor = HTTPSSequenceAnchor(
     SEQUENCE_ANCHOR_URL,
     signer_id=ANCHOR_SIGNER_ID,
     trusted_public_key=ANCHOR_PUBLIC_KEY,
     write_token=os.environ["CRYPTIC_SEQUENCE_ANCHOR_TOKEN"],
+    authorization_provider=god_anchor_authorizer,
 )
 justice = HTTPSJusticeProviders(
     policy=SignedHTTPSDecisionClient(
