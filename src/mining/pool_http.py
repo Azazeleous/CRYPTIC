@@ -89,7 +89,7 @@ class PoolWSGI:
             if method == "GET" and path.startswith("/v1/pool/jobs/"):
                 job_id = path.rsplit("/", 1)[-1]
                 return self._response(
-                    start_response, "200 OK", self.coordinator.get_job(job_id)
+                    start_response, "200 OK", self.coordinator.get_job(job_id, authenticated_worker_id=worker_id)
                 )
             if method == "POST" and path == "/v1/pool/shares":
                 submission = self._read_json(environ)
@@ -101,7 +101,7 @@ class PoolWSGI:
         except PoolServiceError as exc:
             message = str(exc)
             status = "404 Not Found" if message in ("job_not_found", "job_unknown") else (
-                "403 Forbidden" if "worker_identity" in message else "409 Conflict"
+                "403 Forbidden" if ("worker_identity" in message or "not_assigned_to_worker" in message) else "409 Conflict"
             )
             return self._response(start_response, status, {"error": message[:180]})
         except Exception:
