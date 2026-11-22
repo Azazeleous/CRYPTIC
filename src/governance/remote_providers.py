@@ -217,6 +217,7 @@ class HTTPSSequenceAnchor:
     """
 
     def __init__(self, endpoint: str, *, signer_id: str, trusted_public_key: bytes,
+                 write_token: str | None = None,
                  timeout: float = 5.0, clock: Callable[[], float] = time.time,
                  transport: Callable | None = None):
         self.endpoint = _https_endpoint(endpoint)
@@ -225,6 +226,13 @@ class HTTPSSequenceAnchor:
             raise RemoteProviderError("signer_id_invalid")
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
             raise RemoteProviderError("timeout_invalid")
+        if write_token is None:
+            write_token = os.environ.get("CRYPTIC_SEQUENCE_ANCHOR_TOKEN")
+        if write_token is not None and (
+                not isinstance(write_token, str) or len(write_token) < 32
+                or any(ch.isspace() for ch in write_token)):
+            raise RemoteProviderError("anchor_write_token_invalid")
+        self.write_token = write_token
         self.key = _public_key(trusted_public_key)
         self.timeout = float(timeout)
         self.clock = clock
@@ -284,6 +292,8 @@ class HTTPSSequenceAnchor:
         return response["sequence"], response["policy_hash"]
 
     def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool:
+        if self.write_token is None:
+            raise RemoteProviderError("anchor_write_authentication_required")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise RemoteProviderError("anchor_sequence_invalid")
         if not isinstance(policy_hash, str) or len(policy_hash) != 64:
@@ -311,7 +321,8 @@ class HTTPSSequenceAnchor:
         }
         status, _headers, raw = self.transport(
             "PUT", self._url(network_id),
-            {"Content-Type": "application/json", "Accept": "application/json", **condition},
+            {"Content-Type": "application/json", "Accept": "application/json",
+             "Authorization": "Bearer " + self.write_token, **condition},
             _canonical(body), self.timeout,
         )
         if status in (409, 412):
