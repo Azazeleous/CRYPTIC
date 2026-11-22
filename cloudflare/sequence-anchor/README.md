@@ -9,8 +9,14 @@ This Worker implements the `HTTPSSequenceAnchor` contract in
   `CRYPTIC-SEQUENCE-ANCHOR/1\0` domain and canonical JSON contract.
 - GET requests require a 128-bit hexadecimal nonce and return signed state.
 - PUT requests require a bearer credential of at least 32 non-whitespace
-  characters, a valid request nonce, a fresh timestamp, and an HTTP
-  conditional header.
+  characters, a valid request nonce, a fresh timestamp, an HTTP conditional
+  header, and a valid GOD Ed25519 authorization for the exact update tuple.
+- The bearer credential authenticates the caller only. It does not authorize
+  a governance transition. The Worker verifies the GOD signature before D1.
+- GOD authorization uses the domain CRYPTIC-GOD-ANCHOR-AUTH/1 followed by a
+  NUL byte and canonical UTF-8 JSON of the authorization fields excluding
+  signature. The signed tuple includes network, new sequence/hash, expected
+  prior sequence/hash, timestamp, and nonce; all fields must match the PUT body.
 - The D1 conditional UPSERT is the single atomic compare-and-swap point.
   Initial creation requires sequence 0 plus the all-zero expected hash;
   updates require the exact prior sequence/hash and a strictly greater
@@ -35,6 +41,9 @@ The Worker requires these Cloudflare secrets:
 - `ANCHOR_SIGNING_KEY_PKCS8_B64`: base64 of the Ed25519 private key in PKCS#8 DER.
 - `ANCHOR_SIGNER_ID`: signer identity authorized by the independent trust ceremony.
 - `ANCHOR_WRITE_TOKEN`: random secret of at least 32 non-whitespace characters.
+- `GOD_ANCHOR_AUTH_SIGNER_ID`: the exact GOD authorization signer identity.
+- `GOD_ANCHOR_AUTH_PUBLIC_KEY_HEX`: the 32-byte Ed25519 GOD public key as 64 lowercase hex characters.
+- `GOD_ANCHOR_AUTH_KEY_FINGERPRINT`: SHA-256 of that raw public key as 64 lowercase hex characters, obtained through an independent authenticated channel.
 
 The CRYPTIC validator host must receive the same write token through its
 protected secret manager as `CRYPTIC_SEQUENCE_ANCHOR_TOKEN`, and receive the
@@ -46,7 +55,10 @@ channels. Do not use the same channel to distribute both key and fingerprint.
 1. Review this source and the D1 migration.
 2. Complete the signing-key and write-token ceremony outside this repository.
 3. From this directory, provision each Cloudflare secret with Wrangler's
-   interactive `wrangler secret put` command.
+   interactive `wrangler secret put` command, including all three GOD trust-pin
+   values. Obtain the public key and fingerprint through separate authenticated
+   channels; do not derive the expected fingerprint from the same deployment
+   bundle that supplies the key.
 4. Apply migrations with `wrangler d1 migrations apply cryptic-production-sequence-anchor --remote`.
 5. Deploy with `wrangler deploy`. Keep `workers_dev = false` and do not add
    a route until the trust-root fingerprint, client token, signer identity,
@@ -67,8 +79,14 @@ channels. Do not use the same channel to distribute both key and fingerprint.
 - `PUT /v1/anchors/{network_id}` uses `Authorization: Bearer <token>`,
   `If-None-Match: *` for initialization or
   `If-Match: "<expected_sequence>:<expected_policy_hash>"` for advancement.
+  Its canonical JSON body must also include an `authorization` object with
+  exactly `schema`, `signer_id`, `network_id`, `sequence`, `policy_hash`,
+  `expected_sequence`, `expected_policy_hash`, `issued_at`, `nonce`, and
+  `signature`. The Worker independently verifies the Ed25519 signature and exact tuple.
 - Successful writes return a signed record with `accepted: true`.
-- Stale or competing writes return 412. Missing credentials return 401.
+- Stale or competing writes return 412. Missing bearer credentials return
+  401; missing/invalid GOD authorization returns 403; missing or inconsistent
+  GOD trust configuration returns 503.
 - `GET /health` reports configuration presence only; it is not a readiness
   or trust assertion.
 
