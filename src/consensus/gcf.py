@@ -540,6 +540,9 @@ class GCFEngine:
                     prior_value = value_digest(prior_proposal)
                     if proposal["round"] < prior_lock["round"]:
                         raise GCFError("VOTE_ROUND_REGRESSION")
+                    if (proposal["round"] == prior_lock["round"]
+                            and prior_lock["candidate_digest"] != digest):
+                        raise GCFError("VOTE_EQUIVOCATION_SAME_ROUND")
                     if prior_value != next_value:
                         if transition_result is None:
                             certificate = proposal.get("round_change_certificate")
