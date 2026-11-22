@@ -62,6 +62,8 @@ Latest GCF/HCCGN current-mainline verification (2026-11-21): workflow run 449414
 | Multi-host validator/key custody | remote signing boundary delivered (E2; live deployment unverified) | mTLS remote Ed25519 signer client with local signature verification and GCF proposal/vote builders; existing GCF-P2P mutual-TLS loopback tests are not live multi-host evidence; real HSM/KMS, unique validator keys, cert provisioning, independent operators, and network drills remain external |
 | ADAM physical durability | process-crash evidence delivered (E2; physical power-loss unverified) | New killed-writer WAL rollback/reopen regression test; actual power interruption, controller-cache behavior, filesystem review, and independently signed hardware report remain external |
 
+| Validator-set proposal admission policy | implemented (E2; PR #33 branch CI verified) | GCF runtime authorizes proposal admission only when network, epoch, proposer ID, and proposer public key match the configured active ValidatorSet; finality remains governed by strict greater-than-two-thirds weighted PREVOTE and PRECOMMIT quorums. This removes the separate GOD decision-service dependency for proposal admission only. It does not replace the separate signed sequence-anchor transition proof. |
+
 Update this ledger only with reproducible evidence. Never mark a feature complete because its directory, interface, or design document exists.
 
 
