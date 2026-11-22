@@ -213,7 +213,13 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
                 prior = polcs.get(round_number)
                 if prior is not None and prior[0] != candidate:
                     return _fail("round_change_conflicting_same_round_polcs")
-                polcs[round_number] = (candidate, dict(polc))
+                # Multiple valid POLCs can prove the same candidate at the same
+                # round while containing different signer subsets. Select by
+                # digest, not arrival order, so every verifier returns the same
+                # highest proof for the same certificate.
+                candidate_polc = dict(polc)
+                if prior is None or candidate_polc["digest"] < prior[1]["digest"]:
+                    polcs[round_number] = (candidate, candidate_polc)
             normalized_messages.append(dict(message))
         required = validator_set.quorum_weight()
         if weight < required:
