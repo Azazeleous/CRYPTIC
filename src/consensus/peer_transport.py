@@ -51,7 +51,7 @@ def build_client_ssl_context(certfile: str, keyfile: str, cafile: str) -> ssl.SS
 
 
 class GCFPeerNode:
-    """Receives authenticated proposal/vote envelopes and dispatches to GCFEngine."""
+    """Receives authenticated proposal, vote, and round-change envelopes and dispatches to GCFEngine."""
 
     def __init__(self, *, engine: Any, validator_set: ValidatorSet,
                  node_id: str, private_key_hex: str,
@@ -360,7 +360,7 @@ class GCFPeerMesh:
         self.max_parallel = max_parallel
 
     async def broadcast(self, message_type: str, payload: Mapping[str, Any]) -> dict:
-        """Fan out one signed proposal or validator vote to configured peers."""
+        """Fan out one signed proposal, validator vote, or round-change message."""
         if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"} or not isinstance(payload, Mapping):
             raise PeerTransportError("BROADCAST_MESSAGE_INVALID")
         message_id = secrets.token_hex(16)
