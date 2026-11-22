@@ -234,6 +234,20 @@ class HCCGNActiveTargetPolicy:
         network = policy["network_id"]
         seq = policy["sequence"]
         encoded = _canonical(dict(snapshot))
+        # Reject local rollback/reuse before making any external anchor call.
+        # Otherwise an invalid local install could advance the irreversible
+        # remote checkpoint and only then discover the local sequence conflict.
+        with closing(_connect(self.database)) as preflight_conn:
+            latest_local = preflight_conn.execute(
+                "SELECT sequence,policy_hash FROM hccgn_target_policies "
+                "WHERE network_id=? ORDER BY sequence DESC LIMIT 1",
+                (network,),
+            ).fetchone()
+        if latest_local is not None:
+            if seq == latest_local[0] and digest == latest_local[1]:
+                pass
+            elif seq <= latest_local[0]:
+                raise HCCGNRegistryError("policy_rollback_or_sequence_reuse")
         anchor = self.sequence_anchor
         if self.require_external_anchor and anchor is None:
             raise HCCGNRegistryError("external_sequence_anchor_required")
