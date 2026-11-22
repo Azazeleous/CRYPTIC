@@ -246,6 +246,9 @@ test("certificate digest replay is rejected even when request nonce changes", as
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
   const first = writeBody(1, hash, 0, ZERO, cert);
   assert.equal((await put(ctx, first, true)).status, 200);
+  // Model restoration of only the anchor row while retaining the independent
+  // certificate receipt ledger. The exact certificate must remain unusable.
+  ctx.env.ANCHOR_DB.rows.delete("test-net");
   const replay = { ...first, nonce: "f".repeat(32) };
   assert.equal((await put(ctx, replay, true)).status, 412);
   assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").sequence, 1);
@@ -257,6 +260,17 @@ test("missing pinned validator-set configuration fails closed as unavailable", a
   delete ctx.env.ANCHOR_VALIDATOR_SET_SHA256;
   const response = await put(ctx, writeBody(1, "6".repeat(64), 0, ZERO, cert), true);
   assert.equal(response.status, 503);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+test("validator-set hash pin mismatch fails closed", async () => {
+  const ctx = await setup();
+  const hash = "8".repeat(64);
+  const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
+  ctx.env.ANCHOR_VALIDATOR_SET_SHA256 = "0".repeat(64);
+  const response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "validator_set_hash_pin_mismatch");
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
 
