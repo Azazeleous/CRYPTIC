@@ -27,6 +27,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 REQUEST_DOMAIN = b"CRYPTIC-REMOTE-REQUEST/1\x00"
 RESPONSE_DOMAIN = b"CRYPTIC-REMOTE-RESPONSE/1\x00"
 ANCHOR_DOMAIN = b"CRYPTIC-SEQUENCE-ANCHOR/1\x00"
+GOD_ANCHOR_AUTH_DOMAIN = b"CRYPTIC-GOD-ANCHOR-AUTH/1\x00"
+GOD_ANCHOR_AUTH_SCHEMA = "CRYPTIC-GOD-ANCHOR-AUTH/1"
 DECISION_SCHEMA = "CRYPTIC-REMOTE-DECISION/1"
 ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1"
 MAX_RESPONSE_BYTES = 65_536
@@ -218,6 +220,7 @@ class HTTPSSequenceAnchor:
 
     def __init__(self, endpoint: str, *, signer_id: str, trusted_public_key: bytes,
                  write_token: str | None = None,
+                 authorization_provider: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
                  timeout: float = 5.0, clock: Callable[[], float] = time.time,
                  transport: Callable | None = None):
         self.endpoint = _https_endpoint(endpoint)
@@ -233,6 +236,9 @@ class HTTPSSequenceAnchor:
                 or any(ch.isspace() for ch in write_token)):
             raise RemoteProviderError("anchor_write_token_invalid")
         self.write_token = write_token
+        if authorization_provider is not None and not callable(authorization_provider):
+            raise RemoteProviderError("anchor_authorization_provider_invalid")
+        self.authorization_provider = authorization_provider
         self.key = _public_key(trusted_public_key)
         self.timeout = float(timeout)
         self.clock = clock
@@ -294,6 +300,8 @@ class HTTPSSequenceAnchor:
     def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool:
         if self.write_token is None:
             raise RemoteProviderError("anchor_write_authentication_required")
+        if self.authorization_provider is None:
+            raise RemoteProviderError("anchor_god_authorization_required")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise RemoteProviderError("anchor_sequence_invalid")
         if not isinstance(policy_hash, str) or len(policy_hash) != 64:
@@ -319,6 +327,22 @@ class HTTPSSequenceAnchor:
             "expected_policy_hash": expected_hash,
             "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),
         }
+        authorization = self.authorization_provider(dict(body))
+        auth_fields = {"schema", "signer_id", "network_id", "sequence", "policy_hash",
+                       "expected_sequence", "expected_policy_hash", "issued_at", "nonce",
+                       "signature"}
+        if not isinstance(authorization, Mapping) or set(authorization) != auth_fields:
+            raise RemoteProviderError("anchor_god_authorization_schema_invalid")
+        for field in ("network_id", "sequence", "policy_hash", "expected_sequence",
+                      "expected_policy_hash", "issued_at", "nonce"):
+            if authorization.get(field) != body[field]:
+                raise RemoteProviderError("anchor_god_authorization_binding_invalid")
+        if (authorization.get("schema") != GOD_ANCHOR_AUTH_SCHEMA
+                or not isinstance(authorization.get("signer_id"), str)
+                or not authorization["signer_id"]
+                or not isinstance(authorization.get("signature"), str)):
+            raise RemoteProviderError("anchor_god_authorization_identity_invalid")
+        body["authorization"] = dict(authorization)
         status, _headers, raw = self.transport(
             "PUT", self._url(network_id),
             {"Content-Type": "application/json", "Accept": "application/json",
