@@ -1,7 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.consensus.gcf import (
-    ValidatorSet, make_proposal, make_vote, public_key_hex, sha256_hex,
+    GCFEngine, GCFError, ValidatorSet, make_proposal, make_vote, public_key_hex, sha256_hex,
 )
 from src.consensus.round_change import (
     POLC_SCHEMA, make_round_change_certificate, make_round_change_message,
@@ -231,6 +233,46 @@ class RoundChangeProofTests(unittest.TestCase):
         expected = min(polc_a["digest"], polc_b["digest"])
         self.assertEqual(forward["highest_polc"]["digest"], expected)
         self.assertEqual(reverse["highest_polc"]["digest"], expected)
+
+    def test_engine_persists_round_change_messages_and_reverifies_certificate_after_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "gcf.sqlite3"
+            engine = GCFEngine(
+                db_path, self.vset,
+                clock=lambda: self.now,
+            )
+            for validator in ("v1", "v2"):
+                result = engine.submit_round_change(self.message(validator))
+                self.assertTrue(result["accepted"])
+                self.assertFalse(result["quorum_reached"])
+            final = engine.submit_round_change(self.message("v3"))
+            self.assertTrue(final["quorum_reached"])
+            self.assertEqual(final["voting_weight"], 3)
+            self.assertEqual(final["quorum_weight"], 3)
+            self.assertIsNotNone(final["certificate"])
+
+            restarted = GCFEngine(
+                db_path, self.vset,
+                clock=lambda: self.now,
+            )
+            restored = restarted.get_round_change_certificate(
+                height=12, target_round=1,
+            )
+            self.assertEqual(restored["digest"], final["certificate"]["digest"])
+            with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_DUPLICATE"):
+                restarted.submit_round_change(self.message("v1"))
+
+    def test_engine_rejects_round_change_equivocation_without_overwriting_first_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                clock=lambda: self.now,
+            )
+            first = self.message("v1", nonce="a" * 32)
+            conflicting = self.message("v1", nonce="b" * 32)
+            engine.submit_round_change(first)
+            with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_EQUIVOCATION"):
+                engine.submit_round_change(conflicting)
 
 if __name__ == "__main__":
     unittest.main()
