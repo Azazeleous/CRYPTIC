@@ -39,7 +39,9 @@ Consequently, the public G.O.D. repository update documents the boundary only; i
 
 **Deployment requirements:** provision the actual HTTPS service, signer key, independent public-key pin, access policy, backups, availability monitoring, and disaster-recovery process. Configure require_external_anchor=True. Test concurrent writers, stale clients, node restore from an old disk image, anchor outage, and service restore. Any ambiguity must deny policy resolution.
 
-**Still external:** a live separately administered anchor service and proof that its state cannot be rolled back with the validator host.
+**Worker implementation delivered:** `cloudflare/sequence-anchor/src/index.js` implements the signed GET/PUT wire contract, bearer-authenticated writes, nonce/timestamp validation, bounded request bodies, and a single conditional D1 UPSERT as the compare-and-swap linearization point. The D1 migration and Wrangler configuration are in `cloudflare/sequence-anchor/`. Its Wrangler configuration sets `workers_dev = false` and defines no route. The Worker must not be exposed until secrets, trust-root fingerprint, access controls, independent operator review, and runtime verification are complete. The README contains the operator provisioning sequence.
+
+**Still external:** production signing-key ceremony and independently distributed fingerprint; secret provisioning; live Worker deployment and authenticated endpoint; independent administration; concurrent-writer, rollback/restore, and outage evidence; and proof that anchor state cannot be rolled back with the validator host.
 
 ## Gate 3 — GAIA-JUSTICE policy and evidence providers
 
