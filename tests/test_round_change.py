@@ -294,5 +294,17 @@ class RoundChangeProofTests(unittest.TestCase):
                 engine.get_round_change_certificate(height=12, target_round=1)
 
 
+    def test_engine_rejects_oversized_round_change_message_before_persistence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                clock=lambda: self.now,
+            )
+            message = self.message("v1")
+            message["oversized"] = "x" * (1_048_576 + 1)
+            with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_MESSAGE_TOO_LARGE"):
+                engine.submit_round_change(message)
+
+
 if __name__ == "__main__":
     unittest.main()
