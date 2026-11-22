@@ -23,6 +23,7 @@ VOTE_DOMAIN = b"GCF/1|VOTE|ED25519\x00"
 CERT_DOMAIN = b"GCF/1|FINALITY-CERTIFICATE\x00"
 ZERO_HASH = "0" * 64
 MAX_SQLITE_INT = (1 << 63) - 1
+MAX_ROUND_CHANGE_MESSAGE_BYTES = 1_048_576
 
 
 class GCFError(ValueError):
@@ -542,6 +543,12 @@ class GCFEngine:
         )
         if not isinstance(message, Mapping):
             raise GCFError("ROUND_CHANGE_MESSAGE_INVALID")
+        try:
+            encoded_message = canonical_bytes(dict(message))
+        except (TypeError, ValueError, GCFError) as exc:
+            raise GCFError("ROUND_CHANGE_MESSAGE_INVALID") from exc
+        if len(encoded_message) > MAX_ROUND_CHANGE_MESSAGE_BYTES:
+            raise GCFError("ROUND_CHANGE_MESSAGE_TOO_LARGE")
         height, target = message.get("height"), message.get("target_round")
         checked = verify_round_change_message(
             message, validator_set=self.validator_set, height=height,
@@ -558,7 +565,7 @@ class GCFEngine:
                       AND target_round=? AND validator_id=?
                 """, (self.validator_set.network_id, self.validator_set.epoch,
                       height, target, checked["validator_id"])).fetchone()
-                encoded = canonical_bytes(dict(message)).decode()
+                encoded = encoded_message.decode()
                 if existing is not None:
                     if existing["message_json"] != encoded:
                         raise GCFError("ROUND_CHANGE_EQUIVOCATION")
