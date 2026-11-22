@@ -478,6 +478,77 @@ class RemoteProviderTests(unittest.TestCase):
             self.assertEqual(len(signer_calls), signed_count)
 
 
+
+    def test_round_change_hsm_signing_is_durable_idempotent_and_non_equivocating(self):
+        from src.consensus.gcf import ValidatorSet
+        from src.consensus.round_change import verify_round_change_message
+        from src.governance.remote_providers import make_round_change_message_with_signer
+
+        validator_set = ValidatorSet("test-net", 1, {
+            "validator-1": {"public_key_hex": self.public.hex(), "weight": 1},
+        })
+        signer_calls = []
+
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            message = base64.b64decode(request["message_b64"], validate=True)
+            signer_calls.append(message)
+            return 200, {}, _canonical({
+                "schema": "CRYPTIC-ED25519-SIGN/1", "key_id": "validator-key-1",
+                "request_id": request["request_id"],
+                "signature": base64.b64encode(self.private.sign(message)).decode("ascii"),
+            })
+
+        remote = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key", transport=transport,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "round-change-signing.sqlite3"
+            signer = PersistentGCFVoteSigner(
+                remote, validator_id="validator-1", validator_set=validator_set,
+                db_path=db_path, initialize=True, clock=lambda: self.now,
+            )
+            kwargs = {
+                "signer": signer, "height": 7, "source_round": 0, "target_round": 1,
+                "issued_at": self.now, "expires_at": self.now + 300,
+                "nonce": "a" * 32, "highest_polc": None,
+            }
+            signed = make_round_change_message_with_signer(**kwargs)
+            retry = make_round_change_message_with_signer(**kwargs)
+            self.assertEqual(signed, retry)
+            self.assertEqual(len(signer_calls), 1)
+            verified = verify_round_change_message(
+                signed, validator_set=validator_set, height=7,
+                target_round=1, clock=lambda: self.now,
+            )
+            self.assertTrue(verified["valid"], verified)
+
+            with self.assertRaisesRegex(
+                RemoteProviderError, "round_change_signing_equivocation",
+            ):
+                make_round_change_message_with_signer(**{**kwargs, "nonce": "b" * 32})
+
+            restarted = PersistentGCFVoteSigner(
+                remote, validator_id="validator-1", validator_set=validator_set,
+                db_path=db_path, initialize=False, clock=lambda: self.now,
+            )
+            recovered = make_round_change_message_with_signer(
+                **{**kwargs, "signer": restarted},
+            )
+            self.assertEqual(recovered, signed)
+            self.assertEqual(len(signer_calls), 1)
+            db = sqlite3.connect(db_path)
+            try:
+                count = db.execute(
+                    "SELECT COUNT(*) FROM gcf_round_change_signing_locks "
+                    "WHERE height=7 AND target_round=1 AND validator_id='validator-1'"
+                ).fetchone()[0]
+            finally:
+                db.close()
+            self.assertEqual(count, 1)
+
     def test_persistent_signer_transitions_only_with_higher_verified_polc_and_keeps_history(self):
         from src.consensus.gcf import (
             ValidatorSet, make_proposal, make_vote, public_key_hex, canonical_bytes, sha256_hex,
