@@ -337,8 +337,9 @@ class GCFEngine:
             "payload_hash", "proof_hash", "justice_commitment", "issued_at",
             "expires_at", "proposer_id", "proposer_public_key", "nonce", "signature",
         }
-        allowed = required | {"anchor_sequence"}
-        if not isinstance(proposal, Mapping) or set(proposal) not in (required, allowed):
+        allowed = required | {"anchor_sequence", "round_change_certificate"}
+        if (not isinstance(proposal, Mapping) or not required.issubset(proposal)
+                or not set(proposal).issubset(allowed)):
             raise GCFError("proposal_fields_invalid")
         if proposal["schema"] != SCHEMA:
             raise GCFError("schema_unsupported")
@@ -375,6 +376,28 @@ class GCFEngine:
         if not verify_object(public, proposal["signature"], PROPOSAL_DOMAIN, body):
             raise GCFError("PROPOSER_SIGNATURE_INVALID")
         digest = sha256_hex(canonical_bytes(dict(proposal)))
+        if proposal["round"] == 0:
+            if "round_change_certificate" in proposal:
+                raise GCFError("ROUND_ZERO_MUST_NOT_CARRY_ROUND_CHANGE_CERTIFICATE")
+        else:
+            certificate = proposal.get("round_change_certificate")
+            if not isinstance(certificate, Mapping):
+                raise GCFError("ROUND_CHANGE_CERTIFICATE_REQUIRED")
+            from src.consensus.round_change import (
+                value_digest, verify_round_change_certificate,
+            )
+            checked = verify_round_change_certificate(
+                certificate, validator_set=self.validator_set,
+                height=proposal["height"], clock=self.clock,
+            )
+            if not checked["valid"]:
+                raise GCFError("ROUND_CHANGE_CERTIFICATE_INVALID:" + checked["reason"])
+            if checked["target_round"] != proposal["round"]:
+                raise GCFError("ROUND_CHANGE_TARGET_PROPOSAL_ROUND_MISMATCH")
+            highest = checked["highest_polc"]
+            if highest is not None:
+                if value_digest(highest["proposal"]) != value_digest(proposal):
+                    raise GCFError("PROPOSAL_CONFLICTS_WITH_HIGHEST_POLC")
         return digest, dict(proposal)
 
     def submit_proposal(self, proposal: Mapping[str, Any]) -> dict:
@@ -492,22 +515,48 @@ class GCFEngine:
                     if normalized["polc_digest"] != polc_digest:
                         raise GCFError("PRECOMMIT_POLC_MISMATCH")
                 lock = db.execute(
-                    """SELECT candidate_digest FROM vote_locks
+                    """SELECT candidate_digest,round FROM vote_locks
                        WHERE network_id=? AND epoch=? AND height=?
                          AND vote_type=? AND validator_id=?""",
                     (normalized["network_id"], normalized["epoch"], normalized["height"],
                      normalized["vote_type"], normalized["validator_id"]),
                 ).fetchone()
                 if lock is not None:
-                    if lock["candidate_digest"] != digest:
-                        raise GCFError("VALIDATOR_EQUIVOCATION_DETECTED")
-                    raise GCFError("DUPLICATE_VOTE_OR_EQUIVOCATION")
-                db.execute(
-                    "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
-                    (normalized["network_id"], normalized["epoch"], normalized["height"],
-                     normalized["round"], normalized["vote_type"],
-                     normalized["validator_id"], digest),
-                )
+                    if lock["candidate_digest"] == digest:
+                        raise GCFError("DUPLICATE_VOTE_OR_EQUIVOCATION")
+                    from src.consensus.round_change import value_digest, verify_round_change_certificate
+                    prior_proposal = self._proposal(db, lock["candidate_digest"])
+                    prior_value = value_digest(prior_proposal)
+                    next_value = value_digest(proposal)
+                    if prior_value != next_value:
+                        certificate = proposal.get("round_change_certificate")
+                        checked_transition = verify_round_change_certificate(
+                            certificate, validator_set=self.validator_set,
+                            height=proposal["height"], clock=self.clock,
+                        ) if isinstance(certificate, Mapping) else {"valid": False}
+                        highest = checked_transition.get("highest_polc")
+                        if (not checked_transition.get("valid")
+                                or checked_transition.get("target_round") != proposal["round"]
+                                or checked_transition.get("highest_polc_round") is None
+                                or checked_transition["highest_polc_round"] <= lock["round"]
+                                or highest is None
+                                or value_digest(highest["proposal"]) != next_value):
+                            raise GCFError("ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED")
+                    db.execute(
+                        """UPDATE vote_locks SET round=?,candidate_digest=?
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND vote_type=? AND validator_id=?""",
+                        (normalized["round"], digest, normalized["network_id"],
+                         normalized["epoch"], normalized["height"],
+                         normalized["vote_type"], normalized["validator_id"]),
+                    )
+                else:
+                    db.execute(
+                        "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
+                        (normalized["network_id"], normalized["epoch"], normalized["height"],
+                         normalized["round"], normalized["vote_type"],
+                         normalized["validator_id"], digest),
+                    )
                 try:
                     db.execute(
                         "INSERT INTO votes VALUES(?,?,?,?,?,?)",
