@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from src.governance.remote_providers import (
     ANCHOR_DOMAIN, ANCHOR_SCHEMA, DECISION_SCHEMA, RESPONSE_DOMAIN,
+    GOD_ANCHOR_AUTH_DOMAIN, GOD_ANCHOR_AUTH_SCHEMA,
     HTTPSSequenceAnchor, HTTPSJusticeProviders, RemoteProviderError,
     SignedHTTPSDecisionClient, load_independently_pinned_root,
     HTTPSHSMEd25519Signer, GODHTTPSGate, make_proposal_with_signer,
@@ -30,6 +31,11 @@ class RemoteProviderTests(unittest.TestCase):
     def setUp(self):
         self.now = 1_800_000_000
         self.private, self.public = keypair()
+        self.god_private, self.god_public = keypair()
+
+    def god_authorization(self, fields):
+        body = {"schema": GOD_ANCHOR_AUTH_SCHEMA, "signer_id": "god-root", **dict(fields)}
+        return {**body, "signature": self.signed(self.god_private, GOD_ANCHOR_AUTH_DOMAIN, body)}
 
     def signed(self, private, domain, body):
         return base64.b64encode(private.sign(domain + _canonical(body))).decode("ascii")
@@ -153,6 +159,7 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
+            authorization_provider=self.god_authorization,
             clock=lambda: self.now, transport=transport,
         )
         self.assertIsNone(anchor.read_sequence("test-net"))
@@ -173,6 +180,30 @@ class RemoteProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteProviderError, "write_authentication_required"):
             anchor.advance_sequence("test", 1, "1" * 64)
 
+    def test_anchor_write_requires_god_authorization(self):
+        anchor = HTTPSSequenceAnchor(
+            "https://anchor.example", signer_id="anchor-root",
+            trusted_public_key=self.public, write_token="T" * 40,
+            clock=lambda: self.now,
+            transport=lambda *_: self.fail("transport must not be called"),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "god_authorization_required"):
+            anchor.advance_sequence("test", 1, "1" * 64)
+
+    def test_anchor_rejects_god_authorization_tuple_mismatch(self):
+        def mismatched(fields):
+            proof = self.god_authorization(fields)
+            proof["policy_hash"] = "f" * 64
+            return proof
+        anchor = HTTPSSequenceAnchor(
+            "https://anchor.example", signer_id="anchor-root",
+            trusted_public_key=self.public, write_token="T" * 40,
+            authorization_provider=mismatched, clock=lambda: self.now,
+            transport=lambda *_: self.fail("transport must not be called"),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "god_authorization_binding_invalid"):
+            anchor.advance_sequence("test", 1, "1" * 64)
+
     def test_anchor_rejects_cas_conflict(self):
         def transport(method, url, headers, raw, timeout):
             if method == "GET":
@@ -191,6 +222,7 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
+            authorization_provider=self.god_authorization,
             clock=lambda: self.now, transport=transport,
         )
         self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64))
