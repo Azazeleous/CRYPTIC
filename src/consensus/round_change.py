@@ -131,9 +131,6 @@ def verify_round_change_message(message: Mapping[str, Any], *,
         if (isinstance(proof_depth, bool) or not isinstance(proof_depth, int)
                 or not 0 <= proof_depth <= 8):
             return _fail("round_change_proof_depth_exceeded")
-        if (isinstance(proof_depth, bool) or not isinstance(proof_depth, int)
-                or not 0 <= proof_depth <= 8):
-            return _fail("round_change_proof_depth_exceeded")
         if (isinstance(height, bool) or not isinstance(height, int)
                 or not 1 <= height <= MAX_SQLITE_INT
                 or isinstance(target_round, bool) or not isinstance(target_round, int)
@@ -209,6 +206,9 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
                                     proof_depth: int = 0) -> dict:
     """Verify unique signed messages and strict weighted quorum, then select highest POLC."""
     try:
+        if (isinstance(proof_depth, bool) or not isinstance(proof_depth, int)
+                or not 0 <= proof_depth <= 8):
+            return _fail("round_change_proof_depth_exceeded")
         if (isinstance(height, bool) or not isinstance(height, int)
                 or not 1 <= height <= MAX_SQLITE_INT
                 or isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int)
