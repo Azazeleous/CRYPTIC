@@ -63,3 +63,6 @@ Latest GCF/HCCGN current-mainline verification (2026-11-21): workflow run 449414
 | ADAM physical durability | process-crash evidence delivered (E2; physical power-loss unverified) | New killed-writer WAL rollback/reopen regression test; actual power interruption, controller-cache behavior, filesystem review, and independently signed hardware report remain external |
 
 Update this ledger only with reproducible evidence. Never mark a feature complete because its directory, interface, or design document exists.
+
+
+| GOD-authorized sequence-anchor transitions | implementation + contract tests updated (E2; external activation blocked) | Worker verifies a separately pinned GOD Ed25519 transition envelope bound to exact old/new state, network, policy, capability, signer, validity window, and nonce; D1 persists one-time signer/nonce receipts before CAS. Bearer token is transport authentication only. Requires independent GOD key/policy pin, signer configuration, migration 0002, updated Worker deployment, and external authorization evidence. |
