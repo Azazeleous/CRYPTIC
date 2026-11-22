@@ -22,6 +22,7 @@ from typing import Any, Callable, Mapping
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
 REQUEST_DOMAIN = b"CRYPTIC-REMOTE-REQUEST/1\x00"
 RESPONSE_DOMAIN = b"CRYPTIC-REMOTE-RESPONSE/1\x00"
@@ -166,7 +167,11 @@ class HTTPSJusticeProviders:
 
     def __init__(self, *, policy: SignedHTTPSDecisionClient,
                  evidence: SignedHTTPSDecisionClient):
-        if policy.signer_id == evidence.signer_id:
+        policy_key = policy.key.public_bytes(Encoding.Raw, PublicFormat.Raw)
+        evidence_key = evidence.key.public_bytes(Encoding.Raw, PublicFormat.Raw)
+        if (policy.signer_id == evidence.signer_id
+                or policy.endpoint == evidence.endpoint
+                or policy_key == evidence_key):
             raise RemoteProviderError("justice_providers_must_be_independent")
         self.policy = policy
         self.evidence = evidence
