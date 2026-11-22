@@ -45,7 +45,6 @@ class IndependentVerifierTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.now = 1_800_000_000
-        self.proposer_private, _ = keypair()
         self.keys = {f"v{i}": keypair() for i in range(4)}
         self.validators = {
             name: {"public_key_hex": pair[1], "weight": 1}
@@ -72,7 +71,7 @@ class IndependentVerifierTests(unittest.TestCase):
                 "value_accounting_hash": "5" * 64,
                 "challenge_state_hash": "6" * 64,
             },
-            proposer_id="proposer-1", proposer_private_key_hex=self.proposer_private,
+            proposer_id="v0", proposer_private_key_hex=self.keys["v0"][0],
             nonce="0123456789abcdef0123456789abcdef",
             issued_at=self.now, expires_at=self.now + 300,
         )
