@@ -228,6 +228,14 @@ test("rejects missing, forged, mismatched, wrong-policy and replayed GOD authori
   response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: { ...base, authorization: wrongPolicy } });
   assert.equal(response.status, 403);
 
+  const replayProof = await authorize(godPrivateKey, base, "24".repeat(16));
+  env.ANCHOR_DB.nonces.add("god-policy-root:" + replayProof.nonce);
+  response = await request(env, "PUT", "/v1/anchors/test-net", {
+    headers, body: { ...base, authorization: replayProof },
+  });
+  assert.equal(response.status, 412);
+  assert.equal(env.ANCHOR_DB.rows.size, 0);
+
   const valid = { ...base, authorization: await authorize(godPrivateKey, base, "25".repeat(16)) };
   response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: valid });
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
