@@ -256,8 +256,22 @@ test("rejects a GOD public key whose independently pinned fingerprint does not m
     headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
       "content-type": "application/json" }, body,
   });
-  assert.equal(response.status, 403);
+  assert.equal(response.status, 503);
   assert.equal((await response.json()).error, "god_policy_fingerprint_pin_mismatch");
+  assert.equal(env.ANCHOR_DB.rows.size, 0);
+});
+
+test("missing GOD trust configuration fails as service unavailable before D1 mutation", async () => {
+  const { env, godPrivateKey } = await setup();
+  env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256 = undefined;
+  const body = writeBody("test-net", 1, "1".repeat(64), 0, ZERO);
+  body.authorization = await authorize(godPrivateKey, body, "32".repeat(16));
+  const response = await request(env, "PUT", "/v1/anchors/test-net", {
+    headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
+      "content-type": "application/json" }, body,
+  });
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, "god_policy_trust_not_configured");
   assert.equal(env.ANCHOR_DB.rows.size, 0);
 });
 
