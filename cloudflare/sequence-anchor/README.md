@@ -58,8 +58,11 @@ anchor Worker. Keep the anchor response-signing key separate from the GOD key.
 
 1. Review this source and the D1 migration.
 2. Complete the GOD policy-key pin ceremony separately from the anchor response-key ceremony.
-3. Provision `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`, `ANCHOR_GOD_POLICY_SIGNER_ID`,
-   and `ANCHOR_POLICY_ID` as protected Worker configuration. Provision private
+3. Provision `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`,
+   `ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256`, `ANCHOR_GOD_POLICY_SIGNER_ID`, and
+   `ANCHOR_POLICY_ID` as protected Worker configuration. Obtain the SHA-256
+   fingerprint through an independent authenticated channel; do not derive it
+   from the same artifact that supplies the public key. Provision private
    secrets with Wrangler's interactive `wrangler secret put` command.
 4. Apply migrations with `wrangler d1 migrations apply cryptic-production-sequence-anchor --remote`.
 5. Deploy with `wrangler deploy`. Keep `workers_dev = false` and do not add
@@ -81,6 +84,14 @@ anchor Worker. Keep the anchor response-signing key separate from the GOD key.
 - `PUT /v1/anchors/{network_id}` uses `Authorization: Bearer <token>`,
   `If-None-Match: *` for initialization or
   `If-Match: "<expected_sequence>:<expected_policy_hash>"` for advancement.
+- Every PUT body includes an `authorization` object with exactly `schema`,
+  `signer_id`, `capability`, `policy_id`, `network_id`, `expected_sequence`,
+  `expected_policy_hash`, `sequence`, `policy_hash`, `issued_at`, `expires_at`,
+  `nonce`, and `signature`. Its Ed25519 signature covers canonical UTF-8 JSON
+  of every field except `signature`, prefixed by
+  `CRYPTIC-GOD-POLICY-TRANSITION/1` and one NUL byte. The capability must be
+  `cryptic.sequence_anchor.advance`; the Worker checks signer, policy, tuple,
+  validity window, fingerprint, and one-time nonce before D1 mutation.
 - Successful writes return a signed record with `accepted: true`.
 - Stale or competing writes return 412. Missing credentials return 401.
 - `GET /health` reports configuration presence only; it is not a readiness
