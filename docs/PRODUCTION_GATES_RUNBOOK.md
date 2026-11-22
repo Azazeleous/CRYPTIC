@@ -224,3 +224,12 @@ Corrected-head verification on code commit b143380bc6d2cc932a8b7fe79919798df0f0e
 - [GAIA local trophy](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043373701) passed.
 
 This verifies resource bounds and timeout behavior in CI; it does not establish resistance to volumetric network denial-of-service or substitute for production ingress protections and host-level resource monitoring.
+
+
+## GCF round-change status — design gate
+
+The cross-round vote-lock rule remains enabled. There is no timeout-based unlock, no round-change certificate, and no complete round controller in the current implementation. See [GCF Round-Change Protocol](GCF_ROUND_CHANGE_PROTOCOL.md) for the proposed signed message, weighted certificate, POLC selection, local lock-transition, signer/HSM, Worker, persistence, migration, and adversarial-test requirements.
+
+The design document is explicitly **design only**. It does not change the GCF/1 wire format, authorize a lock transition, or satisfy a production gate. The current engine's vote-admission locks and the remote signer's pre-sign locks are separate safety state and must both be addressed by any future implementation. A timeout is not proof of a safe lock change.
+
+Do not mark round-change complete until the protocol has independent review, versioned schema/migrations, engine and signer integration, HSM-side enforcement, independent finality/Worker verification, adversarial restart/concurrency tests, and multi-host partition/recovery evidence.
