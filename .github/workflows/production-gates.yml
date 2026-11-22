@@ -49,5 +49,5 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Verify Cloudflare sequence-anchor Worker contracts
+      - name: Verify Cloudflare sequence-anchor and nested round-change Worker contracts
         run: node --experimental-default-type=module --test tests/cloudflare_sequence_anchor.test.mjs
