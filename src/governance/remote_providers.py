@@ -798,6 +798,11 @@ class PersistentGCFVoteSigner:
         from src.consensus.gcf import GCFEngine, canonical_bytes, sha256_hex
         from src.consensus.round_change import value_digest, verify_round_change_certificate
 
+        proposer = self.validator_set.validators.get(
+            proposal.get("proposer_id") if isinstance(proposal, Mapping) else None
+        )
+        if (proposer is None or proposal.get("proposer_public_key") != proposer.public_key_hex):
+            raise RemoteProviderError("vote_signing_proposer_not_active_validator")
         engine = object.__new__(GCFEngine)
         engine.validator_set = self.validator_set
         engine.clock = self.clock
