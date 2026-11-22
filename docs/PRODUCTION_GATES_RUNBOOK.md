@@ -43,10 +43,10 @@ Consequently, the public G.O.D. repository update documents the boundary only; i
 
 **Software delivered:** HTTPSJusticeProviders supplies two distinct, independently pinned SignedHTTPSDecisionClient instances. The existing JusticeEvidenceVerifier continues to require both policy and evidence decisions to be exactly True.
 
-Each provider signs a response bound to the exact request digest, signer identity, request nonce, and a short validity window. The policy provider must independently retrieve the policy/audit material. The evidence provider must independently retrieve the evidence root, transition, accounting, and challenge-state material. A digest-shaped string alone is never evidence.
+Each provider signs a response bound to the exact request digest, signer identity, request nonce, and a short validity window. The client rejects a shared signer ID, shared Ed25519 key, or shared HTTPS endpoint between the policy and evidence providers. The policy provider must independently retrieve the policy/audit material. The evidence provider must independently retrieve the evidence root, transition, accounting, and challenge-state material. A digest-shaped string alone is never evidence.
 
 **Deployment requirements:**
-1. Deploy separate policy and evidence authorities with distinct signing keys and operational ownership.
+1. Deploy separate policy and evidence authorities with distinct signing keys, distinct HTTPS endpoints, and independent operational ownership.
 2. Bind the complete commitment and proposal digest to each request.
 3. Require provider-side provenance, source identity, freshness, revocation, and audit checks before returning decision=true.
 4. Test denial, stale response, wrong signer, wrong nonce, replay, policy/evidence disagreement, provider outage, and key rotation.
