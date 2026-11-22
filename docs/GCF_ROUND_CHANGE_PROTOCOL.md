@@ -58,6 +58,7 @@ The protocol must preserve all of these invariants:
 6. **Highest-lock preservation:** a proposal for a later round must carry the highest valid POLC reported by the certified round-change set. If that certificate contains a POLC, the proposal must use the value selected by the highest POLC.
 7. **Local lock preservation:** a validator must not sign a conflicting PREVOTE merely because a timeout elapsed or a round-change certificate exists. It may change its local consensus lock only after validating a POLC at a strictly higher round than its recorded lock round.
 8. **Separate signing history:** changing a consensus lock must never erase historical signed messages, signing intents, or equivocation evidence.
+9. **Deterministic proof selection:** when multiple valid POLCs prove the same candidate at the same round, every verifier must select the same proof independent of message arrival order (the implementation selects the lexicographically smallest canonical POLC digest).
 9. **Restart equivalence:** after restart, the validator must recover the same lock, highest valid POLC, and signed-message history before it can sign another vote.
 10. **Finality unchanged:** a height finalizes only with the existing strict weighted PREVOTE/PRECOMMIT requirements and a certificate that independently verifies all proposal, vote, POLC, validator-set, and transition bindings.
 
