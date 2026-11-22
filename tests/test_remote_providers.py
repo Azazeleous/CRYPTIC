@@ -563,6 +563,14 @@ class RemoteProviderTests(unittest.TestCase):
                     signer=guarded, validator_id="v1", proposal=proposal_b1,
                     vote_type="PREVOTE", issued_at=self.now + 3,
                 )
+            with self.assertRaisesRegex(
+                RemoteProviderError, "vote_signing_round_change_not_authorized",
+            ):
+                make_vote_with_signer(
+                    signer=guarded, validator_id="v1", proposal=proposal_b1,
+                    vote_type="PRECOMMIT", polc_digest="0" * 64,
+                    issued_at=self.now + 3,
+                )
 
             round_one_votes = [
                 make_vote(
