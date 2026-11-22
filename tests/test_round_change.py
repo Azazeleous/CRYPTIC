@@ -488,5 +488,73 @@ class RoundChangeProofTests(unittest.TestCase):
                 ))
 
 
+
+    def test_engine_precommit_cannot_bypass_conflicting_prevote_lock(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                hccgn_verifier=lambda *_: True,
+                god_authorizer=lambda *_: True,
+                justice_verifier=lambda *_: True,
+                clock=lambda: self.now,
+            )
+            proposal_a = self.proposal("a")
+            engine.submit_proposal(proposal_a)
+            engine.submit_vote(make_vote(
+                validator_id="v1", validator_private_key_hex=self.private["v1"],
+                proposal=proposal_a, vote_type="PREVOTE", issued_at=self.now + 1,
+            ))
+            first_certificate = self.certificate([
+                self.message("v2", nonce="2" * 32),
+                self.message("v3", nonce="3" * 32),
+                self.message("v4", nonce="4" * 32),
+            ])
+            proposal_b = self.proposal(
+                "b", round=1, certificate=first_certificate, nonce="b" * 32,
+            )
+            engine.submit_proposal(proposal_b)
+            for validator in ("v2", "v3", "v4"):
+                engine.submit_vote(make_vote(
+                    validator_id=validator,
+                    validator_private_key_hex=self.private[validator],
+                    proposal=proposal_b, vote_type="PREVOTE",
+                    issued_at=self.now + 2,
+                ))
+            with engine._db() as db:
+                _, polc = engine._polc(db, sha256_hex(__import__(
+                    "src.consensus.gcf", fromlist=["canonical_bytes"]
+                ).canonical_bytes(proposal_b)))
+            with self.assertRaisesRegex(
+                GCFError, "ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED",
+            ):
+                engine.submit_vote(make_vote(
+                    validator_id="v1", validator_private_key_hex=self.private["v1"],
+                    proposal=proposal_b, vote_type="PRECOMMIT",
+                    polc_digest=polc, issued_at=self.now + 3,
+                ))
+
+    def test_round_change_certificate_requires_canonical_message_order(self):
+        cert = self.certificate([
+            self.message("v1"), self.message("v2"), self.message("v3"),
+        ])
+        cert["messages"] = list(reversed(cert["messages"]))
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_messages_not_canonical")
+
+    def test_round_change_certificate_rejects_excessive_nested_proof_depth(self):
+        cert = self.certificate([
+            self.message("v1"), self.message("v2"), self.message("v3"),
+        ])
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+            proof_depth=9,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_proof_depth_exceeded")
+
+
 if __name__ == "__main__":
     unittest.main()
