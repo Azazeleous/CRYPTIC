@@ -1,8 +1,8 @@
 # GCF/1 Round-Change Protocol — Safety Specification
 
-Status: **PARTIAL PROOF PRIMITIVES IMPLEMENTED — STATE MACHINE NOT IMPLEMENTED; NOT ENABLED**
+Status: **PROOF-BOUND ROUND ADMISSION, LOCAL LOCK TRANSITIONS, PERSISTENT SIGNER GUARDS, AND WORKER VERIFICATION IMPLEMENTED — OPERATIONAL ACTIVATION DISABLED**
 
-This document specifies the work required before GCF may safely advance a height across rounds while allowing a validator to change a previously selected value. The branch now accepts authenticated GCF-P2P/1 ROUND_CHANGE envelopes and durably collects signed round-change messages and verified quorum certificates. This is evidence ingestion only: it does not unlock a validator, change the vote signer, advance proposal admission, or alter finality verification. The existing cross-round locks remain authoritative.
+This document specifies the GCF round-change transition rules. The branch accepts authenticated GCF-P2P/1 ROUND_CHANGE envelopes, durably collects signed messages, and verifies strict weighted-quorum certificates. Every proposal above round zero now carries its round-change certificate in the signed proposal body. The engine binds that certificate to the exact height and target round, checks the highest POLC against a stable value digest, and permits a conflicting local vote-lock transition only when a higher-round POLC proves the new value. The persistent vote signer independently verifies and records proposal authorization, retains immutable signing-intent history, and enforces the same higher-POLC rule locally. The Cloudflare Worker independently verifies round-change certificates and nested POLCs before accepting finality certificates. These changes implement the software proof path; they do not establish HSM-side enforcement or independent multi-host operational evidence. The existing cross-round locks remain authoritative.
 
 ## 1.1 Implemented proof-verification slice (not a complete round-change protocol)
 
@@ -39,17 +39,13 @@ votes, bounded proof lists, and invalid verifier limits. CI evidence for the
 latest implementation head is recorded in the PR and capability ledger only
 after the corresponding workflow runs complete successfully.
 
-This slice deliberately does **not** mutate consensus locks, release signing
-intents, authorize signatures, alter proposal/finality schemas, change the HSM
-policy, or change the Cloudflare Worker. It is not yet safe to advance a live
-engine round or accept a later-round proposal. Existing cross-round locks
-remain authoritative.
+The implemented software path does not automatically schedule timeouts or round advancement. A later-round proposal must be explicitly constructed with a verified certificate; local engine and signer guards independently reject a conflicting value without a higher POLC. The Worker verifies the same certificate chain as part of finality. The remote HSM service itself is not modified by this repository: direct callers that can bypass `PersistentGCFVoteSigner` must be blocked by HSM/KMS policy before production activation.
 The module's verifier result is evidence about a supplied proof only; it is
 not authorization to sign or unlock.
 
 ## 1. Current implementation boundary
 
-The current GCF engine persists a vote lock keyed by:
+The GCF engine persists its conservative vote-admission lock keyed by:
 
 `(network_id, epoch, height, vote_type, validator_id)`
 
@@ -57,7 +53,9 @@ The round is retained as lock metadata, but is deliberately not part of the lock
 
 The remote `PersistentGCFVoteSigner` independently records a durable pre-sign intent keyed by network, epoch, height, phase, and validator. It binds both the candidate digest and the full signed-message digest. An ambiguous signer result permits only an identical-message retry.
 
-These are conservative safety guards, not a complete round controller. The current GCF vote model also does not provide the complete Tendermint-style nil-vote/PoLC state machine. In particular, the current engine lock table is not equivalent to a consensus lock acquired only after a verified greater-than-two-thirds PREVOTE certificate. Do not reinterpret or clear existing rows as if they were POLC locks.
+The engine now distinguishes stable value identity from round-specific proposal identity. A later proposal may retain the same value across rounds; changing to a different value requires a verified POLC at a round strictly higher than the local recorded vote-lock round and below the new proposal round. The persistent signer applies the same rule using its own durable round-state table. Historical signed intents remain in the signing-history table and are never erased by a transition. Legacy signer lock rows without corresponding round-state metadata are fail-closed for transitions.
+
+This remains deliberately conservative rather than a full Tendermint-compatible state machine. The current GCF vote model still uses `approve: bool` and does not define explicit nil-vote semantics or a complete timeout/round-scheduling controller. Engine vote-admission locks are not claimed to be a formally acquired consensus lock under a separate lock-acquisition protocol. No timeout, missing peer, process restart, or higher round number releases a lock.
 
 ## 2. Protocol objective and invariants
 
@@ -234,4 +232,4 @@ This is a reference model, not a claim that GCF is Tendermint-compatible or that
 
 ---
 
-**Current operational rule:** GCF cross-round vote locks remain in force. Round-change messages and certificates are now received and durably verified, but no timeout-based unlock, lock transition, signer authorization, or automatic round advancement is implemented.
+**Current operational rule:** proof-bound round changes are implemented in the Python engine, persistent local signer guard, peer ingress, and Cloudflare Worker verifier. Automated timeout scheduling remains disabled; direct HSM-side policy, independent four-host drills, external trust ceremonies, and hardware durability evidence remain mandatory before production activation.
