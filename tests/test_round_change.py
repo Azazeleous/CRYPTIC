@@ -143,5 +143,46 @@ class RoundChangeProofTests(unittest.TestCase):
         self.assertEqual(result["reason"], "round_change_conflicting_same_round_polcs")
 
 
+
+    def test_exact_two_thirds_round_change_weight_is_rejected(self):
+        three = ValidatorSet("test-net", 7, {
+            name: {"public_key_hex": public_key_hex(self.private[name]), "weight": 1}
+            for name in ("v1", "v2", "v3")
+        })
+        cert = make_round_change_certificate(
+            [self.message("v1"), self.message("v2")],
+            network_id="test-net", epoch=7, height=12, target_round=1,
+        )
+        result = verify_round_change_certificate(
+            cert, validator_set=three, height=12, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_quorum_missing")
+        self.assertEqual(three.quorum_weight(), 3)
+
+    def test_same_candidate_same_round_polc_selection_is_order_independent(self):
+        proposal = self.proposal("e")
+        polc_a = self.polc(proposal, signers=("v1", "v2", "v3"))
+        polc_b = self.polc(proposal, signers=("v1", "v2", "v4"))
+        self.assertNotEqual(polc_a["digest"], polc_b["digest"])
+        cert = self.certificate([
+            self.message("v1", polc=polc_a),
+            self.message("v2", polc=polc_b),
+            self.message("v3"),
+        ])
+        forward = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        reordered = dict(cert)
+        reordered["messages"] = list(reversed(cert["messages"]))
+        reverse = verify_round_change_certificate(
+            reordered, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertTrue(forward["valid"], forward)
+        self.assertTrue(reverse["valid"], reverse)
+        expected = min(polc_a["digest"], polc_b["digest"])
+        self.assertEqual(forward["highest_polc"]["digest"], expected)
+        self.assertEqual(reverse["highest_polc"]["digest"], expected)
+
 if __name__ == "__main__":
     unittest.main()
