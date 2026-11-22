@@ -2,6 +2,7 @@ import asyncio
 import datetime as dt
 import hashlib
 import ipaddress
+import json
 import ssl
 import tempfile
 import unittest
@@ -175,6 +176,8 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
             },
             replay_db_path=Path(self.temp.name) / "receiver-replay.sqlite3",
             clock=lambda: 1_800_000_000,
+            io_timeout_seconds=0.2,
+            max_connections=4,
         )
         sender_node = GCFPeerNode(
             engine=object(),
@@ -211,9 +214,42 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(replay["status"], "rejected")
             self.assertEqual(replay["error"], "MESSAGE_REPLAY")
             self.assertEqual(len(receiver_engine.proposals), 1)
+
+            slow_reader, slow_writer = await asyncio.open_connection(
+                "localhost", port, ssl=client_tls, server_hostname="localhost",
+            )
+            try:
+                slow_writer.write(b"\\x00\\x00")
+                await slow_writer.drain()
+                prefix = await asyncio.wait_for(slow_reader.readexactly(4), timeout=2)
+                response = await asyncio.wait_for(
+                    slow_reader.readexactly(int.from_bytes(prefix, "big")), timeout=2,
+                )
+                self.assertEqual(json.loads(response)["error"], "PEER_IO_TIMEOUT")
+            finally:
+                slow_writer.close()
+                await slow_writer.wait_closed()
         finally:
             server.close()
             await server.wait_closed()
+
+    def test_node_rejects_unbounded_inbound_resource_settings(self):
+        with self.assertRaisesRegex(PeerTransportError, "MAX_CONNECTIONS_INVALID"):
+            GCFPeerNode(
+                engine=object(), validator_set=self.validator_set,
+                node_id="v0", private_key_hex=self.private_hex["v0"],
+                peer_certificate_fingerprints={},
+                replay_db_path=Path(self.temp.name) / "bad-limit.sqlite3",
+                max_connections=0,
+            )
+        with self.assertRaisesRegex(PeerTransportError, "PEER_IO_TIMEOUT_INVALID"):
+            GCFPeerNode(
+                engine=object(), validator_set=self.validator_set,
+                node_id="v0", private_key_hex=self.private_hex["v0"],
+                peer_certificate_fingerprints={},
+                replay_db_path=Path(self.temp.name) / "bad-timeout.sqlite3",
+                io_timeout_seconds=120,
+            )
 
     def test_mesh_rejects_unknown_peer_and_invalid_endpoint(self):
         with self.assertRaisesRegex(PeerTransportError, "PEER_ID_INVALID"):
