@@ -516,34 +516,43 @@ class GCFEngine:
                     _, polc_digest = self._polc(db, digest)
                     if normalized["polc_digest"] != polc_digest:
                         raise GCFError("PRECOMMIT_POLC_MISMATCH")
-                lock = db.execute(
-                    """SELECT candidate_digest,round FROM vote_locks
-                       WHERE network_id=? AND epoch=? AND height=?
-                         AND vote_type=? AND validator_id=?""",
+                from src.consensus.round_change import value_digest, verify_round_change_certificate
+                prior_locks = db.execute(
+                    """SELECT vote_type,round,candidate_digest FROM vote_locks
+                       WHERE network_id=? AND epoch=? AND height=? AND validator_id=?""",
                     (normalized["network_id"], normalized["epoch"], normalized["height"],
-                     normalized["vote_type"], normalized["validator_id"]),
-                ).fetchone()
-                if lock is not None:
-                    if lock["candidate_digest"] == digest:
+                     normalized["validator_id"]),
+                ).fetchall()
+                next_value = value_digest(proposal)
+                transition_result = None
+                for prior_lock in prior_locks:
+                    if (prior_lock["vote_type"] == normalized["vote_type"]
+                            and prior_lock["candidate_digest"] == digest):
                         raise GCFError("DUPLICATE_VOTE_OR_EQUIVOCATION")
-                    from src.consensus.round_change import value_digest, verify_round_change_certificate
-                    prior_proposal = self._proposal(db, lock["candidate_digest"])
+                    prior_proposal = self._proposal(db, prior_lock["candidate_digest"])
                     prior_value = value_digest(prior_proposal)
-                    next_value = value_digest(proposal)
+                    if proposal["round"] < prior_lock["round"]:
+                        raise GCFError("VOTE_ROUND_REGRESSION")
                     if prior_value != next_value:
-                        certificate = proposal.get("round_change_certificate")
-                        checked_transition = verify_round_change_certificate(
-                            certificate, validator_set=self.validator_set,
-                            height=proposal["height"], clock=self.clock,
-                        ) if isinstance(certificate, Mapping) else {"valid": False}
-                        highest = checked_transition.get("highest_polc")
-                        if (not checked_transition.get("valid")
-                                or checked_transition.get("target_round") != proposal["round"]
-                                or checked_transition.get("highest_polc_round") is None
-                                or checked_transition["highest_polc_round"] <= lock["round"]
+                        if transition_result is None:
+                            certificate = proposal.get("round_change_certificate")
+                            transition_result = verify_round_change_certificate(
+                                certificate, validator_set=self.validator_set,
+                                height=proposal["height"], clock=self.clock,
+                            ) if isinstance(certificate, Mapping) else {"valid": False}
+                        highest = transition_result.get("highest_polc")
+                        if (not transition_result.get("valid")
+                                or transition_result.get("target_round") != proposal["round"]
+                                or transition_result.get("highest_polc_round") is None
+                                or transition_result["highest_polc_round"] <= prior_lock["round"]
                                 or highest is None
                                 or value_digest(highest["proposal"]) != next_value):
                             raise GCFError("ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED")
+                current_lock = next(
+                    (item for item in prior_locks if item["vote_type"] == normalized["vote_type"]),
+                    None,
+                )
+                if current_lock is not None:
                     db.execute(
                         """UPDATE vote_locks SET round=?,candidate_digest=?
                            WHERE network_id=? AND epoch=? AND height=?
