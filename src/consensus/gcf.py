@@ -846,7 +846,8 @@ def make_proposal(*, network_id: str, epoch: int, height: int, round: int,
                   parent_hash: str, payload_hash: str, proof_hash: str,
                   justice_commitment: Mapping[str, Any], proposer_id: str,
                   proposer_private_key_hex: str, nonce: str, issued_at: int,
-                  expires_at: int, anchor_sequence: int | None = None) -> dict:
+                  expires_at: int, anchor_sequence: int | None = None,
+                  round_change_certificate: Mapping[str, Any] | None = None) -> dict:
     body = {
         "schema": SCHEMA, "network_id": network_id, "epoch": epoch,
         "height": height, "round": round, "parent_hash": parent_hash,
@@ -859,6 +860,8 @@ def make_proposal(*, network_id: str, epoch: int, height: int, round: int,
     }
     if anchor_sequence is not None:
         body["anchor_sequence"] = _require_int(anchor_sequence, "anchor_sequence", 1)
+    if round_change_certificate is not None:
+        body["round_change_certificate"] = dict(round_change_certificate)
     return {**body, "signature": sign_object(proposer_private_key_hex, PROPOSAL_DOMAIN, body)}
 
 
