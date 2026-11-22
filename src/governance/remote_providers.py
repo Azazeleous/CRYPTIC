@@ -574,7 +574,7 @@ class HTTPSHSMEd25519Signer:
     def sign_round_change(self, message: Mapping[str, Any]) -> dict:
         """Sign one immutable round-change message per height/target-round with durable retry."""
         from src.consensus.round_change import (
-            ROUND_CHANGE_DOMAIN, ROUND_CHANGE_SCHEMA, verify_polc,
+            MAX_SQLITE_INT, ROUND_CHANGE_DOMAIN, ROUND_CHANGE_SCHEMA, verify_polc,
         )
         from src.consensus.gcf import canonical_bytes
 
@@ -587,7 +587,10 @@ class HTTPSHSMEd25519Signer:
             raise RemoteProviderError("round_change_signing_fields_invalid")
         body = dict(message)
         if (body["schema"] != ROUND_CHANGE_SCHEMA
+                or not isinstance(body["network_id"], str)
                 or body["network_id"] != self.network_id
+                or isinstance(body["epoch"], bool)
+                or not isinstance(body["epoch"], int)
                 or body["epoch"] != self.epoch
                 or body["validator_id"] != self.validator_id):
             raise RemoteProviderError("round_change_signing_identity_mismatch")
@@ -596,7 +599,8 @@ class HTTPSHSMEd25519Signer:
             ("issued_at", 0), ("expires_at", 1),
         ):
             value = body[field]
-            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or value < minimum or value > MAX_SQLITE_INT):
                 raise RemoteProviderError("round_change_signing_integer_invalid")
         if body["source_round"] >= body["target_round"]:
             raise RemoteProviderError("round_change_signing_round_range_invalid")
@@ -1171,6 +1175,31 @@ class PersistentGCFVoteSigner:
             db.execute("UPDATE gcf_vote_signing_history SET state='SIGNED' WHERE message_digest=?",
                        (message_digest,))
         return signature
+
+
+def make_round_change_message_with_signer(
+    *, signer: PersistentGCFVoteSigner, height: int, source_round: int,
+    target_round: int, issued_at: int, expires_at: int, nonce: str,
+    highest_polc: Mapping[str, Any] | None = None,
+) -> dict:
+    """Create a GCF round-change message through the persistent HSM-backed signer."""
+    if not isinstance(signer, PersistentGCFVoteSigner):
+        raise RemoteProviderError("durable_round_change_signer_required")
+    from src.consensus.round_change import ROUND_CHANGE_SCHEMA
+
+    return signer.sign_round_change({
+        "schema": ROUND_CHANGE_SCHEMA,
+        "network_id": signer.network_id,
+        "epoch": signer.epoch,
+        "height": height,
+        "source_round": source_round,
+        "target_round": target_round,
+        "validator_id": signer.validator_id,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "nonce": nonce,
+        "highest_polc": highest_polc,
+    })
 
 
 def make_vote_with_signer(*, signer: PersistentGCFVoteSigner, validator_id: str,
