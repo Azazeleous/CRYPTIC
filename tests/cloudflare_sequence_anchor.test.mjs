@@ -71,7 +71,7 @@ async function setup() {
 }
 async function request(env, method, path, { headers = {}, body } = {}) {
   return worker.fetch(new Request("https://anchor.test" + path, {
-    method, headers, body: body === undefined ? undefined : JSON.stringify(body),
+    method, headers, body: body === undefined ? undefined : canonical(body),
   }), env);
 }
 function writeBody(network, sequence, hash, expectedSequence, expectedHash) {
