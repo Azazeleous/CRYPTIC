@@ -33,7 +33,8 @@ class MemoryD1 {
       },
       async run() {
         const [network, sequence, hash, updated, expectedSequence,
-          expectedHash, zeroHash, whereSequence, whereHash] = this.values;
+          expectedHash, zeroHash, guardNetwork, guardSequence, guardHash,
+          whereSequence, whereHash] = this.values;
         let row = db.rows.get(network);
         if (!row) {
           if (expectedSequence === 0 && expectedHash === zeroHash) {
@@ -42,8 +43,9 @@ class MemoryD1 {
           }
           return { success: true, meta: { changes: 0 } };
         }
-        if (row.sequence === whereSequence && row.policy_hash === whereHash &&
-            sequence > row.sequence) {
+        if (guardNetwork === network && row.sequence === guardSequence &&
+            row.policy_hash === guardHash && row.sequence === whereSequence &&
+            row.policy_hash === whereHash && sequence > row.sequence) {
           db.rows.set(network, { sequence, policy_hash: hash, updated_at: updated });
           return { success: true, meta: { changes: 1 } };
         }
