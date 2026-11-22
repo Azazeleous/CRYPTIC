@@ -125,6 +125,7 @@ class RemoteProviderTests(unittest.TestCase):
                         self.private, ANCHOR_DOMAIN, body
                     )
                 })
+            self.assertEqual(headers.get("Authorization"), "Bearer " + "T" * 40)
             request = json.loads(raw)
             if current is None:
                 if headers.get("If-None-Match") != "*":
@@ -151,8 +152,8 @@ class RemoteProviderTests(unittest.TestCase):
 
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
-            trusted_public_key=self.public, clock=lambda: self.now,
-            transport=transport,
+            trusted_public_key=self.public, write_token="T" * 40,
+            clock=lambda: self.now, transport=transport,
         )
         self.assertIsNone(anchor.read_sequence("test-net"))
         digest1 = "1" * 64
@@ -162,6 +163,15 @@ class RemoteProviderTests(unittest.TestCase):
         self.assertFalse(anchor.advance_sequence("test-net", 1, digest1))
         self.assertTrue(anchor.advance_sequence("test-net", 2, digest2))
         self.assertEqual(anchor.read_sequence("test-net"), (2, digest2))
+
+    def test_anchor_write_requires_authentication(self):
+        anchor = HTTPSSequenceAnchor(
+            "https://anchor.example", signer_id="anchor-root",
+            trusted_public_key=self.public, clock=lambda: self.now,
+            transport=lambda *_: self.fail("transport must not be called"),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "write_authentication_required"):
+            anchor.advance_sequence("test", 1, "1" * 64)
 
     def test_anchor_rejects_cas_conflict(self):
         def transport(method, url, headers, raw, timeout):
@@ -180,8 +190,8 @@ class RemoteProviderTests(unittest.TestCase):
             return 412, {}, b""
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
-            trusted_public_key=self.public, clock=lambda: self.now,
-            transport=transport,
+            trusted_public_key=self.public, write_token="T" * 40,
+            clock=lambda: self.now, transport=transport,
         )
         self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64))
 
