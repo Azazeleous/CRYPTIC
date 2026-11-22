@@ -23,8 +23,7 @@ transition-signing service.
 - The certificate binds the anchor transition: proposal height equals the
   new anchor sequence, proposal parent hash equals the expected prior anchor
   hash, and proposal payload hash equals the new anchor policy hash.
-- A D1 receipt keyed by the pinned validator-set hash and certificate-derived
-  nonce rejects replay. The conditional D1 UPSERT remains the atomic
+- A D1 receipt keyed by the full certificate digest rejects replay. The conditional D1 UPSERT remains the atomic
   compare-and-swap point.
 - Responses are non-cacheable. No permissive CORS policy is installed.
 - No signing key or bearer credential is stored in source or D1.
