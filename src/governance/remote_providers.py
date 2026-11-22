@@ -648,6 +648,8 @@ def make_proposal_with_signer(*, signer: HTTPSHSMEd25519Signer, **fields) -> dic
         **fields,
         "proposer_public_key": signer.public_key_hex,
     }
+    if body.get("round_change_certificate") is None:
+        body.pop("round_change_certificate", None)
     signature = signer.sign(PROPOSAL_DOMAIN + canonical_bytes(body))
     return {**body, "signature": base64.b64encode(signature).decode("ascii")}
 
