@@ -283,7 +283,8 @@ class GCFEngine:
             "payload_hash", "proof_hash", "justice_commitment", "issued_at",
             "expires_at", "proposer_id", "proposer_public_key", "nonce", "signature",
         }
-        if not isinstance(proposal, Mapping) or set(proposal) != required:
+        allowed = required | {"anchor_sequence"}
+        if not isinstance(proposal, Mapping) or set(proposal) not in (required, allowed):
             raise GCFError("proposal_fields_invalid")
         if proposal["schema"] != SCHEMA:
             raise GCFError("schema_unsupported")
@@ -292,6 +293,8 @@ class GCFEngine:
         if _require_int(proposal["epoch"], "epoch", 1) != self.validator_set.epoch:
             raise GCFError("VALIDATOR_EPOCH_MISMATCH")
         _require_int(proposal["height"], "height", 1)
+        if "anchor_sequence" in proposal:
+            _require_int(proposal["anchor_sequence"], "anchor_sequence", 1)
         _require_int(proposal["round"], "round")
         _require_hash(proposal["parent_hash"], "parent_hash")
         _require_hash(proposal["payload_hash"], "payload_hash")
@@ -624,7 +627,7 @@ def make_proposal(*, network_id: str, epoch: int, height: int, round: int,
                   parent_hash: str, payload_hash: str, proof_hash: str,
                   justice_commitment: Mapping[str, Any], proposer_id: str,
                   proposer_private_key_hex: str, nonce: str, issued_at: int,
-                  expires_at: int) -> dict:
+                  expires_at: int, anchor_sequence: int | None = None) -> dict:
     body = {
         "schema": SCHEMA, "network_id": network_id, "epoch": epoch,
         "height": height, "round": round, "parent_hash": parent_hash,
@@ -635,6 +638,8 @@ def make_proposal(*, network_id: str, epoch: int, height: int, round: int,
         "proposer_public_key": public_key_hex(proposer_private_key_hex),
         "nonce": nonce,
     }
+    if anchor_sequence is not None:
+        body["anchor_sequence"] = _require_int(anchor_sequence, "anchor_sequence", 1)
     return {**body, "signature": sign_object(proposer_private_key_hex, PROPOSAL_DOMAIN, body)}
 
 
