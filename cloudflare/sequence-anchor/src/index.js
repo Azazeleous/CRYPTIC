@@ -96,10 +96,40 @@ async function readAnchor(networkId, nonce, env) {
   return json(record);
 }
 
+async function readBoundedBody(request) {
+  const length = request.headers.get("content-length");
+  if (length !== null && (!/^\\d+$/.test(length) || Number(length) > MAX_BODY_BYTES)) {
+    throw new Error("body_too_large");
+  }
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new Error("body_too_large");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+  return output;
+}
+
 async function advanceAnchor(request, networkId, env) {
   if (!await authorized(request, env)) return json({ error: "unauthorized" }, 401);
-  const raw = await request.arrayBuffer();
-  if (raw.byteLength > MAX_BODY_BYTES) return json({ error: "body_too_large" }, 413);
+  let raw;
+  try { raw = await readBoundedBody(request); }
+  catch { return json({ error: "body_too_large" }, 413); }
   let body;
   try { body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(raw)); }
   catch { return json({ error: "invalid_json" }, 400); }
@@ -117,10 +147,13 @@ async function advanceAnchor(request, networkId, env) {
       !validTimestamp(body.issued_at, now) || !NONCE.test(body.nonce)) {
     return json({ error: "request_fields_invalid" }, 400);
   }
-  const condition = request.headers.get("if-none-match") === "*" &&
+  const ifNoneMatch = request.headers.get("if-none-match");
+  const ifMatch = request.headers.get("if-match");
+  const condition = ifNoneMatch === "*" && ifMatch === null &&
     body.expected_sequence === 0 && body.expected_policy_hash === ZERO_HASH;
-  const match = request.headers.get("if-match") ===
-    `"${body.expected_sequence}:${body.expected_policy_hash}"`;
+  const match = ifNoneMatch === null && ifMatch ===
+    `"${body.expected_sequence}:${body.expected_policy_hash}"` &&
+    body.expected_sequence > 0;
   if (!condition && !match) return json({ error: "precondition_required" }, 428);
   if (body.sequence <= body.expected_sequence) {
     return json({ error: "sequence_not_increasing" }, 409);
@@ -172,13 +205,15 @@ export default {
     catch { return json({ error: "network_id_invalid" }, 400); }
     if (!validNetworkId(networkId)) return json({ error: "network_id_invalid" }, 400);
     if (!env.ANCHOR_DB) return json({ error: "anchor_storage_not_configured" }, 503);
-    if (request.method === "GET") {
-      const nonce = request.headers.get("x-anchor-nonce") || "";
-      if (!NONCE.test(nonce)) return json({ error: "nonce_required" }, 400);
-      try { return await readAnchor(networkId, nonce, env); }
-      catch { return json({ error: "anchor_signing_or_storage_unavailable" }, 503); }
-    }
-    if (request.method === "PUT") {
+    if (request.method === "GET" || request.method === "PUT") {
+      try { await signingKey(env); }
+      catch { return json({ error: "anchor_signing_not_configured" }, 503); }
+      if (request.method === "GET") {
+        const nonce = request.headers.get("x-anchor-nonce") || "";
+        if (!NONCE.test(nonce)) return json({ error: "nonce_required" }, 400);
+        try { return await readAnchor(networkId, nonce, env); }
+        catch { return json({ error: "anchor_signing_or_storage_unavailable" }, 503); }
+      }
       try { return await advanceAnchor(request, networkId, env); }
       catch { return json({ error: "anchor_service_unavailable" }, 503); }
     }
