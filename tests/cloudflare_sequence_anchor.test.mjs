@@ -6,7 +6,8 @@ globalThis.crypto ||= webcrypto;
 import worker from "../cloudflare/sequence-anchor/src/index.js";
 
 const ZERO = "0".repeat(64);
-const DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
+const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\\0");
+const POLICY_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-POLICY-TRANSITION/1\\0");
 const TOKEN = "anchor-test-token-".padEnd(40, "x");
 
 function canonical(value) {
@@ -21,7 +22,7 @@ function b64(bytes) {
   return btoa(binary);
 }
 class MemoryD1 {
-  constructor() { this.rows = new Map(); }
+  constructor() { this.rows = new Map(); this.nonces = new Set(); }
   prepare(sql) {
     const db = this;
     return {
@@ -32,10 +33,29 @@ class MemoryD1 {
         return row ? { sequence: row.sequence, policy_hash: row.policy_hash } : null;
       },
       async run() {
+        if (sql.includes("DELETE FROM used_authorization_nonces")) {
+          const cutoff = this.values[0];
+          return { success: true, meta: { changes: 0, cutoff } };
+        }
+        if (sql.includes("INSERT INTO used_authorization_nonces")) {
+          const [signer, nonce, network, expiry, expectedSequence, expectedHash,
+            zeroHash, initNetwork, guardNetwork, guardSequence, guardHash] = this.values;
+          const row = db.rows.get(network);
+          const stateMatches = expectedSequence === 0
+            ? expectedHash === zeroHash && !row
+            : Boolean(row && row.sequence === guardSequence &&
+              row.policy_hash === guardHash && guardNetwork === network);
+          const key = signer + ":" + nonce;
+          if (!stateMatches || db.nonces.has(key)) {
+            return { success: true, meta: { changes: 0 } };
+          }
+          db.nonces.add(key);
+          return { success: true, meta: { changes: 1, expiry, initNetwork } };
+        }
         const [network, sequence, hash, updated, expectedSequence,
           expectedHash, zeroHash, guardNetwork, guardSequence, guardHash,
           whereSequence, whereHash] = this.values;
-        let row = db.rows.get(network);
+        const row = db.rows.get(network);
         if (!row) {
           if (expectedSequence === 0 && expectedHash === zeroHash) {
             db.rows.set(network, { sequence, policy_hash: hash, updated_at: updated });
@@ -56,39 +76,68 @@ class MemoryD1 {
 }
 
 async function setup() {
-  const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-  const pkcs8 = await crypto.subtle.exportKey("pkcs8", pair.privateKey);
-  const publicRaw = await crypto.subtle.exportKey("raw", pair.publicKey);
+  const anchorPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const godPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", anchorPair.privateKey);
+  const anchorPublicRaw = await crypto.subtle.exportKey("raw", anchorPair.publicKey);
+  const godPublicRaw = await crypto.subtle.exportKey("raw", godPair.publicKey);
+  const godPublicHex = Array.from(new Uint8Array(godPublicRaw), b => b.toString(16).padStart(2, "0")).join("");
   const env = {
     ANCHOR_DB: new MemoryD1(),
     ANCHOR_SIGNER_ID: "anchor-test-root",
     ANCHOR_SIGNING_KEY_PKCS8_B64: b64(pkcs8),
     ANCHOR_WRITE_TOKEN: TOKEN,
+    ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX: godPublicHex,
+    ANCHOR_GOD_POLICY_SIGNER_ID: "god-policy-root",
+    ANCHOR_POLICY_ID: "cryptic-main-policy-v1",
   };
-  return { env, publicKey: await crypto.subtle.importKey(
-    "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
-  ) };
+  return {
+    env, godPrivateKey: godPair.privateKey,
+    publicKey: await crypto.subtle.importKey(
+      "raw", anchorPublicRaw, { name: "Ed25519" }, false, ["verify"]
+    ),
+  };
 }
 async function request(env, method, path, { headers = {}, body } = {}) {
   return worker.fetch(new Request("https://anchor.test" + path, {
     method, headers, body: body === undefined ? undefined : canonical(body),
   }), env);
 }
-function writeBody(network, sequence, hash, expectedSequence, expectedHash) {
+function writeBody(network, sequence, hash, expectedSequence, expectedHash, nonce) {
   return {
     schema: "CRYPTIC-SEQUENCE-ANCHOR/1", network_id: network,
     sequence, policy_hash: hash, expected_sequence: expectedSequence,
     expected_policy_hash: expectedHash, issued_at: Math.floor(Date.now() / 1000),
-    nonce: "ab".repeat(16),
+    nonce: nonce || "ab".repeat(16),
   };
+}
+async function authorize(godPrivateKey, transition, nonce) {
+  const body = {
+    schema: "CRYPTIC-GOD-POLICY-TRANSITION/1",
+    signer_id: "god-policy-root",
+    capability: "cryptic.sequence_anchor.advance",
+    policy_id: "cryptic-main-policy-v1",
+    network_id: transition.network_id,
+    expected_sequence: transition.expected_sequence,
+    expected_policy_hash: transition.expected_policy_hash,
+    sequence: transition.sequence,
+    policy_hash: transition.policy_hash,
+    issued_at: Math.floor(Date.now() / 1000),
+    expires_at: Math.floor(Date.now() / 1000) + 120,
+    nonce: nonce || crypto.randomUUID().replaceAll("-", "").slice(0, 32),
+  };
+  const payload = new TextEncoder().encode(canonical(body));
+  const message = new Uint8Array(POLICY_DOMAIN.length + payload.length);
+  message.set(POLICY_DOMAIN); message.set(payload, POLICY_DOMAIN.length);
+  return { ...body, signature: b64(await crypto.subtle.sign("Ed25519", godPrivateKey, message)) };
 }
 async function verifyRecord(record, publicKey) {
   const { signature, ...unsigned } = record;
   const binary = atob(signature);
   const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0));
   const payload = new TextEncoder().encode(canonical(unsigned));
-  const message = new Uint8Array(DOMAIN.length + payload.length);
-  message.set(DOMAIN); message.set(payload, DOMAIN.length);
+  const message = new Uint8Array(ANCHOR_DOMAIN.length + payload.length);
+  message.set(ANCHOR_DOMAIN); message.set(payload, ANCHOR_DOMAIN.length);
   assert.equal(await crypto.subtle.verify("Ed25519", publicKey, bytes, message), true);
 }
 
@@ -102,8 +151,8 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
   assert.equal(env.ANCHOR_DB.rows.size, 0);
 });
 
-test("signed read, initialization, monotonic update and stale CAS rejection", async () => {
-  const { env, publicKey } = await setup();
+test("signed GOD transition authorizes initialization and advancement; stale CAS is rejected", async () => {
+  const { env, publicKey, godPrivateKey } = await setup();
   const network = "test-net";
   const absent = await request(env, "GET", "/v1/anchors/test-net", {
     headers: { "x-anchor-nonce": "cd".repeat(16) },
@@ -111,6 +160,7 @@ test("signed read, initialization, monotonic update and stale CAS rejection", as
   assert.equal(absent.status, 404);
 
   const first = writeBody(network, 1, "1".repeat(64), 0, ZERO);
+  first.authorization = await authorize(godPrivateKey, first, "01".repeat(16));
   const initialized = await request(env, "PUT", "/v1/anchors/test-net", {
     headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
       "content-type": "application/json" }, body: first,
@@ -131,7 +181,8 @@ test("signed read, initialization, monotonic update and stale CAS rejection", as
   assert.equal(readRecord.sequence, 1);
   await verifyRecord(readRecord, publicKey);
 
-  const stale = writeBody(network, 2, "2".repeat(64), 0, ZERO);
+  const stale = writeBody(network, 2, "2".repeat(64), 0, ZERO, "02".repeat(16));
+  stale.authorization = await authorize(godPrivateKey, stale, "12".repeat(16));
   const rejected = await request(env, "PUT", "/v1/anchors/test-net", {
     headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
       "content-type": "application/json" }, body: stale,
@@ -139,7 +190,8 @@ test("signed read, initialization, monotonic update and stale CAS rejection", as
   assert.equal(rejected.status, 412);
   assert.equal(env.ANCHOR_DB.rows.get(network).sequence, 1);
 
-  const next = writeBody(network, 2, "2".repeat(64), 1, "1".repeat(64));
+  const next = writeBody(network, 2, "2".repeat(64), 1, "1".repeat(64), "03".repeat(16));
+  next.authorization = await authorize(godPrivateKey, next, "13".repeat(16));
   const advanced = await request(env, "PUT", "/v1/anchors/test-net", {
     headers: { authorization: "Bearer " + TOKEN,
       "if-match": '"1:' + "1".repeat(64) + '"',
@@ -149,6 +201,40 @@ test("signed read, initialization, monotonic update and stale CAS rejection", as
   const nextRecord = await advanced.json();
   assert.equal(nextRecord.sequence, 2);
   await verifyRecord(nextRecord, publicKey);
+});
+
+test("rejects missing, forged, mismatched, wrong-policy and replayed GOD authorizations", async () => {
+  const { env, godPrivateKey } = await setup();
+  const headers = { authorization: "Bearer " + TOKEN, "if-none-match": "*",
+    "content-type": "application/json" };
+  const base = writeBody("test-net", 1, "1".repeat(64), 0, ZERO, "21".repeat(16));
+  let response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: base });
+  assert.equal(response.status, 403);
+
+  const forged = { ...base, authorization: { ...(await authorize(godPrivateKey, base, "22".repeat(16))), signature: b64(new Uint8Array(64)) } };
+  response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: forged });
+  assert.equal(response.status, 403);
+
+  const mismatched = { ...base, authorization: await authorize(godPrivateKey, { ...base, policy_hash: "2".repeat(64) }, "23".repeat(16)) };
+  response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: mismatched });
+  assert.equal(response.status, 403);
+
+  const wrongPolicy = await authorize(godPrivateKey, base, "24".repeat(16));
+  wrongPolicy.policy_id = "other-policy";
+  const payload = new TextEncoder().encode(canonical(Object.fromEntries(Object.entries(wrongPolicy).filter(([k]) => k !== "signature"))));
+  const message = new Uint8Array(POLICY_DOMAIN.length + payload.length);
+  message.set(POLICY_DOMAIN); message.set(payload, POLICY_DOMAIN.length);
+  wrongPolicy.signature = b64(await crypto.subtle.sign("Ed25519", godPrivateKey, message));
+  response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: { ...base, authorization: wrongPolicy } });
+  assert.equal(response.status, 403);
+
+  const valid = { ...base, authorization: await authorize(godPrivateKey, base, "25".repeat(16)) };
+  response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: valid });
+  assert.equal(response.status, 200);
+  const replay = { ...base, nonce: "26".repeat(16), authorization: valid.authorization };
+  response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: replay });
+  assert.equal(response.status, 403);
+  assert.equal(env.ANCHOR_DB.rows.get("test-net").sequence, 1);
 });
 
 test("rejects malformed nonce, malformed request and wrong bearer token", async () => {
