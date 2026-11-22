@@ -219,7 +219,7 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
                 "localhost", port, ssl=client_tls, server_hostname="localhost",
             )
             try:
-                slow_writer.write(b"\\x00\\x00")
+                slow_writer.write(b"\x00\x00")
                 await slow_writer.drain()
                 prefix = await asyncio.wait_for(slow_reader.readexactly(4), timeout=2)
                 response = await asyncio.wait_for(
