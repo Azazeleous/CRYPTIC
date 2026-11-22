@@ -306,7 +306,8 @@ class HTTPSSequenceAnchor:
                 raise ValueError("hash")
         except ValueError as exc:
             raise RemoteProviderError("anchor_policy_hash_invalid") from exc
-        if not isinstance(authorization, Mapping):\n            raise RemoteProviderError("anchor_policy_authorization_required")
+        if not isinstance(authorization, Mapping):
+            raise RemoteProviderError("anchor_policy_authorization_required")
         current = self.read_sequence(network_id)
         if current is None:
             expected_sequence, expected_hash = 0, "0" * 64
@@ -322,7 +323,8 @@ class HTTPSSequenceAnchor:
             "expected_sequence": expected_sequence,
             "expected_policy_hash": expected_hash,
             "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),
-            "authorization": dict(authorization),\n        }
+            "authorization": dict(authorization),
+        }
         status, _headers, raw = self.transport(
             "PUT", self._url(network_id),
             {"Content-Type": "application/json", "Accept": "application/json",
