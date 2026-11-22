@@ -2,7 +2,7 @@
 
 Status: **PARTIAL PROOF PRIMITIVES IMPLEMENTED — STATE MACHINE NOT IMPLEMENTED; NOT ENABLED**
 
-This document specifies the work required before GCF may safely advance a height across rounds while allowing a validator to change a previously selected value. It does not add a round-change wire message, unlock a validator, change the vote signer, or alter finality verification. The existing cross-round locks remain authoritative.
+This document specifies the work required before GCF may safely advance a height across rounds while allowing a validator to change a previously selected value. The branch now accepts authenticated GCF-P2P/1 ROUND_CHANGE envelopes and durably collects signed round-change messages and verified quorum certificates. This is evidence ingestion only: it does not unlock a validator, change the vote signer, advance proposal admission, or alter finality verification. The existing cross-round locks remain authoritative.
 
 ## 1.1 Implemented proof-verification slice (not a complete round-change protocol)
 
@@ -26,7 +26,12 @@ verification for:
   integers are range-checked.
 
 The production-gate workflow invokes `tests/test_round_change.py` on Ubuntu
-and Windows. The suite covers strict weighted quorum (including exact
+and Windows. `GCFEngine.submit_round_change()` persists one message per validator
+and target round, rejects duplicate/equivocating submissions, constructs a
+canonical certificate, and caches only a certificate that independently
+passes the proof verifier. `get_round_change_certificate()` re-verifies cached
+evidence after restart. GCF-P2P/1 accepts the `ROUND_CHANGE` message type and
+dispatches it through the authenticated peer identity boundary. The suite covers strict weighted quorum (including exact
 two-thirds rejection), duplicate signers, invalid signatures, conflicting
 POLCs, deterministic same-candidate tie-breaking, expired proposals, stale
 votes, bounded proof lists, and invalid verifier limits. CI evidence for the
@@ -34,9 +39,10 @@ latest implementation head is recorded in the PR and capability ledger only
 after the corresponding workflow runs complete successfully.
 
 This slice deliberately does **not** mutate consensus locks, release signing
-intents, add round-change to peer dispatch, alter proposal/finality schemas,
-change the HSM policy, or change the Cloudflare Worker. It is not yet safe to
-advance a live engine round. Existing cross-round locks remain authoritative.
+intents, authorize signatures, alter proposal/finality schemas, change the HSM
+policy, or change the Cloudflare Worker. It is not yet safe to advance a live
+engine round or accept a later-round proposal. Existing cross-round locks
+remain authoritative.
 The module's verifier result is evidence about a supplied proof only; it is
 not authorization to sign or unlock.
 
@@ -227,4 +233,4 @@ This is a reference model, not a claim that GCF is Tendermint-compatible or that
 
 ---
 
-**Current operational rule:** GCF cross-round vote locks remain in force. No timeout-based unlock, round-change certificate, or automatic round advancement is implemented by this document.
+**Current operational rule:** GCF cross-round vote locks remain in force. Round-change messages and certificates are now received and durably verified, but no timeout-based unlock, lock transition, signer authorization, or automatic round advancement is implemented.
