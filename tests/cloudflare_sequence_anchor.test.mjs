@@ -11,6 +11,8 @@ const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
 const PROPOSAL_DOMAIN = new TextEncoder().encode("GCF/1|PROPOSAL|ED25519\0");
 const VOTE_DOMAIN = new TextEncoder().encode("GCF/1|VOTE|ED25519\0");
 const CERT_DOMAIN = new TextEncoder().encode("GCF/1|FINALITY-CERTIFICATE\0");
+const ROUND_CHANGE_DOMAIN = new TextEncoder().encode("GCF/1|ROUND-CHANGE|ED25519\0");
+const ROUND_CHANGE_CERT_DOMAIN = new TextEncoder().encode("GCF/1|ROUND-CHANGE-CERTIFICATE\0");
 
 function canonical(value) {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
