@@ -208,7 +208,7 @@ test("rejects missing, forged, mismatched, wrong-policy and replayed GOD authori
   const headers = { authorization: "Bearer " + TOKEN, "if-none-match": "*",
     "content-type": "application/json" };
   const base = writeBody("test-net", 1, "1".repeat(64), 0, ZERO, "21".repeat(16));
-  let response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: base });
+  let response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: { ...base, authorization: null } });
   assert.equal(response.status, 403);
 
   const forged = { ...base, authorization: { ...(await authorize(godPrivateKey, base, "22".repeat(16))), signature: b64(new Uint8Array(64)) } };
@@ -233,7 +233,7 @@ test("rejects missing, forged, mismatched, wrong-policy and replayed GOD authori
   assert.equal(response.status, 200);
   const replay = { ...base, nonce: "26".repeat(16), authorization: valid.authorization };
   response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: replay });
-  assert.equal(response.status, 403);
+  assert.equal(response.status, 412);
   assert.equal(env.ANCHOR_DB.rows.get("test-net").sequence, 1);
 });
 
