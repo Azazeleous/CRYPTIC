@@ -40,7 +40,7 @@ class PoolCoordinatorTests(unittest.TestCase):
 
     def issue(self):
         return self.pool.issue_job(
-            height=1, epoch=1, lifetime_seconds=120,
+            worker_id="worker-a", height=1, epoch=1, lifetime_seconds=120,
             parent_hash="00" * 32, payload_hash="11" * 32,
             primary_stride=3037, compact_stride=5,
             nonce_start=0, max_attempts=8,
