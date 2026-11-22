@@ -93,3 +93,20 @@ On 2026-11-22, the Worker script was uploaded to the connected Cloudflare accoun
 This is a real but dormant code deployment. It is not a live anchor service,
 does not establish an independently administered trust root, and cannot
 accept writes while secrets and a protected route remain absent.
+
+### D1 compare-and-swap integration check
+
+A direct integration check was run against the staged Cloudflare D1 database on
+2026-11-22 using a temporary reserved network ID. The exact conditional UPSERT
+statement was exercised against D1:
+
+- Initial sequence insert: 1 row changed.
+- Stale initialization attempt: 0 rows changed.
+- Valid advancement from sequence 1 to 2: 1 row changed.
+- Competing stale writer using the old expected tuple: 0 rows changed.
+- Readback: sequence 2 with the expected digest.
+- Cleanup: 1 row deleted; follow-up count was 0.
+
+This verifies the D1 SQL behavior and cleanup for a single sequential test.
+It does not establish concurrent multi-region behavior, signed Worker request
+execution, rollback resistance, or independent service administration.
