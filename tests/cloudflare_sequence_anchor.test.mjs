@@ -82,12 +82,14 @@ async function setup() {
   const anchorPublicRaw = await crypto.subtle.exportKey("raw", anchorPair.publicKey);
   const godPublicRaw = await crypto.subtle.exportKey("raw", godPair.publicKey);
   const godPublicHex = Array.from(new Uint8Array(godPublicRaw), b => b.toString(16).padStart(2, "0")).join("");
+  const godFingerprint = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", godPublicRaw)), b => b.toString(16).padStart(2, "0")).join("");
   const env = {
     ANCHOR_DB: new MemoryD1(),
     ANCHOR_SIGNER_ID: "anchor-test-root",
     ANCHOR_SIGNING_KEY_PKCS8_B64: b64(pkcs8),
     ANCHOR_WRITE_TOKEN: TOKEN,
     ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX: godPublicHex,
+    ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256: godFingerprint,
     ANCHOR_GOD_POLICY_SIGNER_ID: "god-policy-root",
     ANCHOR_POLICY_ID: "cryptic-main-policy-v1",
   };
