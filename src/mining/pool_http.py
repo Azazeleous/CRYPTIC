@@ -50,7 +50,7 @@ class MTLSWorkerAuthenticator:
         if not isinstance(pem, str) or not pem.startswith("-----BEGIN CERTIFICATE-----"):
             raise ValueError("worker_client_certificate_missing")
         try:
-            der = bytes.fromhex(ssl.PEM_cert_to_DER_cert(pem).hex())
+            der = ssl.PEM_cert_to_DER_cert(pem)
         except (ValueError, ssl.SSLError) as exc:
             raise ValueError("worker_client_certificate_invalid") from exc
         fingerprint = hashlib.sha256(der).hexdigest()
