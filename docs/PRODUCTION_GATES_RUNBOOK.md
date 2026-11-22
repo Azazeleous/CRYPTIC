@@ -157,3 +157,14 @@ runtime = build_consensus_runtime(
 ~~~
 
 For policy changes, use the `runtime.policy_update` coordinator described in Gate 2; it ensures the proposal, finality certificate, and HCCGN install all refer to the same policy digest and anchor sequence. For direct anchor integrations, each `advance_sequence()` call must receive the exact certificate returned by `GCFEngine.finalize(candidate_digest)["certificate"]`. The client reads the signed anchor tuple and submits the certificate; the Worker independently verifies the certificate against its pinned validator set and exact old/new anchor binding before D1 mutation. If the anchor changes between read and write, the CAS fails. Validator proposal/vote signing is a separate call path. Construct HTTPSHSMEd25519Signer with the approved HSM endpoint, mTLS client certificate/private key, key ID, and independently pinned validator public key. Pass that signer to make_proposal_with_signer() and make_vote_with_signer(). The consensus process receives signatures and public keys, not raw validator private-key bytes.
+
+
+## GCF/1 cross-round vote-lock safety boundary
+
+The durable validator vote lock is scoped to (network_id, epoch, height, vote_type, validator_id), not to a round. A validator therefore cannot submit a different candidate for the same height and phase merely by incrementing the round number. PREVOTE and PRECOMMIT retain separate phase locks. The lock is committed in the same SQLite transaction as vote admission and is recovered from the persisted vote journal.
+
+Existing databases using the earlier round-scoped primary key are migrated on startup. Before migration, the engine checks historical locks for a validator that voted for different candidate digests across rounds at the same height and phase. If such a conflict exists, initialization fails closed with PERSISTED_CROSS_ROUND_EQUIVOCATION; it does not select a winner or rewrite the history. Otherwise, the lock table is rebuilt with the height-scoped key while preserving the existing candidate lock.
+
+**Liveness trade-off:** this conservative rule does not implement round-change unlocks. A validator locked to a candidate for a height/phase remains locked for that height/phase, even if the network later needs another round. A future round-change protocol must define and verify a signed unlock/locking certificate, safety-preserving POLC rules, timeout evidence, and restart recovery before relaxing this invariant. Do not clear locks manually or treat a timeout as authorization to vote for another candidate.
+
+This is a local engine safety invariant, not evidence of a complete multi-validator round controller or live multi-host BFT operation. CI must exercise cross-round conflicts and legacy-database migration before the capability is promoted.
