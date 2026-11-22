@@ -640,7 +640,8 @@ def make_proposal_with_signer(*, signer: HTTPSHSMEd25519Signer, **fields) -> dic
         "payload_hash", "proof_hash", "justice_commitment", "proposer_id",
         "nonce", "issued_at", "expires_at",
     }
-    if set(fields) not in (required, required | {"anchor_sequence"}):
+    allowed = required | {"anchor_sequence", "round_change_certificate"}
+    if not required.issubset(fields) or not set(fields).issubset(allowed):
         raise RemoteProviderError("proposal_fields_invalid")
     body = {
         "schema": SCHEMA,
