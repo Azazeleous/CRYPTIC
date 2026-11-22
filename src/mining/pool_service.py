@@ -147,6 +147,26 @@ class PoolCoordinator:
                     raise
             return job
 
+    def get_job(self, job_id: str) -> dict:
+        """Return an active, unexpired job to an already authenticated worker."""
+        if not isinstance(job_id, str) or len(job_id) != 32:
+            raise PoolServiceError("job_id_invalid")
+        now = self.clock()
+        if isinstance(now, bool) or not isinstance(now, int) or now < 0:
+            raise PoolServiceError("clock_invalid")
+        with self._lock, _connect(self.database) as conn:
+            row = conn.execute(
+                "SELECT job_json,status FROM pool_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise PoolServiceError("job_not_found")
+        if row[1] != "active":
+            raise PoolServiceError("job_revoked")
+        job = json.loads(bytes(row[0]).decode("ascii"))
+        if now < job["issued_at"] or now > job["expires_at"]:
+            raise PoolServiceError("job_expired_or_not_yet_valid")
+        return job
+
     def revoke_job(self, job_id: str) -> bool:
         """Revoke an issued job; repeated revocation is an idempotent false result."""
         if not isinstance(job_id, str) or len(job_id) != 32:
