@@ -110,6 +110,7 @@ from src.governance.remote_providers import (
     HTTPSJusticeProviders,
     HTTPSSequenceAnchor,
     SignedHTTPSDecisionClient,
+    SignedHTTPSPolicyTransitionClient,
 )
 
 god_client = SignedHTTPSDecisionClient(
@@ -117,11 +118,18 @@ god_client = SignedHTTPSDecisionClient(
     signer_id=GOD_SIGNER_ID,
     trusted_public_key=GOD_PUBLIC_KEY,
 )
+god_transition_authorizer = SignedHTTPSPolicyTransitionClient(
+    GOD_ANCHOR_TRANSITION_URL,
+    signer_id=GOD_POLICY_SIGNER_ID,
+    policy_id=CRYPTIC_ANCHOR_POLICY_ID,
+    trusted_public_key=GOD_POLICY_PUBLIC_KEY,
+)
 anchor = HTTPSSequenceAnchor(
     SEQUENCE_ANCHOR_URL,
     signer_id=ANCHOR_SIGNER_ID,
     trusted_public_key=ANCHOR_PUBLIC_KEY,
     write_token=os.environ["CRYPTIC_SEQUENCE_ANCHOR_TOKEN"],
+    authorization_provider=god_transition_authorizer,
 )
 justice = HTTPSJusticeProviders(
     policy=SignedHTTPSDecisionClient(
@@ -153,4 +161,4 @@ runtime = build_consensus_runtime(
 )
 ~~~
 
-For each `advance_sequence()` call, the caller must first obtain the current signed anchor tuple, obtain a fresh GOD authorization envelope bound to that exact old tuple and proposed new tuple, then pass it as `authorization=`. If the anchor changes between read and write, the CAS fails and a fresh authorization is required. Validator proposal/vote signing is a separate call path. Construct HTTPSHSMEd25519Signer with the approved HSM endpoint, mTLS client certificate/private key, key ID, and independently pinned validator public key. Pass that signer to make_proposal_with_signer() and make_vote_with_signer(). The consensus process receives signatures and public keys, not raw validator private-key bytes.
+For each `advance_sequence()` call, HTTPSSequenceAnchor first obtains the current signed anchor tuple, then calls SignedHTTPSPolicyTransitionClient.authorize_transition() with the exact old and proposed tuples. The client sends CRYPTIC-GOD-POLICY-TRANSITION-REQUEST/1 to the configured GOD authority and verifies the returned CRYPTIC-GOD-POLICY-TRANSITION/1 signature, signer, policy, capability, nonce, timestamp, expiry, and tuple before the Worker independently verifies it again. If the anchor changes between read and write, the CAS fails; the next attempt obtains a fresh authorization and nonce. Validator proposal/vote signing is a separate call path. Construct HTTPSHSMEd25519Signer with the approved HSM endpoint, mTLS client certificate/private key, key ID, and independently pinned validator public key. Pass that signer to make_proposal_with_signer() and make_vote_with_signer(). The consensus process receives signatures and public keys, not raw validator private-key bytes.
