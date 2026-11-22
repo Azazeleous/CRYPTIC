@@ -1,0 +1,2 @@
+# Test-only dependencies for the repository's unit and contract suites.
+pytest>=8.3,<10
