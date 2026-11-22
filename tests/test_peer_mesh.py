@@ -157,6 +157,7 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
         class ReceiverEngine:
             def __init__(self):
                 self.proposals = []
+                self.round_changes = []
 
             def submit_proposal(self, proposal):
                 self.proposals.append(dict(proposal))
@@ -164,6 +165,10 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
 
             def submit_vote(self, vote):
                 raise AssertionError("unexpected vote dispatch")
+
+            def submit_round_change(self, message):
+                self.round_changes.append(dict(message))
+                return {"accepted": True, "quorum_reached": False}
 
         receiver_engine = ReceiverEngine()
         receiver_node = GCFPeerNode(
@@ -214,6 +219,24 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(replay["status"], "rejected")
             self.assertEqual(replay["error"], "MESSAGE_REPLAY")
             self.assertEqual(len(receiver_engine.proposals), 1)
+
+            round_change = {
+                "schema": "GCF-ROUND-CHANGE/1", "network_id": "mesh-test",
+                "epoch": 2, "height": 9, "source_round": 0, "target_round": 1,
+            }
+            accepted_round_change = await sender_node.send(
+                "localhost", port, client_tls, fingerprint,
+                "ROUND_CHANGE", round_change, "02" * 16,
+            )
+            self.assertEqual(accepted_round_change["status"], "accepted")
+            self.assertEqual(receiver_engine.round_changes, [round_change])
+            replayed_round_change = await sender_node.send(
+                "localhost", port, client_tls, fingerprint,
+                "ROUND_CHANGE", round_change, "02" * 16,
+            )
+            self.assertEqual(replayed_round_change["status"], "rejected")
+            self.assertEqual(replayed_round_change["error"], "MESSAGE_REPLAY")
+            self.assertEqual(len(receiver_engine.round_changes), 1)
 
             slow_reader, slow_writer = await asyncio.open_connection(
                 "localhost", port, ssl=client_tls, server_hostname="localhost",
