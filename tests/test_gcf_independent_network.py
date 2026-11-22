@@ -500,8 +500,11 @@ class CrossRoundVoteLockTests(unittest.TestCase):
             round_change_messages, network_id=self.vset.network_id,
             epoch=self.vset.epoch, height=9, target_round=1,
         )
+        round_one_common = {
+            **common, "payload_hash": hashlib.sha256(b"different-round-one-value").hexdigest(),
+        }
         self.proposal_round_1 = make_proposal(
-            **common, round=1, nonce="round-one-nonce-0000000000000002",
+            **round_one_common, round=1, nonce="round-one-nonce-0000000000000002",
             round_change_certificate=round_change_certificate,
         )
         self.digest_round_0 = self.engine.submit_proposal(self.proposal_round_0)["candidate_digest"]
