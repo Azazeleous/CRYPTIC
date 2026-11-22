@@ -41,3 +41,9 @@ jobs:
         run: python -m unittest discover -s tests -p "test_gcf_independent_network.py" -v
       - name: Verify authenticated HCCGN target policy
         run: python -m unittest discover -s tests -p "test_hccgn_registry.py" -v
+      - name: Set up Node.js for Cloudflare Worker contract tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify Cloudflare sequence-anchor Worker contracts
+        run: node --experimental-default-type=module --test tests/cloudflare_sequence_anchor.test.mjs
