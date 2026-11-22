@@ -163,7 +163,7 @@ class RuntimeCompositionTests(unittest.TestCase):
             )
 
     def test_raw_trust_root_preserves_leading_and_trailing_whitespace_bytes(self):
-        key = b" " + (b"\\x01" * 30) + b"\\n"
+        key = b" " + bytes([1]) * 30 + bytes([10])
         self.key_path.write_bytes(key)
         os.chmod(self.key_path, 0o600)
         self.assertEqual(load_pinned_ed25519_public_key(self.key_path), key)
