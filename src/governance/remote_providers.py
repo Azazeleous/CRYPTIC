@@ -945,7 +945,7 @@ class PersistentGCFVoteSigner:
                 if state_row is not None and state_row[0] != legacy_lock[1]:
                     raise RemoteProviderError("vote_signing_lock_state_corrupt")
             prior_states = db.execute("""
-                SELECT vote_type,round,candidate_digest,value_digest
+                SELECT vote_type,round,value_digest,candidate_digest
                 FROM gcf_vote_signing_round_state
                 WHERE network_id=? AND epoch=? AND height=? AND validator_id=?
             """, (self.network_id, self.epoch, body["height"], self.validator_id)).fetchall()
@@ -956,7 +956,7 @@ class PersistentGCFVoteSigner:
                       AND vote_type=? AND validator_id=?
                 """, (self.network_id, self.epoch, body["height"],
                       prior_state[0], self.validator_id)).fetchone()
-                if lock_row is None or lock_row[0] != prior_state[2]:
+                if lock_row is None or lock_row[0] != prior_state[3]:
                     raise RemoteProviderError("vote_signing_lock_state_corrupt")
                 if body["round"] < prior_state[1]:
                     raise RemoteProviderError("vote_signing_round_regression")
