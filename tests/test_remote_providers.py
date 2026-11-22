@@ -2,6 +2,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
