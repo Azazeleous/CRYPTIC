@@ -87,21 +87,31 @@ class PoolCoordinator:
                     job_json BLOB NOT NULL,
                     status TEXT NOT NULL CHECK(status IN ('active','revoked')),
                     created_at INTEGER NOT NULL,
-                    revoked_at INTEGER
+                    revoked_at INTEGER,
+                    assigned_worker_id TEXT NOT NULL
                 )
             """)
+        with _connect(self.database) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(pool_jobs)")}
+            if "assigned_worker_id" not in columns:
+                # Legacy jobs have no worker assignment and are intentionally
+                # inaccessible until reissued with an authenticated worker binding.
+                conn.execute("ALTER TABLE pool_jobs ADD COLUMN assigned_worker_id TEXT NOT NULL DEFAULT ''")
         try:
             os.chmod(self.database, 0o600)
         except OSError as exc:
             raise PoolServiceError("database_permissions_failed") from exc
 
     def issue_job(
-        self, *, height: int, epoch: int, lifetime_seconds: int,
+        self, *, worker_id: str, height: int, epoch: int, lifetime_seconds: int,
         parent_hash: str, payload_hash: str, primary_stride: int,
         compact_stride: int, nonce_start: int, max_attempts: int,
     ) -> dict:
         """Issue a short-lived job using only the target active at its boundary."""
         with self._lock:
+            if (not isinstance(worker_id, str) or not worker_id
+                    or len(worker_id.encode("utf-8")) > 256):
+                raise PoolServiceError("worker_id_invalid")
             now = self.clock()
             if isinstance(now, bool) or not isinstance(now, int) or now < 1:
                 raise PoolServiceError("clock_invalid")
@@ -137,8 +147,8 @@ class PoolCoordinator:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     conn.execute(
-                        "INSERT INTO pool_jobs(job_id,job_json,status,created_at) VALUES(?,?,'active',?)",
-                        (job_id, encoded, now),
+                        "INSERT INTO pool_jobs(job_id,job_json,status,created_at,assigned_worker_id) VALUES(?,?,'active',?,?)",
+                        (job_id, encoded, now, worker_id),
                     )
                     conn.execute("COMMIT")
                 except Exception:
@@ -147,21 +157,25 @@ class PoolCoordinator:
                     raise
             return job
 
-    def get_job(self, job_id: str) -> dict:
-        """Return an active, unexpired job to an already authenticated worker."""
+    def get_job(self, job_id: str, *, authenticated_worker_id: str) -> dict:
+        """Return an active job only to the worker to which it was assigned."""
         if not isinstance(job_id, str) or len(job_id) != 32:
             raise PoolServiceError("job_id_invalid")
         now = self.clock()
         if isinstance(now, bool) or not isinstance(now, int) or now < 0:
             raise PoolServiceError("clock_invalid")
+        if not isinstance(authenticated_worker_id, str) or not authenticated_worker_id:
+            raise PoolServiceError("worker_identity_invalid")
         with self._lock, _connect(self.database) as conn:
             row = conn.execute(
-                "SELECT job_json,status FROM pool_jobs WHERE job_id=?", (job_id,)
+                "SELECT job_json,status,assigned_worker_id FROM pool_jobs WHERE job_id=?", (job_id,)
             ).fetchone()
         if row is None:
             raise PoolServiceError("job_not_found")
         if row[1] != "active":
             raise PoolServiceError("job_revoked")
+        if row[2] != authenticated_worker_id:
+            raise PoolServiceError("job_not_assigned_to_worker")
         job = json.loads(bytes(row[0]).decode("ascii"))
         if now < job["issued_at"] or now > job["expires_at"]:
             raise PoolServiceError("job_expired_or_not_yet_valid")
@@ -201,13 +215,15 @@ class PoolCoordinator:
                 raise PoolServiceError("submission_job_invalid")
             with _connect(self.database) as conn:
                 row = conn.execute(
-                    "SELECT job_json,status FROM pool_jobs WHERE job_id=?",
+                    "SELECT job_json,status,assigned_worker_id FROM pool_jobs WHERE job_id=?",
                     (job["job_id"],),
                 ).fetchone()
             if row is None:
                 raise PoolServiceError("job_unknown")
             if row[1] != "active":
                 raise PoolServiceError("job_revoked")
+            if row[2] != authenticated_worker_id:
+                raise PoolServiceError("job_not_assigned_to_worker")
             if bytes(row[0]) != _canonical(job):
                 raise PoolServiceError("job_not_issued_by_this_pool")
             now = self.clock()
