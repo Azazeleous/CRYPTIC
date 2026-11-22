@@ -960,6 +960,8 @@ class PersistentGCFVoteSigner:
                     raise RemoteProviderError("vote_signing_lock_state_corrupt")
                 if body["round"] < prior_state[1]:
                     raise RemoteProviderError("vote_signing_round_regression")
+                if body["round"] == prior_state[1] and prior_state[3] != digest:
+                    raise RemoteProviderError("vote_signing_same_round_equivocation")
                 if authorization[0] != prior_state[2]:
                     highest_round, highest_value = authorization[2], authorization[3]
                     if (highest_round is None or highest_round <= prior_state[1]
