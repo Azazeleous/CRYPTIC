@@ -116,7 +116,7 @@ class GCFPeerNode:
 
     def make_envelope(self, message_type: str, payload: Mapping[str, Any],
                       *, message_id: str, issued_at: int | None = None) -> dict:
-        if message_type not in {"PROPOSAL", "VOTE"}:
+        if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"}:
             raise PeerTransportError("MESSAGE_TYPE_UNSUPPORTED")
         body = {
             "schema": P2P_SCHEMA,
@@ -156,7 +156,7 @@ class GCFPeerNode:
         payload = envelope["payload"]
         if not isinstance(payload, Mapping):
             raise PeerTransportError("MESSAGE_PAYLOAD_INVALID")
-        if envelope["message_type"] not in {"PROPOSAL", "VOTE"}:
+        if envelope["message_type"] not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"}:
             raise PeerTransportError("MESSAGE_TYPE_UNSUPPORTED")
         body = {k: v for k, v in envelope.items() if k != "signature"}
         public_key = self.validator_set.validators[sender].public_key_hex
@@ -185,8 +185,10 @@ class GCFPeerNode:
         try:
             if envelope["message_type"] == "PROPOSAL":
                 result = self.engine.submit_proposal(payload)
-            else:
+            elif envelope["message_type"] == "VOTE":
                 result = self.engine.submit_vote(payload)
+            else:
+                result = self.engine.submit_round_change(payload)
         except Exception:
             # A transient dispatch failure must not permanently consume the
             # sender's message ID. Successful GCF admission remains replay-safe.
@@ -359,7 +361,7 @@ class GCFPeerMesh:
 
     async def broadcast(self, message_type: str, payload: Mapping[str, Any]) -> dict:
         """Fan out one signed proposal or validator vote to configured peers."""
-        if message_type not in {"PROPOSAL", "VOTE"} or not isinstance(payload, Mapping):
+        if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"} or not isinstance(payload, Mapping):
             raise PeerTransportError("BROADCAST_MESSAGE_INVALID")
         message_id = secrets.token_hex(16)
         semaphore = asyncio.Semaphore(self.max_parallel)
