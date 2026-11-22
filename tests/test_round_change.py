@@ -454,6 +454,34 @@ class RoundChangeProofTests(unittest.TestCase):
             )
             self.assertTrue(verified["valid"], verified)
 
+            restarted_engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                hccgn_verifier=lambda *_: True,
+                god_authorizer=lambda *_: True,
+                justice_verifier=lambda *_: True,
+                clock=lambda: self.now + 6,
+            )
+            round_three_certificate = self.certificate([
+                self.message("v2", source=2, target=3, nonce="d" * 32),
+                self.message("v3", source=2, target=3, nonce="e" * 32),
+                self.message("v4", source=2, target=3, nonce="f" * 32),
+            ], target=3)
+            proposal_b_round_three = self.proposal(
+                "b", round=3, certificate=round_three_certificate, nonce="d" * 32,
+            )
+            restarted_engine.submit_proposal(proposal_b_round_three)
+            resumed_vote = make_vote(
+                validator_id="v1", validator_private_key_hex=self.private["v1"],
+                proposal=proposal_b_round_three, vote_type="PREVOTE",
+                issued_at=self.now + 6,
+            )
+            self.assertTrue(restarted_engine.submit_vote(resumed_vote)["accepted"])
+            with restarted_engine._db() as db:
+                resumed_lock = db.execute(
+                    "SELECT round FROM vote_locks WHERE validator_id='v1' AND vote_type='PREVOTE'"
+                ).fetchone()
+            self.assertEqual(resumed_lock["round"], 3)
+
     def test_engine_rejects_conflicting_round_transition_without_higher_polc(self):
         with tempfile.TemporaryDirectory() as directory:
             engine = GCFEngine(
