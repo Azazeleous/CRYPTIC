@@ -241,10 +241,12 @@ class RoundChangeProofTests(unittest.TestCase):
                 db_path, self.vset,
                 clock=lambda: self.now,
             )
-            for validator in ("v1", "v2"):
+            for expected_weight, validator in enumerate(("v1", "v2"), start=1):
                 result = engine.submit_round_change(self.message(validator))
                 self.assertTrue(result["accepted"])
                 self.assertFalse(result["quorum_reached"])
+                self.assertEqual(result["voting_weight"], expected_weight)
+                self.assertEqual(result["message_count"], expected_weight)
             final = engine.submit_round_change(self.message("v3"))
             self.assertTrue(final["quorum_reached"])
             self.assertEqual(final["voting_weight"], 3)
