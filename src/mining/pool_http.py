@@ -6,12 +6,58 @@ worker_id field or an identity header supplied by the request.
 """
 from __future__ import annotations
 
+import hashlib
 import json
-from typing import Any, Callable
+import re
+import ssl
+from typing import Any, Callable, Mapping
 
 from src.mining.pool_service import PoolCoordinator, PoolServiceError
 
 MAX_BODY_BYTES = 65_536
+FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class MTLSWorkerAuthenticator:
+    """Map a gateway-verified client certificate fingerprint to a worker ID.
+
+    The TLS gateway must validate client certificates and overwrite/strip all
+    client-supplied SSL_* identity variables before invoking this WSGI app.
+    """
+
+    def __init__(self, certificate_fingerprints: Mapping[str, str]):
+        if not isinstance(certificate_fingerprints, Mapping) or not certificate_fingerprints:
+            raise ValueError("worker_certificate_allowlist_required")
+        normalized = {}
+        for fingerprint, worker_id in certificate_fingerprints.items():
+            if not isinstance(fingerprint, str):
+                raise ValueError("worker_certificate_fingerprint_invalid")
+            key = fingerprint.lower().replace(":", "")
+            if not FINGERPRINT_RE.fullmatch(key):
+                raise ValueError("worker_certificate_fingerprint_invalid")
+            if (not isinstance(worker_id, str) or not worker_id
+                    or len(worker_id.encode("utf-8")) > 256):
+                raise ValueError("worker_id_invalid")
+            if key in normalized:
+                raise ValueError("worker_certificate_fingerprint_duplicate")
+            normalized[key] = worker_id
+        self.certificate_fingerprints = normalized
+
+    def __call__(self, environ: dict) -> str:
+        if environ.get("SSL_CLIENT_VERIFY") != "SUCCESS":
+            raise ValueError("worker_client_certificate_not_verified")
+        pem = environ.get("SSL_CLIENT_CERT")
+        if not isinstance(pem, str) or not pem.startswith("-----BEGIN CERTIFICATE-----"):
+            raise ValueError("worker_client_certificate_missing")
+        try:
+            der = bytes.fromhex(ssl.PEM_cert_to_DER_cert(pem).hex())
+        except (ValueError, ssl.SSLError) as exc:
+            raise ValueError("worker_client_certificate_invalid") from exc
+        fingerprint = hashlib.sha256(der).hexdigest()
+        worker_id = self.certificate_fingerprints.get(fingerprint)
+        if worker_id is None:
+            raise ValueError("worker_client_certificate_unregistered")
+        return worker_id
 
 
 class PoolWSGI:
