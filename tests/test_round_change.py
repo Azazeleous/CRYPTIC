@@ -8,7 +8,7 @@ from src.consensus.gcf import (
 )
 from src.consensus.round_change import (
     POLC_SCHEMA, make_round_change_certificate, make_round_change_message,
-    polc_digest, verify_polc, verify_round_change_certificate,
+    polc_digest, value_digest, verify_polc, verify_round_change_certificate,
     verify_round_change_message,
 )
 
@@ -38,15 +38,17 @@ class RoundChangeProofTests(unittest.TestCase):
             target_round=target,
         )
 
-    def proposal(self, payload, *, issued_at=None, expires_at=None):
+    def proposal(self, payload, *, round=0, certificate=None, nonce=None,
+                 issued_at=None, expires_at=None):
         issued_at = self.now if issued_at is None else issued_at
         expires_at = self.now + 600 if expires_at is None else expires_at
         return make_proposal(
-            network_id="test-net", epoch=7, height=12, round=0,
+            network_id="test-net", epoch=7, height=12, round=round,
             parent_hash="0" * 64, payload_hash=payload * 64,
             proof_hash="2" * 64, justice_commitment={"justice_profile": "GAIA-JUSTICE/1"},
             proposer_id="v1", proposer_private_key_hex=self.private["v1"],
-            nonce=payload * 16, issued_at=issued_at, expires_at=expires_at,
+            nonce=nonce or payload * 16, issued_at=issued_at, expires_at=expires_at,
+            round_change_certificate=certificate,
         )
 
     def polc(self, proposal, signers=("v1", "v2", "v3"), *, vote_issued_at=None):
@@ -331,6 +333,127 @@ class RoundChangeProofTests(unittest.TestCase):
             self.assertIsNone(engine.get_round_change_certificate(
                 height=12, target_round=1,
             ))
+
+
+
+    def test_engine_requires_certificate_and_transitions_lock_only_with_higher_polc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                hccgn_verifier=lambda *_: True,
+                god_authorizer=lambda *_: True,
+                justice_verifier=lambda *_: True,
+                clock=lambda: self.now,
+            )
+            proposal_a = self.proposal("a")
+            digest_a = sha256_hex(__import__(
+                "src.consensus.gcf", fromlist=["canonical_bytes"]
+            ).canonical_bytes(proposal_a))
+            engine.submit_proposal(proposal_a)
+            engine.submit_vote(make_vote(
+                validator_id="v1", validator_private_key_hex=self.private["v1"],
+                proposal=proposal_a, vote_type="PREVOTE", issued_at=self.now + 1,
+            ))
+
+            with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_CERTIFICATE_REQUIRED"):
+                engine.submit_proposal(self.proposal("b", round=1, nonce="b" * 32))
+
+            round_one_certificate = self.certificate([
+                self.message("v2", nonce="2" * 32),
+                self.message("v3", nonce="3" * 32),
+                self.message("v4", nonce="4" * 32),
+            ])
+            proposal_b_round_one = self.proposal(
+                "b", round=1, certificate=round_one_certificate, nonce="b" * 32,
+            )
+            engine.submit_proposal(proposal_b_round_one)
+            round_one_votes = []
+            for validator in ("v2", "v3", "v4"):
+                vote = make_vote(
+                    validator_id=validator,
+                    validator_private_key_hex=self.private[validator],
+                    proposal=proposal_b_round_one, vote_type="PREVOTE",
+                    issued_at=self.now + 2,
+                )
+                engine.submit_vote(vote)
+                round_one_votes.append(vote)
+            polc = {
+                "schema": POLC_SCHEMA,
+                "proposal": proposal_b_round_one,
+                "candidate_digest": sha256_hex(__import__(
+                    "src.consensus.gcf", fromlist=["canonical_bytes"]
+                ).canonical_bytes(proposal_b_round_one)),
+                "validator_set_hash": self.vset.digest,
+                "prevotes": round_one_votes,
+            }
+            polc["digest"] = polc_digest(polc)
+            self.assertTrue(verify_polc(
+                polc, validator_set=self.vset, clock=lambda: self.now + 2,
+            )["valid"])
+
+            round_two_certificate = self.certificate([
+                self.message("v2", source=1, target=2, polc=polc, nonce="a" * 32),
+                self.message("v3", source=1, target=2, polc=polc, nonce="b" * 32),
+                self.message("v4", source=1, target=2, polc=polc, nonce="c" * 32),
+            ], target=2)
+            proposal_b_round_two = self.proposal(
+                "b", round=2, certificate=round_two_certificate, nonce="c" * 32,
+            )
+            self.assertEqual(value_digest(proposal_b_round_one), value_digest(proposal_b_round_two))
+            engine.submit_proposal(proposal_b_round_two)
+            transition_vote = make_vote(
+                validator_id="v1", validator_private_key_hex=self.private["v1"],
+                proposal=proposal_b_round_two, vote_type="PREVOTE",
+                issued_at=self.now + 3,
+            )
+            result = engine.submit_vote(transition_vote)
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["voting_weight"], 1)
+            with engine._db() as db:
+                lock = db.execute(
+                    "SELECT round,candidate_digest FROM vote_locks WHERE validator_id='v1' AND vote_type='PREVOTE'"
+                ).fetchone()
+                history = db.execute(
+                    "SELECT COUNT(*) FROM votes WHERE validator_id='v1' AND vote_type='PREVOTE'"
+                ).fetchone()[0]
+            self.assertEqual(lock["round"], 2)
+            self.assertEqual(lock["candidate_digest"], sha256_hex(__import__(
+                "src.consensus.gcf", fromlist=["canonical_bytes"]
+            ).canonical_bytes(proposal_b_round_two)))
+            self.assertEqual(history, 2)
+            self.assertNotEqual(lock["candidate_digest"], digest_a)
+
+    def test_engine_rejects_conflicting_round_transition_without_higher_polc(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                hccgn_verifier=lambda *_: True,
+                god_authorizer=lambda *_: True,
+                justice_verifier=lambda *_: True,
+                clock=lambda: self.now,
+            )
+            proposal_a = self.proposal("a")
+            engine.submit_proposal(proposal_a)
+            engine.submit_vote(make_vote(
+                validator_id="v1", validator_private_key_hex=self.private["v1"],
+                proposal=proposal_a, vote_type="PREVOTE", issued_at=self.now + 1,
+            ))
+            round_one_certificate = self.certificate([
+                self.message("v2", nonce="2" * 32),
+                self.message("v3", nonce="3" * 32),
+                self.message("v4", nonce="4" * 32),
+            ])
+            proposal_b = self.proposal(
+                "b", round=1, certificate=round_one_certificate, nonce="d" * 32,
+            )
+            engine.submit_proposal(proposal_b)
+            with self.assertRaisesRegex(
+                GCFError, "ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED",
+            ):
+                engine.submit_vote(make_vote(
+                    validator_id="v1", validator_private_key_hex=self.private["v1"],
+                    proposal=proposal_b, vote_type="PREVOTE", issued_at=self.now + 2,
+                ))
 
 
 if __name__ == "__main__":
