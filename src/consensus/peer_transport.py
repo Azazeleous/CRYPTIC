@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import secrets
 import sqlite3
 import ssl
 import time
@@ -272,3 +273,92 @@ class GCFPeerNode:
                 await writer.wait_closed()
             except Exception:
                 pass
+
+
+
+class GCFPeerMesh:
+    """Bounded direct-peer fan-out over preconfigured mutually authenticated links.
+
+    This is not discovery or epidemic gossip. Every peer endpoint and server
+    certificate fingerprint must be provisioned by the operator.
+    """
+
+    def __init__(self, *, node: GCFPeerNode, tls_context: ssl.SSLContext,
+                 peers: Mapping[str, Mapping[str, Any]],
+                 timeout_seconds: float = 8.0, max_parallel: int = 8):
+        if not isinstance(node, GCFPeerNode):
+            raise PeerTransportError("PEER_NODE_REQUIRED")
+        if tls_context.verify_mode != ssl.CERT_REQUIRED or not tls_context.check_hostname:
+            raise PeerTransportError("VERIFIED_MUTUAL_TLS_CLIENT_CONTEXT_REQUIRED")
+        if not isinstance(peers, Mapping) or not peers:
+            raise PeerTransportError("PEER_ENDPOINTS_REQUIRED")
+        if not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 60:
+            raise PeerTransportError("PEER_TIMEOUT_INVALID")
+        if isinstance(max_parallel, bool) or not isinstance(max_parallel, int) or not 1 <= max_parallel <= 32:
+            raise PeerTransportError("PEER_PARALLELISM_INVALID")
+        normalized = {}
+        for peer_id, config in peers.items():
+            if peer_id == node.node_id or peer_id not in node.validator_set.validators:
+                raise PeerTransportError("PEER_ID_INVALID")
+            if not isinstance(config, Mapping) or set(config) != {"host", "port", "server_fingerprint"}:
+                raise PeerTransportError("PEER_ENDPOINT_CONFIG_INVALID")
+            host, port, fingerprint = config["host"], config["port"], config["server_fingerprint"]
+            if not isinstance(host, str) or not host or len(host) > 253:
+                raise PeerTransportError("PEER_HOST_INVALID")
+            if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+                raise PeerTransportError("PEER_PORT_INVALID")
+            if not isinstance(fingerprint, str):
+                raise PeerTransportError("PEER_SERVER_FINGERPRINT_INVALID")
+            fingerprint = fingerprint.lower().replace(":", "")
+            if len(fingerprint) != 64:
+                raise PeerTransportError("PEER_SERVER_FINGERPRINT_INVALID")
+            try:
+                bytes.fromhex(fingerprint)
+            except ValueError as exc:
+                raise PeerTransportError("PEER_SERVER_FINGERPRINT_INVALID") from exc
+            normalized[peer_id] = {
+                "host": host, "port": port, "server_fingerprint": fingerprint,
+            }
+        self.node = node
+        self.tls_context = tls_context
+        self.peers = normalized
+        self.timeout_seconds = float(timeout_seconds)
+        self.max_parallel = max_parallel
+
+    async def broadcast(self, message_type: str, payload: Mapping[str, Any]) -> dict:
+        """Fan out one signed proposal or validator vote to configured peers."""
+        if message_type not in {"PROPOSAL", "VOTE"} or not isinstance(payload, Mapping):
+            raise PeerTransportError("BROADCAST_MESSAGE_INVALID")
+        message_id = secrets.token_hex(16)
+        semaphore = asyncio.Semaphore(self.max_parallel)
+
+        async def deliver(peer_id, config):
+            async with semaphore:
+                try:
+                    response = await asyncio.wait_for(
+                        self.node.send(
+                            config["host"], config["port"], self.tls_context,
+                            config["server_fingerprint"], message_type, payload,
+                            message_id,
+                        ),
+                        timeout=self.timeout_seconds,
+                    )
+                    if not isinstance(response, Mapping) or response.get("status") != "accepted":
+                        return {"accepted": False, "response": response}
+                    return {"accepted": True, "response": dict(response)}
+                except Exception as exc:
+                    return {"accepted": False, "error": type(exc).__name__}
+
+        pairs = await asyncio.gather(*(
+            deliver(peer_id, config) for peer_id, config in self.peers.items()
+        ))
+        results = {peer_id: result for peer_id, result in zip(self.peers, pairs)}
+        accepted = [peer_id for peer_id, result in results.items() if result["accepted"]]
+        failed = [peer_id for peer_id, result in results.items() if not result["accepted"]]
+        return {
+            "message_id": message_id,
+            "message_type": message_type,
+            "accepted_peers": accepted,
+            "failed_peers": failed,
+            "results": results,
+        }
