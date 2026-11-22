@@ -537,6 +537,7 @@ class CrossRoundVoteLockTests(unittest.TestCase):
                 "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
                 ("gaia-cross-round", 7, 9, 0, "PREVOTE", "v0", self.digest_round_0),
             )
+        db.close()
         migrated = GCFEngine(
             legacy, self.vset,
             hccgn_verifier=lambda *_: True, god_authorizer=lambda *_: True,
@@ -571,6 +572,7 @@ class CrossRoundVoteLockTests(unittest.TestCase):
                     ("gaia-cross-round", 7, 9, 1, "PREVOTE", "v0", self.digest_round_1),
                 ],
             )
+        db.close()
         with self.assertRaisesRegex(GCFError, "PERSISTED_CROSS_ROUND_EQUIVOCATION"):
             GCFEngine(
                 legacy, self.vset,
