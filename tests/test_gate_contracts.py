@@ -9,7 +9,8 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from src.consensus.gcf import GCFEngine, GateResult, _require_int
+from src.consensus.gcf import GCFEngine, GateResult, ValidatorSet, _require_int
+from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.consensus.independent_verifier import _integer, IndependentVerificationError
 from src.consensus.runtime import (
     RuntimeConfigurationError, build_consensus_runtime,
@@ -36,6 +37,32 @@ class GateContractTests(unittest.TestCase):
         self.assertTrue(engine._gate(lambda: GateResult(True, "authorized")).allowed)
         self.assertFalse(engine._gate(lambda: GateResult(1, "bad")).allowed)
         self.assertFalse(engine._gate(lambda: (_ for _ in ()).throw(RuntimeError())).allowed)
+
+
+    def test_validator_set_policy_admits_only_active_validators_and_leaves_finality_to_gcf(self):
+        validator_set = ValidatorSet("gaia-testnet", 7, {
+            "validator-a": {"public_key_hex": "11" * 32, "weight": 2},
+            "validator-b": {"public_key_hex": "22" * 32, "weight": 1},
+        })
+        authorize = ValidatorSetProposalAuthorizer(validator_set)
+        proposal = {
+            "network_id": "gaia-testnet", "epoch": 7,
+            "proposer_id": "validator-a", "proposer_public_key": "11" * 32,
+        }
+        self.assertTrue(authorize("gcf.propose", proposal).allowed)
+        self.assertEqual(authorize("gcf.propose", proposal).reason,
+                         "ACTIVE_VALIDATOR_PROPOSER")
+        self.assertFalse(authorize("other.capability", proposal).allowed)
+        self.assertFalse(authorize("gcf.propose", {
+            **proposal, "proposer_id": "unlisted",
+        }).allowed)
+        self.assertFalse(authorize("gcf.propose", {
+            **proposal, "proposer_public_key": "33" * 32,
+        }).allowed)
+        self.assertFalse(authorize("gcf.propose", {
+            **proposal, "epoch": 8,
+        }).allowed)
+        self.assertEqual(validator_set.quorum_weight(), 3)
 
     def test_justice_verifiers_must_return_exact_true(self):
         commitment = {
