@@ -238,6 +238,7 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
         weight = 0
         polcs: dict[int, tuple[str, dict]] = {}
         normalized_messages = []
+        previous_validator_id = None
         for message in messages:
             checked = verify_round_change_message(
                 message, validator_set=validator_set, height=height,
@@ -249,6 +250,9 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
             validator_id = checked["validator_id"]
             if validator_id in ids:
                 return _fail("round_change_duplicate_validator")
+            if previous_validator_id is not None and validator_id <= previous_validator_id:
+                return _fail("round_change_messages_not_canonical")
+            previous_validator_id = validator_id
             ids.add(validator_id)
             nonce_key = (validator_id, message["nonce"])
             if nonce_key in nonce_ids:
