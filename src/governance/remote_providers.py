@@ -918,6 +918,20 @@ class PersistentGCFVoteSigner:
             """, (self.network_id, self.epoch, body["height"], body["round"], digest)).fetchone()
             if authorization is None:
                 raise RemoteProviderError("vote_signing_proposal_authorization_required")
+            prior_states = db.execute("""
+                SELECT vote_type,round,value_digest
+                FROM gcf_vote_signing_round_state
+                WHERE network_id=? AND epoch=? AND height=? AND validator_id=?
+            """, (self.network_id, self.epoch, body["height"], self.validator_id)).fetchall()
+            for prior_state in prior_states:
+                if body["round"] < prior_state[1]:
+                    raise RemoteProviderError("vote_signing_round_regression")
+                if authorization[0] != prior_state[2]:
+                    highest_round, highest_value = authorization[2], authorization[3]
+                    if (highest_round is None or highest_round <= prior_state[1]
+                            or highest_round >= body["round"]
+                            or highest_value != authorization[0]):
+                        raise RemoteProviderError("vote_signing_round_change_not_authorized")
             lock = db.execute("""
                 SELECT validator_set_hash,candidate_digest,message_digest
                 FROM gcf_vote_signing_locks
