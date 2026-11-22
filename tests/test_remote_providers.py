@@ -521,7 +521,11 @@ class RemoteProviderTests(unittest.TestCase):
 
         def message(validator_id, private_key, source, target, polc, nonce):
             return make_round_change_message(
-                validator_id=validator_id, private_key_hex=private_key.hex(),
+                validator_id=validator_id,
+                private_key_hex=private_key.private_bytes(
+                    serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                    serialization.NoEncryption(),
+                ).hex(),
                 network_id="test-net", epoch=1, height=22,
                 source_round=source, target_round=target,
                 issued_at=self.now + 2, expires_at=self.now + 300,
