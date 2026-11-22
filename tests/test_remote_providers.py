@@ -1,7 +1,9 @@
 import base64
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from urllib.parse import unquote
@@ -473,6 +475,131 @@ class RemoteProviderTests(unittest.TestCase):
                     proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
                 )
             self.assertEqual(len(signer_calls), signed_count)
+
+    def test_pre_sign_lock_is_atomic_across_signer_instances(self):
+        calls = []
+        calls_lock = threading.Lock()
+
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            message = base64.b64decode(request["message_b64"], validate=True)
+            with calls_lock:
+                calls.append(message)
+            return 200, {}, _canonical({
+                "schema": "CRYPTIC-ED25519-SIGN/1",
+                "key_id": "validator-key-1",
+                "request_id": request["request_id"],
+                "signature": base64.b64encode(self.private.sign(message)).decode("ascii"),
+            })
+
+        signer = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key", transport=transport,
+        )
+        from src.consensus.gcf import ValidatorSet
+        validator_set = ValidatorSet("test-net", 1, {
+            "validator-1": {"public_key_hex": signer.public_key_hex, "weight": 1},
+        })
+        fields = {
+            "network_id": "test-net", "epoch": 1, "height": 11, "round": 0,
+            "parent_hash": "0" * 64, "payload_hash": "1" * 64,
+            "proof_hash": "2" * 64,
+            "justice_commitment": {"justice_profile": "GAIA-JUSTICE/1"},
+            "proposer_id": "validator-1", "issued_at": self.now,
+            "expires_at": self.now + 60,
+        }
+        proposal_0 = make_proposal_with_signer(signer=signer, **fields, nonce="c" * 32)
+        proposal_1 = make_proposal_with_signer(
+            signer=signer, **{**fields, "round": 1}, nonce="d" * 32,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "vote-locks.sqlite3"
+            guards = [
+                PersistentGCFVoteSigner(
+                    signer, validator_id="validator-1",
+                    validator_set=validator_set, db_path=db_path,
+                )
+                for _ in range(2)
+            ]
+
+            def attempt(args):
+                guard, proposal = args
+                try:
+                    make_vote_with_signer(
+                        signer=guard, validator_id="validator-1",
+                        proposal=proposal, vote_type="PREVOTE", issued_at=self.now,
+                    )
+                    return "signed"
+                except RemoteProviderError as exc:
+                    return str(exc)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(attempt, [
+                    (guards[0], proposal_0), (guards[1], proposal_1),
+                ]))
+        self.assertCountEqual(results, ["signed", "vote_signing_lock_conflict"])
+        self.assertEqual(len(calls), 1)
+
+    def test_ambiguous_hsm_failure_keeps_lock_and_allows_exact_retry(self):
+        attempts = []
+
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            message = base64.b64decode(request["message_b64"], validate=True)
+            attempts.append(message)
+            if len(attempts) == 1:
+                return 503, {}, b""
+            return 200, {}, _canonical({
+                "schema": "CRYPTIC-ED25519-SIGN/1",
+                "key_id": "validator-key-1",
+                "request_id": request["request_id"],
+                "signature": base64.b64encode(self.private.sign(message)).decode("ascii"),
+            })
+
+        signer = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key", transport=transport,
+        )
+        from src.consensus.gcf import ValidatorSet
+        validator_set = ValidatorSet("test-net", 1, {
+            "validator-1": {"public_key_hex": signer.public_key_hex, "weight": 1},
+        })
+        fields = {
+            "network_id": "test-net", "epoch": 1, "height": 12, "round": 0,
+            "parent_hash": "0" * 64, "payload_hash": "1" * 64,
+            "proof_hash": "2" * 64,
+            "justice_commitment": {"justice_profile": "GAIA-JUSTICE/1"},
+            "proposer_id": "validator-1", "issued_at": self.now,
+            "expires_at": self.now + 60,
+        }
+        proposal_0 = make_proposal_with_signer(signer=signer, **fields, nonce="e" * 32)
+        proposal_1 = make_proposal_with_signer(
+            signer=signer, **{**fields, "round": 1}, nonce="f" * 32,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            guard = PersistentGCFVoteSigner(
+                signer, validator_id="validator-1", validator_set=validator_set,
+                db_path=Path(directory) / "vote-locks.sqlite3",
+            )
+            with self.assertRaisesRegex(RemoteProviderError, "hsm_http_status_503"):
+                make_vote_with_signer(
+                    signer=guard, validator_id="validator-1",
+                    proposal=proposal_0, vote_type="PREVOTE", issued_at=self.now,
+                )
+            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
+                make_vote_with_signer(
+                    signer=guard, validator_id="validator-1",
+                    proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
+                )
+            retry = make_vote_with_signer(
+                signer=guard, validator_id="validator-1",
+                proposal=proposal_0, vote_type="PREVOTE", issued_at=self.now,
+            )
+            self.assertEqual(retry["vote_type"], "PREVOTE")
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0], attempts[1])
 
     def test_vote_builder_rejects_unlocked_remote_signer(self):
         signer = HTTPSHSMEd25519Signer(
