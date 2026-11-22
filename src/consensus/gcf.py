@@ -331,7 +331,8 @@ class GCFEngine:
             return GateResult(False, "DENIED")
         return GateResult(False, "GATE_RESPONSE_INVALID")
 
-    def _validate_proposal(self, proposal: Mapping[str, Any]) -> tuple[str, dict]:
+    def _validate_proposal(self, proposal: Mapping[str, Any], *,
+                           _proof_depth: int = 0) -> tuple[str, dict]:
         required = {
             "schema", "network_id", "epoch", "height", "round", "parent_hash",
             "payload_hash", "proof_hash", "justice_commitment", "issued_at",
@@ -389,6 +390,7 @@ class GCFEngine:
             checked = verify_round_change_certificate(
                 certificate, validator_set=self.validator_set,
                 height=proposal["height"], clock=self.clock,
+                proof_depth=_proof_depth,
             )
             if not checked["valid"]:
                 raise GCFError("ROUND_CHANGE_CERTIFICATE_INVALID:" + checked["reason"])
