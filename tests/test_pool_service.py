@@ -81,7 +81,7 @@ class PoolCoordinatorTests(unittest.TestCase):
             expected_issuer_id="issuer", expected_pool_id="gaia-internal",
             expected_network_id="hccgn-test", worker_id="worker-a", now=self.now,
         )
-        with self.assertRaisesRegex(PoolServiceError, "worker_identity"):
+        with self.assertRaisesRegex(PoolServiceError, "not_assigned_to_worker"):
             self.pool.submit_share(submission, authenticated_worker_id="worker-b")
 
     def test_job_is_only_retrievable_by_assigned_worker(self):
