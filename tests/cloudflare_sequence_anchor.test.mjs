@@ -7,6 +7,8 @@ import worker from "../cloudflare/sequence-anchor/src/index.js";
 
 const ZERO = "0".repeat(64);
 const DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
+const GOD_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-ANCHOR-AUTH/1\0");
+const GOD_SCHEMA = "CRYPTIC-GOD-ANCHOR-AUTH/1";
 const TOKEN = "anchor-test-token-".padEnd(40, "x");
 
 function canonical(value) {
@@ -59,19 +61,43 @@ async function setup() {
   const pair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const pkcs8 = await crypto.subtle.exportKey("pkcs8", pair.privateKey);
   const publicRaw = await crypto.subtle.exportKey("raw", pair.publicKey);
+  const godPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const godPublicRaw = new Uint8Array(await crypto.subtle.exportKey("raw", godPair.publicKey));
+  const godFingerprint = new Uint8Array(await crypto.subtle.digest("SHA-256", godPublicRaw));
+  const godFingerprintHex = Array.from(godFingerprint, b => b.toString(16).padStart(2, "0")).join("");
+  const godPublicHex = Array.from(godPublicRaw, b => b.toString(16).padStart(2, "0")).join("");
   const env = {
     ANCHOR_DB: new MemoryD1(),
     ANCHOR_SIGNER_ID: "anchor-test-root",
     ANCHOR_SIGNING_KEY_PKCS8_B64: b64(pkcs8),
     ANCHOR_WRITE_TOKEN: TOKEN,
+    GOD_ANCHOR_AUTH_SIGNER_ID: "god-policy-test-root",
+    GOD_ANCHOR_AUTH_PUBLIC_KEY_HEX: godPublicHex,
+    GOD_ANCHOR_AUTH_KEY_FINGERPRINT: godFingerprintHex,
+    __TEST_GOD_PRIVATE_KEY: godPair.privateKey,
   };
   return { env, publicKey: await crypto.subtle.importKey(
     "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
   ) };
 }
 async function request(env, method, path, { headers = {}, body } = {}) {
+  let wireBody = body;
+  if (method === "PUT" && body && !Object.prototype.hasOwnProperty.call(body, "authorization")) {
+    const unsigned = {
+      schema: GOD_SCHEMA, signer_id: env.GOD_ANCHOR_AUTH_SIGNER_ID,
+      network_id: body.network_id, sequence: body.sequence, policy_hash: body.policy_hash,
+      expected_sequence: body.expected_sequence,
+      expected_policy_hash: body.expected_policy_hash, issued_at: body.issued_at,
+      nonce: body.nonce,
+    };
+    const payload = new TextEncoder().encode(canonical(unsigned));
+    const message = new Uint8Array(GOD_DOMAIN.length + payload.length);
+    message.set(GOD_DOMAIN); message.set(payload, GOD_DOMAIN.length);
+    const signature = await crypto.subtle.sign("Ed25519", env.__TEST_GOD_PRIVATE_KEY, message);
+    wireBody = { ...body, authorization: { ...unsigned, signature: b64(signature) } };
+  }
   return worker.fetch(new Request("https://anchor.test" + path, {
-    method, headers, body: body === undefined ? undefined : canonical(body),
+    method, headers, body: wireBody === undefined ? undefined : canonical(wireBody),
   }), env);
 }
 function writeBody(network, sequence, hash, expectedSequence, expectedHash) {
@@ -99,6 +125,29 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
     headers: { "if-none-match": "*", "content-type": "application/json" }, body,
   });
   assert.equal(response.status, 401);
+  assert.equal(env.ANCHOR_DB.rows.size, 0);
+});
+
+test("valid bearer without GOD authorization is rejected", async () => {
+  const { env } = await setup();
+  const body = { ...writeBody("test-net", 1, "1".repeat(64), 0, ZERO), authorization: null };
+  const response = await request(env, "PUT", "/v1/anchors/test-net", {
+    headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
+      "content-type": "application/json" }, body,
+  });
+  assert.equal(response.status, 403);
+  assert.equal(env.ANCHOR_DB.rows.size, 0);
+});
+
+test("GOD authorization trust-root configuration is mandatory", async () => {
+  const { env } = await setup();
+  delete env.GOD_ANCHOR_AUTH_KEY_FINGERPRINT;
+  const body = writeBody("test-net", 1, "1".repeat(64), 0, ZERO);
+  const response = await request(env, "PUT", "/v1/anchors/test-net", {
+    headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
+      "content-type": "application/json" }, body,
+  });
+  assert.equal(response.status, 503);
   assert.equal(env.ANCHOR_DB.rows.size, 0);
 });
 
