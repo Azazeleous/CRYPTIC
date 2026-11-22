@@ -143,6 +143,32 @@ class RoundChangeProofTests(unittest.TestCase):
         self.assertFalse(result["valid"])
         self.assertIn("VOTE_TIME_INVALID", result["reason"])
 
+    def test_polc_vote_list_is_bounded_by_validator_set(self):
+        polc = self.polc(self.proposal("h"))
+        polc["prevotes"] = polc["prevotes"] + [dict(polc["prevotes"][0])]
+        polc["digest"] = polc_digest(polc)
+        result = verify_polc(polc, validator_set=self.vset, clock=lambda: self.now)
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "polc_votes_invalid")
+
+    def test_round_change_certificate_message_list_is_bounded(self):
+        message = self.message("v1")
+        cert = self.certificate([message] * 5)
+        result = verify_round_change_certificate(
+            cert, validator_set=self.vset, height=12, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_certificate_messages_invalid")
+
+    def test_round_change_verifier_rejects_unbounded_age_configuration(self):
+        message = self.message("v1")
+        result = verify_round_change_message(
+            message, validator_set=self.vset, height=12, target_round=1,
+            clock=lambda: self.now, max_age_seconds=3601,
+        )
+        self.assertFalse(result["valid"])
+        self.assertEqual(result["reason"], "round_change_verifier_limits_invalid")
+
     def test_invalid_polc_signature_fails_closed(self):
         polc = self.polc(self.proposal("b"))
         polc["prevotes"][0]["signature"] = "AA=="
