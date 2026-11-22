@@ -194,3 +194,12 @@ Verification on code commit 8db70bca3a68c8c3dc9678a041c6fbc876d52e74:
 - Production-gate contracts run 45038382603 passed on Ubuntu and Windows.
 - Mining-engine tests run 45038382641 passed.
 - GAIA local trophy run 45038382668 passed.
+
+
+## Real-socket GCF peer transport contract
+
+`tests/test_peer_mesh.py` now includes a two-node loopback integration test using generated Ed25519 X.509 certificates, a test CA, mutual TLS client/server contexts, client-certificate fingerprint allowlisting, hostname verification, and the transport's length-prefixed signed envelope. It exercises a successful proposal dispatch and a repeated message-ID rejection by the receiver's persistent replay database. The certificates are test-only ephemeral fixtures and do not represent production PKI or validator key custody.
+
+This closes the gap between the earlier fan-out test double and a real local TLS socket round trip. It remains a loopback integration test: it does not demonstrate independent hosts, internet routing, operator separation, certificate rotation/revocation, packet loss, partition recovery, or production key custody.
+
+**Verification status:** the new test is committed, but its corrected-head CI result is pending. Do not treat earlier workflow runs as evidence for this test.
