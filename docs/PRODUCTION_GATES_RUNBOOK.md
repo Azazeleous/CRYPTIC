@@ -185,10 +185,12 @@ The vote builder now requires PersistentGCFVoteSigner. This wrapper verifies tha
 
 HTTPSHSMEd25519Signer.sign() now rejects GCF vote-domain messages unless they pass through the durable wrapper, and make_vote_with_signer() rejects an unguarded signer. Proposal signing remains separate. This prevents accidental bypass through the standard vote-builder path.
 
-**Trust boundary:** this is a local pre-sign guard, not a substitute for HSM-side authorization. If another process or operator can call the HSM endpoint directly, the HSM service must enforce the same per-validator height/phase lock before releasing a signature. The local lock database is consensus safety state: it must be on persistent protected storage, backed up and recovered under the operator's change-control process, and must not be recreated empty while reusing the same validator identity. SQLite WAL/synchronous=FULL is not physical power-loss certification; Gate 5 remains separate. No timeout-based lock clearing or round-change unlock is implemented.
+**Trust boundary:** this is a local pre-sign guard, not a substitute for HSM-side authorization. If another process or operator can call the HSM endpoint directly, the HSM service must enforce the same per-validator height/phase lock before releasing a signature. The local lock database is consensus safety state: it must be on persistent protected storage and backed up and recovered under the operator's change-control process. SQLite WAL/synchronous=FULL is not physical power-loss certification; Gate 5 remains separate. No timeout-based lock clearing or round-change unlock is implemented.
 
-Verification on code commit 0636a522afd44545e0eec788da77cef2ae9a2248:
-- CRYPTIC CI run 45038077326 passed 400 tests (2 skipped).
-- Production-gate contracts run 45038077427 passed on Ubuntu and Windows.
-- Mining-engine tests run 45038077341 passed.
-- GAIA local trophy run 45038077382 passed.
+**Enrollment and recovery rule:** the first creation of a vote-lock database requires an explicit one-time initialize=True enrollment action. Normal startup must leave the flag false. If the database is missing, empty, incomplete, bound to another validator/key, or bound to another validator-set hash, construction fails closed. Do not use initialize=True to recover a missing production database while reusing the same validator identity; restore the authenticated prior lock state or follow a separately approved validator identity/key rotation and re-enrollment process.
+
+Verification on code commit 8db70bca3a68c8c3dc9678a041c6fbc876d52e74:
+- CRYPTIC CI run 45038382615 passed 403 tests (2 skipped).
+- Production-gate contracts run 45038382603 passed on Ubuntu and Windows.
+- Mining-engine tests run 45038382641 passed.
+- GAIA local trophy run 45038382668 passed.
