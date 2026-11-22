@@ -451,7 +451,7 @@ class RemoteProviderTests(unittest.TestCase):
             db_path = Path(directory) / "vote-locks.sqlite3"
             guarded = PersistentGCFVoteSigner(
                 signer, validator_id="validator-1",
-                validator_set=validator_set, db_path=db_path, clock=lambda: self.now, initialize=True, clock=lambda: self.now,
+                validator_set=validator_set, db_path=db_path, initialize=True, clock=lambda: self.now,
             )
             make_vote_with_signer(
                 signer=guarded, validator_id="validator-1",
