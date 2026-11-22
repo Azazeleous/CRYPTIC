@@ -2,6 +2,13 @@
 
 This runbook distinguishes deployable software from external authority and hardware evidence. The repository does not manufacture GOD authorization, trust-root pins, validator keys, policy evidence, or durability claims.
 
+## Upstream G.O.D. repository boundary
+
+The public `machackabook/G.O.D.` repository is G.O.D. v5.0.1: a browser capability detector, explicit-consent gate, optional read-only Chrome companion, and local evidence-receipt interface. Its published architecture explicitly places a future authenticated SYNAPSE gateway outside that repository. It is **not** the authoritative GOD governance policy service, trust-root issuer, or signed decision endpoint required by this runbook. The cross-repository interface and evidence map is documented at [G.O.D. — CRYPTIC production-gate integration](https://github.com/machackabook/G.O.D./blob/main/docs/CRYPTIC-PRODUCTION-GATE-INTEGRATION.md).
+
+Consequently, the public G.O.D. repository update documents the boundary only; it does not satisfy Gate 1, grant `gcf.consensus.propose`, or change the current fail-closed result. A separate authoritative GOD policy service/repository and independently distributed trust-root evidence are still required.
+
+
 ## Gate 1 — GOD-authorized Ed25519 trust root
 
 **Software delivered:** load_independently_pinned_root() validates a public root-pin record against a fingerprint supplied through a separate trusted channel. GODHTTPSGate accepts only a short-lived, request-bound Ed25519 decision from a separately pinned signer. GODNetworkAuthorizer remains the final GCF adapter and fails closed if GOD does not explicitly allow gcf.consensus.propose.
