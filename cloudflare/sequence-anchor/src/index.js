@@ -225,8 +225,10 @@ async function verifyGcfProposal(proposal, certificate, vset) {
   const required = ["schema", "network_id", "epoch", "height", "round", "parent_hash",
     "payload_hash", "proof_hash", "justice_commitment", "issued_at", "expires_at",
     "proposer_id", "proposer_public_key", "nonce", "signature", "anchor_sequence"];
+  const allowed = new Set([...required, "round_change_certificate"]);
   if (!proposal || typeof proposal !== "object" || Array.isArray(proposal) ||
-      Object.keys(proposal).sort().join("|") !== required.slice().sort().join("|") ||
+      !required.every(key => Object.hasOwn(proposal, key)) ||
+      Object.keys(proposal).some(key => !allowed.has(key)) ||
       proposal.schema !== GCF_SCHEMA || proposal.network_id !== certificate.network_id ||
       proposal.epoch !== certificate.epoch || !Number.isSafeInteger(proposal.height) || proposal.height < 1 ||
       !Number.isSafeInteger(proposal.anchor_sequence) || proposal.anchor_sequence < 1 ||
@@ -293,6 +295,136 @@ async function verifyGcfVoteSet(votes, kind, proposal, digest, vset, polcDigest 
   return { ok: true, weight, reached: weight >= vset.quorumWeight };
 }
 
+
+async function gcfValueDigest(proposal) {
+  const value = {
+    network_id: proposal.network_id, epoch: proposal.epoch, height: proposal.height,
+    parent_hash: proposal.parent_hash, payload_hash: proposal.payload_hash,
+    proof_hash: proposal.proof_hash, justice_commitment: proposal.justice_commitment,
+  };
+  if (Object.hasOwn(proposal, "anchor_sequence")) value.anchor_sequence = proposal.anchor_sequence;
+  return sha256Hex(new TextEncoder().encode(canonical(value)));
+}
+
+async function verifyRoundChangeCertificate(roundChange, proposal, vset, verificationTime) {
+  if (!roundChange || typeof roundChange !== "object" || Array.isArray(roundChange)) {
+    return { ok: false, reason: "round_change_certificate_missing" };
+  }
+  const certFields = ["schema", "network_id", "epoch", "height", "target_round", "messages", "digest"];
+  if (Object.keys(roundChange).sort().join("|") !== certFields.slice().sort().join("|") ||
+      roundChange.schema !== GCF_ROUND_CHANGE_SCHEMA + "-CERT" ||
+      roundChange.network_id !== proposal.network_id || roundChange.epoch !== proposal.epoch ||
+      roundChange.height !== proposal.height || roundChange.target_round !== proposal.round ||
+      !Array.isArray(roundChange.messages) || roundChange.messages.length === 0 ||
+      roundChange.messages.length > vset.validators.size) {
+    return { ok: false, reason: "round_change_certificate_fields_invalid" };
+  }
+  const messageFields = ["schema", "network_id", "epoch", "height", "source_round",
+    "target_round", "validator_id", "issued_at", "expires_at", "nonce", "highest_polc", "signature"];
+  const seen = new Set(), polcs = new Map();
+  let weight = 0, previousId = null;
+  for (const message of roundChange.messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message) ||
+        Object.keys(message).sort().join("|") !== messageFields.slice().sort().join("|") ||
+        message.schema !== GCF_ROUND_CHANGE_SCHEMA ||
+        message.network_id !== proposal.network_id || message.epoch !== proposal.epoch ||
+        message.height !== proposal.height || message.target_round !== proposal.round ||
+        !Number.isSafeInteger(message.source_round) || message.source_round < 0 ||
+        message.source_round >= message.target_round ||
+        !Number.isSafeInteger(message.issued_at) || !Number.isSafeInteger(message.expires_at) ||
+        message.expires_at <= message.issued_at || message.expires_at - message.issued_at > 300 ||
+        message.issued_at > verificationTime + 30 || verificationTime > message.expires_at ||
+        verificationTime - message.issued_at > 300 ||
+        typeof message.nonce !== "string" || !/^[0-9a-f]{32}$/.test(message.nonce) ||
+        typeof message.validator_id !== "string" ||
+        (previousId !== null && message.validator_id <= previousId) ||
+        seen.has(message.validator_id)) {
+      return { ok: false, reason: "round_change_message_fields_invalid" };
+    }
+    const validator = vset.validators.get(message.validator_id);
+    if (!validator) return { ok: false, reason: "round_change_unknown_validator" };
+    const unsigned = Object.fromEntries(Object.entries(message).filter(([key]) => key !== "signature"));
+    if (!await verifyGcfSignature(validator.public_key_hex, message.signature,
+      GCF_ROUND_CHANGE_DOMAIN, unsigned)) {
+      return { ok: false, reason: "round_change_message_signature_invalid" };
+    }
+    seen.add(message.validator_id);
+    previousId = message.validator_id;
+    weight += validator.weight;
+
+    const polc = message.highest_polc;
+    if (polc !== null) {
+      const fields = ["schema", "proposal", "candidate_digest", "validator_set_hash", "prevotes", "digest"];
+      if (!polc || typeof polc !== "object" || Array.isArray(polc) ||
+          Object.keys(polc).sort().join("|") !== fields.slice().sort().join("|") ||
+          polc.schema !== GCF_POLC_SCHEMA || polc.validator_set_hash !== vset.setHash ||
+          !Array.isArray(polc.prevotes) || polc.prevotes.length === 0 ||
+          polc.prevotes.length > vset.validators.size) {
+        return { ok: false, reason: "round_change_polc_fields_invalid" };
+      }
+      const polcProposal = polc.proposal;
+      if (!polcProposal || polcProposal.network_id !== proposal.network_id ||
+          polcProposal.epoch !== proposal.epoch || polcProposal.height !== proposal.height ||
+          !Number.isSafeInteger(polcProposal.round) || polcProposal.round > message.source_round ||
+          polcProposal.issued_at > verificationTime + 30 ||
+          verificationTime > polcProposal.expires_at ||
+          verificationTime - polcProposal.issued_at > 3600) {
+        return { ok: false, reason: "round_change_polc_context_invalid" };
+      }
+      const polcProposalResult = await verifyGcfProposal(polcProposal, {
+        network_id: proposal.network_id, candidate_digest: polc.candidate_digest
+      }, vset);
+      if (!polcProposalResult.ok) return polcProposalResult;
+      const prevoteResult = await verifyGcfVoteSet(
+        polc.prevotes, "PREVOTE", polcProposal, polcProposalResult.digest, vset
+      );
+      if (!prevoteResult.ok || !prevoteResult.reached) {
+        return { ok: false, reason: prevoteResult.reason || "round_change_polc_quorum_missing" };
+      }
+      for (const vote of polc.prevotes) {
+        if (Math.abs(verificationTime - vote.issued_at) > 300) {
+          return { ok: false, reason: "round_change_polc_vote_stale" };
+        }
+      }
+      const polcBody = { schema: GCF_SCHEMA, candidate_digest: polcProposalResult.digest,
+        validator_set_hash: vset.setHash, prevotes: polc.prevotes };
+      const expectedPolcDigest = await sha256Hex(new Uint8Array([
+        ...GCF_CERT_DOMAIN, ...new TextEncoder().encode(canonical(polcBody))
+      ]));
+      if (polc.digest !== expectedPolcDigest) {
+        return { ok: false, reason: "round_change_polc_digest_mismatch" };
+      }
+      const prior = polcs.get(polcProposal.round);
+      const candidate = await gcfValueDigest(polcProposal);
+      if (prior && prior.candidate !== candidate) {
+        return { ok: false, reason: "round_change_conflicting_same_round_polcs" };
+      }
+      if (!prior || polc.digest < prior.polc.digest) {
+        polcs.set(polcProposal.round, { candidate, polc });
+      }
+    }
+  }
+  const quorumWeight = Math.floor((2 * vset.totalWeight) / 3) + 1;
+  if (weight < quorumWeight) return { ok: false, reason: "round_change_quorum_missing" };
+  const certBody = {
+    schema: roundChange.schema, network_id: roundChange.network_id,
+    epoch: roundChange.epoch, height: roundChange.height,
+    target_round: roundChange.target_round, messages: roundChange.messages,
+  };
+  const expectedDigest = await sha256Hex(new Uint8Array([
+    ...GCF_ROUND_CHANGE_CERT_DOMAIN, ...new TextEncoder().encode(canonical(certBody))
+  ]));
+  if (roundChange.digest !== expectedDigest) {
+    return { ok: false, reason: "round_change_certificate_digest_mismatch" };
+  }
+  let highest = null;
+  if (polcs.size) highest = polcs.get(Math.max(...polcs.keys()));
+  if (highest && highest.candidate !== await gcfValueDigest(proposal)) {
+    return { ok: false, reason: "proposal_conflicts_with_highest_polc" };
+  }
+  return { ok: true, weight, quorumWeight, highestPolcRound: polcs.size ? Math.max(...polcs.keys()) : null };
+}
+
 async function verifyFinalityCertificate(certificate, transition, networkId, env) {
   const vsetResult = await loadPinnedValidatorSet(env, networkId);
   if (!vsetResult.ok) return vsetResult;
@@ -320,6 +452,17 @@ async function verifyFinalityCertificate(certificate, transition, networkId, env
   }
   const proposalResult = await verifyGcfProposal(certificate.proposal, certificate, vset);
   if (!proposalResult.ok) return proposalResult;
+  if (certificate.proposal.round === 0) {
+    if (Object.hasOwn(certificate.proposal, "round_change_certificate")) {
+      return { ok: false, reason: "round_zero_has_round_change_certificate" };
+    }
+  } else {
+    const roundChangeResult = await verifyRoundChangeCertificate(
+      certificate.proposal.round_change_certificate, certificate.proposal, vset,
+      certificate.proposal.issued_at
+    );
+    if (!roundChangeResult.ok) return roundChangeResult;
+  }
   if (certificate.proposal.parent_hash !== transition.expected_policy_hash ||
       certificate.proposal.payload_hash !== transition.policy_hash) {
     return { ok: false, reason: "gcf_anchor_transition_binding_invalid" };
