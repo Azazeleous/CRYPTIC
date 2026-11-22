@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -275,6 +276,23 @@ class RoundChangeProofTests(unittest.TestCase):
             engine.submit_round_change(first)
             with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_EQUIVOCATION"):
                 engine.submit_round_change(conflicting)
+
+    def test_persisted_round_change_certificate_digest_tampering_is_detected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "gcf.sqlite3"
+            engine = GCFEngine(db_path, self.vset, clock=lambda: self.now)
+            for validator in ("v1", "v2", "v3"):
+                engine.submit_round_change(self.message(validator))
+            with sqlite3.connect(db_path) as db:
+                db.execute(
+                    "UPDATE round_change_certificates SET certificate_digest=?",
+                    ("0" * 64,),
+                )
+            with self.assertRaisesRegex(
+                GCFError, "PERSISTED_ROUND_CHANGE_CERTIFICATE_DIGEST_MISMATCH",
+            ):
+                engine.get_round_change_certificate(height=12, target_round=1)
+
 
 if __name__ == "__main__":
     unittest.main()
