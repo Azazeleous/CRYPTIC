@@ -109,7 +109,6 @@ from src.governance.remote_providers import (
     HTTPSJusticeProviders,
     HTTPSSequenceAnchor,
     SignedHTTPSDecisionClient,
-    SignedHTTPSPolicyTransitionClient,
 )
 
 god_client = SignedHTTPSDecisionClient(
