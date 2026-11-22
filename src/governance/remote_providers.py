@@ -284,6 +284,8 @@ class SignedHTTPSPolicyTransitionClient:
             authorization = json.loads(raw)
         except (TypeError, json.JSONDecodeError) as exc:
             raise RemoteProviderError("god_policy_transition_json_invalid") from exc
+        if _canonical(authorization) != raw:
+            raise RemoteProviderError("god_policy_transition_noncanonical_json")
         required = {
             "schema", "signer_id", "capability", "policy_id", "network_id",
             "expected_sequence", "expected_policy_hash", "sequence",
