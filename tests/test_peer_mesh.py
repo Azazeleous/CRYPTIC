@@ -233,6 +233,34 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
             server.close()
             await server.wait_closed()
 
+
+    def test_round_change_message_uses_authenticated_peer_dispatch(self):
+        class RoundChangeEngine:
+            def __init__(self):
+                self.messages = []
+
+            def submit_round_change(self, message):
+                self.messages.append(dict(message))
+                return {"accepted": True, "quorum_reached": False}
+
+        engine = RoundChangeEngine()
+        self.node.engine = engine
+        payload = {
+            "schema": "GCF-ROUND-CHANGE/1",
+            "network_id": "mesh-test",
+            "epoch": 2,
+            "height": 9,
+            "source_round": 0,
+            "target_round": 1,
+        }
+        envelope = self.node.make_envelope(
+            "ROUND_CHANGE", payload, message_id="ab" * 16,
+        )
+        response = self.node.handle_envelope("v0", envelope)
+        self.assertTrue(response["accepted"])
+        self.assertEqual(response["result"]["quorum_reached"], False)
+        self.assertEqual(engine.messages, [payload])
+
     def test_node_rejects_unbounded_inbound_resource_settings(self):
         with self.assertRaisesRegex(PeerTransportError, "MAX_CONNECTIONS_INVALID"):
             GCFPeerNode(
