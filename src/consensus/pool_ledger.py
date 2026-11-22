@@ -129,7 +129,11 @@ class PoolShareLedger:
                 event=json.loads(raw.decode("ascii"))
             except (UnicodeDecodeError,ValueError,TypeError):
                 return False
-            if _canonical(event)!=raw or set(event)!={"event_type","share"}:
+            try:
+                canonical_event=_canonical(event)
+            except (TypeError,ValueError):
+                return False
+            if canonical_event!=raw or set(event)!={"event_type","share"}:
                 return False
             if event_type!="pool.share.accepted" or event.get("event_type")!=event_type:
                 return False
