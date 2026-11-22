@@ -605,6 +605,26 @@ class RemoteProviderTests(unittest.TestCase):
             )
             self.assertEqual(signed["round"], 2)
             self.assertEqual(len(signer_calls), 2)
+
+            third_messages = [
+                message(name, pair[0], 2, 3, None, (str(i + 8) * 32))
+                for i, (name, pair) in enumerate(other.items())
+            ]
+            third_certificate = make_round_change_certificate(
+                third_messages, network_id="test-net", epoch=1,
+                height=22, target_round=3,
+            )
+            proposal_b3 = proposal("b", 3, third_certificate, "d" * 32)
+            restarted = PersistentGCFVoteSigner(
+                remote, validator_id="v1", validator_set=validator_set,
+                db_path=db_path, initialize=False, clock=lambda: self.now,
+            )
+            restarted_vote = make_vote_with_signer(
+                signer=restarted, validator_id="v1", proposal=proposal_b3,
+                vote_type="PREVOTE", issued_at=self.now + 5,
+            )
+            self.assertEqual(restarted_vote["round"], 3)
+            self.assertEqual(len(signer_calls), 3)
             db = sqlite3.connect(db_path)
             try:
                 state = db.execute(
@@ -617,8 +637,8 @@ class RemoteProviderTests(unittest.TestCase):
                 ).fetchone()[0]
             finally:
                 db.close()
-            self.assertEqual(state[0], 2)
-            self.assertEqual(history, 2)
+            self.assertEqual(state[0], 3)
+            self.assertEqual(history, 3)
 
     def test_pre_sign_lock_is_atomic_across_signer_instances(self):
         from src.consensus.gcf import VOTE_DOMAIN
