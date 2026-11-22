@@ -98,7 +98,7 @@ async function readAnchor(networkId, nonce, env) {
 
 async function readBoundedBody(request) {
   const length = request.headers.get("content-length");
-  if (length !== null && (!/^\\d+$/.test(length) || Number(length) > MAX_BODY_BYTES)) {
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_BODY_BYTES)) {
     throw new Error("body_too_large");
   }
   if (!request.body) return new Uint8Array();
