@@ -55,12 +55,13 @@ def issue_pool_job(*,private_key_hex:str,issuer_id:str,pool_id:str,network_id:st
     body["signature"]=base64.b64encode(_private_key(private_key_hex).sign(POOL_JOB_DOMAIN+canonical_bytes(body))).decode("ascii")
     return body
 
-def verify_pool_job(job:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,expected_pool_id:str,expected_network_id:str,now:int)->dict:
+def verify_pool_job(job:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,expected_issuer_id:str,expected_pool_id:str,expected_network_id:str,now:int)->dict:
     """Verify exact schema, issuer signature, network/pool binding, time and bounds."""
     if not isinstance(job,Mapping) or set(job)!=FIELDS|{"signature"}: raise PoolJobError("job_fields_invalid")
     body=dict(job); signature_text=body.pop("signature")
     if body["schema"]!=POOL_JOB_SCHEMA: raise PoolJobError("job_schema_invalid")
     if body["pool_id"]!=expected_pool_id or body["network_id"]!=expected_network_id: raise PoolJobError("job_scope_mismatch")
+    if not isinstance(expected_issuer_id,str) or not expected_issuer_id or body["issuer_id"]!=expected_issuer_id: raise PoolJobError("issuer_identity_mismatch")
     if not isinstance(trusted_issuer_public_key_hex,str) or not re.fullmatch(r"[0-9a-fA-F]{64}",trusted_issuer_public_key_hex): raise PoolJobError("issuer_public_key_invalid")
     try:
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
