@@ -29,6 +29,8 @@ RESPONSE_DOMAIN = b"CRYPTIC-REMOTE-RESPONSE/1\x00"
 ANCHOR_DOMAIN = b"CRYPTIC-SEQUENCE-ANCHOR/1\x00"
 DECISION_SCHEMA = "CRYPTIC-REMOTE-DECISION/1"
 ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1"
+POLICY_TRANSITION_SCHEMA = "CRYPTIC-GOD-POLICY-TRANSITION/1"
+POLICY_TRANSITION_DOMAIN = b"CRYPTIC-GOD-POLICY-TRANSITION/1\\x00"
 MAX_RESPONSE_BYTES = 65_536
 MAX_TTL_SECONDS = 300
 MAX_CLOCK_SKEW_SECONDS = 30
@@ -291,8 +293,7 @@ class HTTPSSequenceAnchor:
         response = self._signed(raw, network_id, expected_nonce=nonce)
         return response["sequence"], response["policy_hash"]
 
-    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool:
-        if self.write_token is None:
+    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str, *,\n                         authorization: Mapping[str, Any] | None = None) -> bool:\n        if self.write_token is None:
             raise RemoteProviderError("anchor_write_authentication_required")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
             raise RemoteProviderError("anchor_sequence_invalid")
@@ -303,8 +304,7 @@ class HTTPSSequenceAnchor:
                 raise ValueError("hash")
         except ValueError as exc:
             raise RemoteProviderError("anchor_policy_hash_invalid") from exc
-        current = self.read_sequence(network_id)
-        if current is None:
+        if not isinstance(authorization, Mapping):\n            raise RemoteProviderError("anchor_policy_authorization_required")\n        current = self.read_sequence(network_id)\n        if current is None:
             expected_sequence, expected_hash = 0, "0" * 64
             condition = {"If-None-Match": "*"}
         else:
@@ -317,8 +317,7 @@ class HTTPSSequenceAnchor:
             "sequence": sequence, "policy_hash": policy_hash,
             "expected_sequence": expected_sequence,
             "expected_policy_hash": expected_hash,
-            "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),
-        }
+            "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),\n            "authorization": dict(authorization),\n        }
         status, _headers, raw = self.transport(
             "PUT", self._url(network_id),
             {"Content-Type": "application/json", "Accept": "application/json",
