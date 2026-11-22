@@ -257,6 +257,19 @@ class GCFEngine:
               candidate_digest TEXT PRIMARY KEY REFERENCES proposals(candidate_digest),
               certificate_json TEXT NOT NULL, certificate_digest TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS round_change_messages(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              target_round INTEGER NOT NULL, validator_id TEXT NOT NULL, nonce TEXT NOT NULL,
+              message_json TEXT NOT NULL, received_at INTEGER NOT NULL,
+              PRIMARY KEY(network_id,epoch,height,target_round,validator_id),
+              UNIQUE(network_id,epoch,height,validator_id,nonce)
+            );
+            CREATE TABLE IF NOT EXISTS round_change_certificates(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              target_round INTEGER NOT NULL, certificate_json TEXT NOT NULL,
+              certificate_digest TEXT NOT NULL,
+              PRIMARY KEY(network_id,epoch,height,target_round)
+            );
             INSERT OR IGNORE INTO vote_locks
               SELECT p.network_id,p.epoch,p.height,p.round,v.vote_type,v.validator_id,v.candidate_digest
               FROM votes v JOIN proposals p ON p.candidate_digest=v.candidate_digest;
@@ -516,6 +529,103 @@ class GCFEngine:
         return {"accepted": True, "vote_type": normalized["vote_type"],
                 "quorum_reached": reached, "voting_weight": weight,
                 "quorum_weight": self.validator_set.quorum_weight()}
+
+    def submit_round_change(self, message: Mapping[str, Any]) -> dict:
+        """Persist authenticated round-change evidence and cache a verified quorum certificate.
+
+        This records proof evidence only. It deliberately does not mutate vote
+        locks, authorize a conflicting signature, or advance proposal admission.
+        """
+        from src.consensus.round_change import (
+            make_round_change_certificate, verify_round_change_message,
+            verify_round_change_certificate,
+        )
+        if not isinstance(message, Mapping):
+            raise GCFError("ROUND_CHANGE_MESSAGE_INVALID")
+        height, target = message.get("height"), message.get("target_round")
+        checked = verify_round_change_message(
+            message, validator_set=self.validator_set, height=height,
+            target_round=target, clock=self.clock,
+        )
+        if not checked.get("valid"):
+            raise GCFError("ROUND_CHANGE_REJECTED:" + str(checked.get("reason")))
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = db.execute("""
+                    SELECT message_json FROM round_change_messages
+                    WHERE network_id=? AND epoch=? AND height=?
+                      AND target_round=? AND validator_id=?
+                """, (self.validator_set.network_id, self.validator_set.epoch,
+                      height, target, checked["validator_id"])).fetchone()
+                encoded = canonical_bytes(dict(message)).decode()
+                if existing is not None:
+                    if existing["message_json"] != encoded:
+                        raise GCFError("ROUND_CHANGE_EQUIVOCATION")
+                    raise GCFError("ROUND_CHANGE_DUPLICATE")
+                db.execute("""
+                    INSERT INTO round_change_messages VALUES(?,?,?,?,?,?,?,?)
+                """, (self.validator_set.network_id, self.validator_set.epoch,
+                      height, target, checked["validator_id"], message["nonce"],
+                      encoded, int(self.clock())))
+                rows = db.execute("""
+                    SELECT message_json FROM round_change_messages
+                    WHERE network_id=? AND epoch=? AND height=? AND target_round=?
+                    ORDER BY validator_id
+                """, (self.validator_set.network_id, self.validator_set.epoch,
+                      height, target)).fetchall()
+                messages = [json.loads(row["message_json"]) for row in rows]
+                certificate = make_round_change_certificate(
+                    messages, network_id=self.validator_set.network_id,
+                    epoch=self.validator_set.epoch, height=height, target_round=target,
+                )
+                result = verify_round_change_certificate(
+                    certificate, validator_set=self.validator_set, height=height,
+                    clock=self.clock,
+                )
+                if result["valid"]:
+                    db.execute("""
+                        INSERT INTO round_change_certificates
+                        VALUES(?,?,?,?,?,?)
+                        ON CONFLICT(network_id,epoch,height,target_round)
+                        DO UPDATE SET certificate_json=excluded.certificate_json,
+                                      certificate_digest=excluded.certificate_digest
+                    """, (self.validator_set.network_id, self.validator_set.epoch,
+                          height, target, canonical_bytes(certificate).decode(),
+                          result["digest"]))
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        return {
+            "accepted": True, "validator_id": checked["validator_id"],
+            "height": height, "target_round": target,
+            "quorum_reached": bool(result["valid"]),
+            "voting_weight": result.get("weight", 0),
+            "quorum_weight": result.get("quorum_weight", self.validator_set.quorum_weight()),
+            "certificate": certificate if result["valid"] else None,
+        }
+
+    def get_round_change_certificate(self, *, height: int, target_round: int) -> dict | None:
+        """Return a cached certificate only after re-verifying it against current trust."""
+        from src.consensus.round_change import verify_round_change_certificate
+        with self._db() as db:
+            row = db.execute("""
+                SELECT certificate_json FROM round_change_certificates
+                WHERE network_id=? AND epoch=? AND height=? AND target_round=?
+            """, (self.validator_set.network_id, self.validator_set.epoch,
+                  height, target_round)).fetchone()
+        if row is None:
+            return None
+        certificate = json.loads(row["certificate_json"])
+        checked = verify_round_change_certificate(
+            certificate, validator_set=self.validator_set, height=height,
+            clock=self.clock,
+        )
+        if not checked["valid"]:
+            raise GCFError("PERSISTED_ROUND_CHANGE_CERTIFICATE_INVALID:" + checked["reason"])
+        return certificate
 
     def finalize(self, candidate_digest: str) -> dict:
         with self._lock, self._db() as db:
