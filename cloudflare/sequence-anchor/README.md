@@ -9,8 +9,15 @@ This Worker implements the `HTTPSSequenceAnchor` contract in
   `CRYPTIC-SEQUENCE-ANCHOR/1\0` domain and canonical JSON contract.
 - GET requests require a 128-bit hexadecimal nonce and return signed state.
 - PUT requests require a bearer credential of at least 32 non-whitespace
-  characters, a valid request nonce, a fresh timestamp, and an HTTP
-  conditional header.
+  characters **and** a separately verifiable GOD policy-transition signature.
+  The signed envelope binds signer, capability, policy ID, network, prior and
+  proposed sequence/hash, validity window, and a one-time nonce.
+- The Worker verifies the GOD Ed25519 signature against the independently
+  provisioned `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`; the signer ID and policy ID
+  must match `ANCHOR_GOD_POLICY_SIGNER_ID` and `ANCHOR_POLICY_ID`.
+- A D1 nonce-receipt table rejects replayed `(signer_id, nonce)` pairs. The
+  nonce is consumed only when the expected anchor state matches. A failed CAS
+  can consume a valid authorization; obtain a fresh GOD authorization to retry.
 - The D1 conditional UPSERT is the single atomic compare-and-swap point.
   Initial creation requires sequence 0 plus the all-zero expected hash;
   updates require the exact prior sequence/hash and a strictly greater
@@ -31,22 +38,28 @@ an independent channel, and provision secrets directly to Cloudflare. Never
 paste private key material or the write token into GitHub, chat, source code,
 D1, or shell history.
 
-The Worker requires these Cloudflare secrets:
+The Worker requires these Cloudflare secrets/configuration:
+- `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`: independently pinned GOD Ed25519 public key (32-byte raw key as 64 lowercase hex characters).
+- `ANCHOR_GOD_POLICY_SIGNER_ID`: exact authorized GOD policy signer identity.
+- `ANCHOR_POLICY_ID`: exact policy namespace permitted to advance this anchor.
 - `ANCHOR_SIGNING_KEY_PKCS8_B64`: base64 of the Ed25519 private key in PKCS#8 DER.
 - `ANCHOR_SIGNER_ID`: signer identity authorized by the independent trust ceremony.
 - `ANCHOR_WRITE_TOKEN`: random secret of at least 32 non-whitespace characters.
 
-The CRYPTIC validator host must receive the same write token through its
-protected secret manager as `CRYPTIC_SEQUENCE_ANCHOR_TOKEN`, and receive the
-public key plus SHA-256 fingerprint through independently authenticated
-channels. Do not use the same channel to distribute both key and fingerprint.
+The validator host may receive the transport write token through its protected
+secret manager as `CRYPTIC_SEQUENCE_ANCHOR_TOKEN`, but possession of that token
+is not policy authority. Every PUT must also carry a fresh GOD-signed transition
+envelope. The GOD public key/fingerprint and policy signer identity must be
+provisioned independently; the GOD private key never enters the validator or
+anchor Worker. Keep the anchor response-signing key separate from the GOD key.
 
 ## Local deployment sequence
 
 1. Review this source and the D1 migration.
-2. Complete the signing-key and write-token ceremony outside this repository.
-3. From this directory, provision each Cloudflare secret with Wrangler's
-   interactive `wrangler secret put` command.
+2. Complete the GOD policy-key pin ceremony separately from the anchor response-key ceremony.
+3. Provision `ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX`, `ANCHOR_GOD_POLICY_SIGNER_ID`,
+   and `ANCHOR_POLICY_ID` as protected Worker configuration. Provision private
+   secrets with Wrangler's interactive `wrangler secret put` command.
 4. Apply migrations with `wrangler d1 migrations apply cryptic-production-sequence-anchor --remote`.
 5. Deploy with `wrangler deploy`. Keep `workers_dev = false` and do not add
    a route until the trust-root fingerprint, client token, signer identity,
@@ -72,8 +85,9 @@ channels. Do not use the same channel to distribute both key and fingerprint.
 - `GET /health` reports configuration presence only; it is not a readiness
   or trust assertion.
 
-The Worker is an implementation component. It is not an independent operator,
-a GOD authorization authority, or proof of production finality by itself.
+The Worker verifies GOD authorization; it does not create GOD authorization
+or become the GOD authority. It is not an independent operator or proof of
+production finality by itself.
 
 ## Staged Cloudflare deployment record
 
