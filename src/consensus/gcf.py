@@ -373,6 +373,9 @@ class GCFEngine:
         if not isinstance(proposal["justice_commitment"], Mapping):
             raise GCFError("justice_commitment_invalid")
         public = _hex(proposal["proposer_public_key"], "proposer_public_key", 32).hex()
+        proposer = self.validator_set.validators.get(proposal["proposer_id"])
+        if proposer is None or proposer.public_key_hex != public:
+            raise GCFError("PROPOSER_NOT_IN_ACTIVE_VALIDATOR_SET")
         body = _unsigned(proposal)
         if not verify_object(public, proposal["signature"], PROPOSAL_DOMAIN, body):
             raise GCFError("PROPOSER_SIGNATURE_INVALID")
