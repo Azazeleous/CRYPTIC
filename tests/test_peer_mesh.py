@@ -1,14 +1,22 @@
 import asyncio
+import datetime as dt
+import hashlib
+import ipaddress
 import ssl
 import tempfile
 import unittest
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.x509.oid import NameOID
 
 from src.consensus.gcf import ValidatorSet
-from src.consensus.peer_transport import GCFPeerMesh, GCFPeerNode, PeerTransportError
+from src.consensus.peer_transport import (
+    GCFPeerMesh, GCFPeerNode, PeerTransportError,
+    build_client_ssl_context, build_server_ssl_context,
+)
 
 
 class RecordingPeerNode(GCFPeerNode):
@@ -18,6 +26,31 @@ class RecordingPeerNode(GCFPeerNode):
         if host == "reject.example":
             return {"status": "rejected", "error": "peer_policy_denied"}
         return {"status": "accepted", "message_id": message_id}
+
+
+def issue_certificate(subject_key, issuer_name, issuer_key, *, common_name,
+                     is_ca=False, dns_name=None):
+    now = dt.datetime.now(dt.timezone.utc)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer_name)
+        .public_key(subject_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=1))
+        .not_valid_after(now + dt.timedelta(days=2))
+        .add_extension(x509.BasicConstraints(ca=is_ca, path_length=1 if is_ca else None), critical=True)
+    )
+    if dns_name:
+        builder = builder.add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName(dns_name),
+                x509.IPAddress(ipaddress.ip_address("127.0.0.1")),
+            ]),
+            critical=False,
+        )
+    return builder.sign(issuer_key, algorithm=None)
 
 
 class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
@@ -79,6 +112,101 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["failed_peers"], ["v2"])
         self.assertEqual(len(result["message_id"]), 32)
         self.assertEqual(result["message_type"], "PROPOSAL")
+
+    async def test_real_mutual_tls_peer_roundtrip_and_replay_rejection(self):
+        ca_key = Ed25519PrivateKey.generate()
+        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "CRYPTIC test CA")])
+        ca_cert = issue_certificate(ca_key, ca_name, ca_key, common_name="CRYPTIC test CA", is_ca=True)
+        sender_cert = issue_certificate(
+            self.keys["v0"], ca_name, ca_key, common_name="validator-v0",
+        )
+        receiver_cert = issue_certificate(
+            self.keys["v1"], ca_name, ca_key, common_name="localhost",
+            dns_name="localhost",
+        )
+        ca_path = Path(self.temp.name) / "ca.pem"
+        sender_cert_path = Path(self.temp.name) / "sender.pem"
+        sender_key_path = Path(self.temp.name) / "sender-key.pem"
+        receiver_cert_path = Path(self.temp.name) / "receiver.pem"
+        receiver_key_path = Path(self.temp.name) / "receiver-key.pem"
+        for path, value in (
+            (ca_path, ca_cert.public_bytes(serialization.Encoding.PEM)),
+            (sender_cert_path, sender_cert.public_bytes(serialization.Encoding.PEM)),
+            (receiver_cert_path, receiver_cert.public_bytes(serialization.Encoding.PEM)),
+            (sender_key_path, self.keys["v0"].private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )),
+            (receiver_key_path, self.keys["v1"].private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )),
+        ):
+            path.write_bytes(value)
+
+        class ReceiverEngine:
+            def __init__(self):
+                self.proposals = []
+
+            def submit_proposal(self, proposal):
+                self.proposals.append(dict(proposal))
+                return {"accepted": True, "candidate_digest": "a" * 64}
+
+            def submit_vote(self, vote):
+                raise AssertionError("unexpected vote dispatch")
+
+        receiver_engine = ReceiverEngine()
+        receiver_node = GCFPeerNode(
+            engine=receiver_engine,
+            validator_set=self.validator_set,
+            node_id="v1",
+            private_key_hex=self.private_hex["v1"],
+            peer_certificate_fingerprints={
+                hashlib.sha256(sender_cert.public_bytes(serialization.Encoding.DER)).hexdigest(): "v0",
+            },
+            replay_db_path=Path(self.temp.name) / "receiver-replay.sqlite3",
+            clock=lambda: 1_800_000_000,
+        )
+        sender_node = GCFPeerNode(
+            engine=object(),
+            validator_set=self.validator_set,
+            node_id="v0",
+            private_key_hex=self.private_hex["v0"],
+            peer_certificate_fingerprints={},
+            replay_db_path=Path(self.temp.name) / "sender-replay.sqlite3",
+            clock=lambda: 1_800_000_000,
+        )
+        server_tls = build_server_ssl_context(
+            str(receiver_cert_path), str(receiver_key_path), str(ca_path),
+        )
+        client_tls = build_client_ssl_context(
+            str(sender_cert_path), str(sender_key_path), str(ca_path),
+        )
+        server = await receiver_node.serve("127.0.0.1", 0, server_tls)
+        port = server.sockets[0].getsockname()[1]
+        fingerprint = hashlib.sha256(
+            receiver_cert.public_bytes(serialization.Encoding.DER)
+        ).hexdigest()
+        try:
+            payload = {"schema": "GCF/1", "network_id": "mesh-test", "height": 1}
+            first = await sender_node.send(
+                "localhost", port, client_tls, fingerprint,
+                "PROPOSAL", payload, "01" * 16,
+            )
+            self.assertEqual(first["status"], "accepted")
+            self.assertEqual(len(receiver_engine.proposals), 1)
+            replay = await sender_node.send(
+                "localhost", port, client_tls, fingerprint,
+                "PROPOSAL", payload, "01" * 16,
+            )
+            self.assertEqual(replay["status"], "rejected")
+            self.assertEqual(replay["error"], "MESSAGE_REPLAY")
+            self.assertEqual(len(receiver_engine.proposals), 1)
+        finally:
+            server.close()
+            await server.wait_closed()
 
     def test_mesh_rejects_unknown_peer_and_invalid_endpoint(self):
         with self.assertRaisesRegex(PeerTransportError, "PEER_ID_INVALID"):
