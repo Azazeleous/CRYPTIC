@@ -458,7 +458,7 @@ class RemoteProviderTests(unittest.TestCase):
                 proposal=proposal_0, vote_type="PREVOTE", issued_at=self.now,
             )
             signed_count = len(signer_calls)
-            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
+            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_proposal_not_authorized"):
                 make_vote_with_signer(
                     signer=guarded, validator_id="validator-1",
                     proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
@@ -469,7 +469,7 @@ class RemoteProviderTests(unittest.TestCase):
                 signer, validator_id="validator-1",
                 validator_set=validator_set, db_path=db_path, clock=lambda: self.now,
             )
-            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
+            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_proposal_not_authorized"):
                 make_vote_with_signer(
                     signer=restarted, validator_id="validator-1",
                     proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
@@ -541,7 +541,7 @@ class RemoteProviderTests(unittest.TestCase):
                 results = list(pool.map(attempt, [
                     (guards[0], proposal_0), (guards[1], proposal_1),
                 ]))
-        self.assertCountEqual(results, ["signed", "vote_signing_lock_conflict"])
+        self.assertCountEqual(results, ["signed", "vote_signing_proposal_not_authorized"])
         self.assertEqual(len(calls), 1)
 
     def test_ambiguous_hsm_failure_keeps_lock_and_allows_exact_retry(self):
@@ -593,7 +593,7 @@ class RemoteProviderTests(unittest.TestCase):
                     signer=guard, validator_id="validator-1",
                     proposal=proposal_0, vote_type="PREVOTE", issued_at=self.now,
                 )
-            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
+            with self.assertRaisesRegex(RemoteProviderError, "vote_signing_proposal_not_authorized"):
                 make_vote_with_signer(
                     signer=guard, validator_id="validator-1",
                     proposal=proposal_1, vote_type="PREVOTE", issued_at=self.now,
