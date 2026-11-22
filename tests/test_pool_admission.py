@@ -19,6 +19,15 @@ class PoolAdmissionTests(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertEqual(result["worker_id"],"worker-a")
         self.assertEqual(len(result["work_digest"]),64)
+    def test_active_target_lookup_is_bound_to_expected_network(self):
+        seen={}
+        def resolve(job):
+            seen.update(job)
+            return bytes.fromhex(job["target"])
+        admit_pool_submission(self.submission,trusted_issuer_public_key_hex=self.public_hex,expected_issuer_id="issuer",expected_pool_id="gaia-internal",expected_network_id="hccgn-test",authenticated_worker_id="worker-a",active_target_resolver=resolve,now=1002)
+        self.assertEqual(seen["network_id"],"hccgn-test")
+        self.assertEqual(seen["height"],self.job["height"])
+
     def test_authenticated_worker_binding_is_required(self):
         with self.assertRaisesRegex(PoolAdmissionError,"worker_identity"):
             self.admit(worker="worker-b")
