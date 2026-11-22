@@ -16,14 +16,22 @@ verification for:
   PREVOTE signature, unique validators, active validator-set hash, and
   strict weighted quorum are independently recomputed.
 - Round-change certificates: unique validator messages, strict weighted
-  quorum, canonical digest, highest-POLC selection, and rejection of
-  same-round conflicting POLCs.
+  quorum, canonical digest, highest-POLC selection, rejection of same-round
+  conflicting candidate POLCs, and deterministic digest tie-breaking when
+  multiple proofs establish the same candidate and round.
+- Live POLC checks use the verifier's supplied current clock for proposal
+  expiry and vote freshness. Signed timestamps are never used to reset the
+  verifier clock. POLC vote count and round-change message count are bounded
+  by the active validator-set size; time-window configuration and consensus
+  integers are range-checked.
 
 The production-gate workflow invokes `tests/test_round_change.py` on Ubuntu
-and Windows. Both jobs passed on PR head `2e55a5c1cfb2caf029ad2318f5d60a897e825c06`
-(run 45046476561). The full CRYPTIC CI (45046476482), mining-engine tests
-(45046476538), and GAIA local trophy workflow (45046476524) also passed on
-that same head.
+and Windows. The suite covers strict weighted quorum (including exact
+two-thirds rejection), duplicate signers, invalid signatures, conflicting
+POLCs, deterministic same-candidate tie-breaking, expired proposals, stale
+votes, bounded proof lists, and invalid verifier limits. CI evidence for the
+latest implementation head is recorded in the PR and capability ledger only
+after the corresponding workflow runs complete successfully.
 
 This slice deliberately does **not** mutate consensus locks, release signing
 intents, add round-change to peer dispatch, alter proposal/finality schemas,
