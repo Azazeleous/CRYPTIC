@@ -22,6 +22,7 @@ from src.consensus.gcf import (
 )
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
 from src.consensus.independent_verifier import verify_certificate
+from src.consensus.round_change import make_round_change_message, make_round_change_certificate
 from src.consensus.peer_transport import (
     GCFPeerNode, PeerTransportError, build_client_ssl_context,
     build_server_ssl_context,
@@ -108,7 +109,7 @@ class IndependentVerifierTests(unittest.TestCase):
             network_id=base["network_id"], epoch=base["epoch"], height=17, round=base["round"],
             parent_hash=base["parent_hash"], payload_hash=base["payload_hash"],
             proof_hash=base["proof_hash"], justice_commitment=base["justice_commitment"],
-            proposer_id=base["proposer_id"], proposer_private_key_hex=self.proposer_private,
+            proposer_id=base["proposer_id"], proposer_private_key_hex=self.keys["v0"][0],
             nonce=base["nonce"], issued_at=base["issued_at"], expires_at=base["expires_at"],
             anchor_sequence=3,
         )
@@ -463,7 +464,6 @@ class CrossRoundVoteLockTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.now = 1_800_000_000
         self.keys = {f"v{i}": keypair() for i in range(4)}
-        self.proposer_private, _ = keypair()
         self.vset = ValidatorSet("gaia-cross-round", 7, {
             name: {"public_key_hex": pair[1], "weight": 1}
             for name, pair in self.keys.items()
@@ -481,14 +481,28 @@ class CrossRoundVoteLockTests(unittest.TestCase):
             "payload_hash": hashlib.sha256(b"payload").hexdigest(),
             "proof_hash": hashlib.sha256(b"proof").hexdigest(),
             "justice_commitment": {"policy_hash": "1" * 64},
-            "proposer_id": "proposer", "proposer_private_key_hex": self.proposer_private,
+            "proposer_id": "v0", "proposer_private_key_hex": self.keys["v0"][0],
             "issued_at": self.now, "expires_at": self.now + 300,
         }
         self.proposal_round_0 = make_proposal(
             **common, round=0, nonce="round-zero-nonce-0000000000000001",
         )
+        round_change_messages = [
+            make_round_change_message(
+                validator_id=name, private_key_hex=self.keys[name][0],
+                network_id=self.vset.network_id, epoch=self.vset.epoch, height=9,
+                source_round=0, target_round=1, issued_at=self.now,
+                expires_at=self.now + 300, nonce=f"{index + 1:032x}",
+            )
+            for index, name in enumerate(("v1", "v2", "v3"))
+        ]
+        round_change_certificate = make_round_change_certificate(
+            round_change_messages, network_id=self.vset.network_id,
+            epoch=self.vset.epoch, height=9, target_round=1,
+        )
         self.proposal_round_1 = make_proposal(
             **common, round=1, nonce="round-one-nonce-0000000000000002",
+            round_change_certificate=round_change_certificate,
         )
         self.digest_round_0 = self.engine.submit_proposal(self.proposal_round_0)["candidate_digest"]
         self.digest_round_1 = self.engine.submit_proposal(self.proposal_round_1)["candidate_digest"]
@@ -505,7 +519,7 @@ class CrossRoundVoteLockTests(unittest.TestCase):
 
     def test_validator_cannot_change_candidate_between_rounds_at_same_height(self):
         self.engine.submit_vote(self._prevote(self.proposal_round_0))
-        with self.assertRaisesRegex(GCFError, "VALIDATOR_EQUIVOCATION_DETECTED"):
+        with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED"):
             self.engine.submit_vote(self._prevote(self.proposal_round_1))
 
     def test_vote_lock_is_phase_specific_but_round_independent(self):
