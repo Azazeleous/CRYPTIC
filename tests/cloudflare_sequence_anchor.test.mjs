@@ -45,19 +45,19 @@ class MemoryD1 {
         return row ? { sequence: row.sequence, policy_hash: row.policy_hash } : null;
       },
       async run() {
-        if (sql.includes("DELETE FROM used_authorization_nonces")) return { success: true, meta: { changes: 0 } };
-        if (sql.includes("INSERT INTO used_authorization_nonces")) {
-          const [signer, nonce, network, expiry, expectedSequence, expectedHash,
-            zeroHash, initNetwork, guardNetwork, guardSequence, guardHash] = this.values;
+        if (sql.includes("INSERT INTO used_finality_certificates")) {
+          const [certificateDigest, network, sequence, acceptedAt, expectedSequence,
+            expectedHash, zeroHash, initNetwork, guardNetwork, guardSequence, guardHash] = this.values;
           const row = db.rows.get(network);
           const matches = expectedSequence === 0
-            ? expectedHash === zeroHash && !row
+            ? expectedHash === zeroHash && !row && initNetwork === network
             : Boolean(row && row.sequence === guardSequence &&
               row.policy_hash === guardHash && guardNetwork === network);
-          const key = signer + ":" + nonce;
-          if (!matches || db.nonces.has(key)) return { success: true, meta: { changes: 0 } };
-          db.nonces.add(key);
-          return { success: true, meta: { changes: 1, expiry, initNetwork } };
+          if (!matches || db.nonces.has(certificateDigest)) {
+            return { success: true, meta: { changes: 0 } };
+          }
+          db.nonces.add(certificateDigest);
+          return { success: true, meta: { changes: 1, sequence, acceptedAt } };
         }
         const [network, sequence, hash, updated, expectedSequence, expectedHash,
           zeroHash, guardNetwork, guardSequence, guardHash, whereSequence, whereHash] = this.values;
