@@ -1,5 +1,9 @@
 # CRYPTIC Production Gate Runbook v1
 
+## Current policy precedence
+
+The current sequence-anchor authorization contract is the GCF/1 finality-certificate path described below. The earlier CRYPTIC-GOD-POLICY-TRANSITION/1 signed GOD transition proposal was an intermediate design and is superseded for anchor advancement; do not deploy or configure it as the current anchor authorization path. Proposal admission uses the active validator-set policy, while anchor mutation requires an independently verified GCF finality certificate bound to the exact old/new anchor tuple. This does not remove the independent HCCGN proof-root, GAIA-JUSTICE authority, validator key-custody, or physical durability gates. Any historical CI entry describing the GOD transition signer is implementation history, not current deployment instructions.
+
 This runbook distinguishes deployable software from external authority and hardware evidence. GCF proposal admission now uses the configured validator set as its local governance policy; GCF finality still requires its existing strict greater-than-two-thirds weighted PREVOTE and PRECOMMIT quorums. The repository does not manufacture trust-root pins, validator keys, policy evidence, or durability claims.
 
 ## Upstream G.O.D. repository boundary
