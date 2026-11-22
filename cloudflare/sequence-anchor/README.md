@@ -91,7 +91,7 @@ The Python client now submits the certificate explicitly:
 ```python
 anchor.advance_sequence(
     network_id,
-    sequence=proposal["height"],
+    sequence=proposal["anchor_sequence"],
     policy_hash=proposal["payload_hash"],
     certificate=finalized["certificate"],
 )
@@ -100,7 +100,7 @@ anchor.advance_sequence(
 The proposal must use the previous anchor hash as `parent_hash`, and the new
 policy hash as `payload_hash`. For HCCGN policy updates, compute the digest
 with `HCCGNActiveTargetPolicy.digest_snapshot(snapshot)`, finalize a GCF
-proposal bound to that digest/sequence/parent, then pass the exact certificate
+proposal with `anchor_sequence=snapshot["sequence"]` bound to that digest and previous anchor hash, then pass the exact certificate
 to `HCCGNActiveTargetPolicy.install(snapshot, finality_certificate=certificate)`.
 An externally anchored policy install now fails closed without that certificate.
 The client performs signed anchor reads and CAS writes; the Worker independently
