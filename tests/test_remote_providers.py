@@ -13,8 +13,9 @@ from src.governance.remote_providers import (
     ANCHOR_DOMAIN, ANCHOR_SCHEMA, DECISION_SCHEMA, RESPONSE_DOMAIN,
     POLICY_TRANSITION_DOMAIN, POLICY_TRANSITION_SCHEMA,
     HTTPSSequenceAnchor, HTTPSJusticeProviders, RemoteProviderError,
-    SignedHTTPSDecisionClient, load_independently_pinned_root,
-    HTTPSHSMEd25519Signer, GODHTTPSGate, make_proposal_with_signer,
+    SignedHTTPSDecisionClient, SignedHTTPSPolicyTransitionClient,
+    load_independently_pinned_root, HTTPSHSMEd25519Signer, GODHTTPSGate,
+    make_proposal_with_signer,
     make_vote_with_signer, _canonical,
 )
 
@@ -55,6 +56,24 @@ class RemoteProviderTests(unittest.TestCase):
         return {**body, "signature": self.signed(
             self.god_private, POLICY_TRANSITION_DOMAIN, body
         )}
+
+    def anchor_authorization_provider(self):
+        owner = self
+
+        class Provider:
+            def __init__(self):
+                self.counter = 0
+
+            def authorize_transition(self, transition):
+                self.counter += 1
+                nonce = f"{self.counter:032x}"
+                return owner.policy_authorization(
+                    transition["network_id"], transition["sequence"],
+                    transition["policy_hash"], transition["expected_sequence"],
+                    transition["expected_policy_hash"], nonce,
+                )
+
+        return Provider()
 
     def test_decision_client_binds_signed_response_to_exact_request(self):
         def transport(method, url, headers, raw, timeout):
@@ -187,16 +206,99 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
+            authorization_provider=self.anchor_authorization_provider(),
             clock=lambda: self.now, transport=transport,
         )
         self.assertIsNone(anchor.read_sequence("test-net"))
         digest1 = "1" * 64
         digest2 = "2" * 64
-        self.assertTrue(anchor.advance_sequence("test-net", 1, digest1, authorization=self.policy_authorization("test-net", 1, digest1, 0, "0" * 64, "01" * 16)))
+        self.assertTrue(anchor.advance_sequence("test-net", 1, digest1))
         self.assertEqual(anchor.read_sequence("test-net"), (1, digest1))
-        self.assertFalse(anchor.advance_sequence("test-net", 1, digest1, authorization=self.policy_authorization("test-net", 1, digest1, 1, digest1, "02" * 16)))
-        self.assertTrue(anchor.advance_sequence("test-net", 2, digest2, authorization=self.policy_authorization("test-net", 2, digest2, 1, digest1, "03" * 16)))
+        self.assertFalse(anchor.advance_sequence("test-net", 1, digest1))
+        self.assertTrue(anchor.advance_sequence("test-net", 2, digest2))
         self.assertEqual(anchor.read_sequence("test-net"), (2, digest2))
+
+    def test_policy_transition_client_verifies_exact_signed_god_response(self):
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            body = {
+                "schema": POLICY_TRANSITION_SCHEMA,
+                "signer_id": "god-policy-root",
+                "capability": request["capability"],
+                "policy_id": request["policy_id"],
+                "network_id": request["network_id"],
+                "expected_sequence": request["expected_sequence"],
+                "expected_policy_hash": request["expected_policy_hash"],
+                "sequence": request["sequence"],
+                "policy_hash": request["policy_hash"],
+                "issued_at": request["issued_at"],
+                "expires_at": self.now + 120,
+                "nonce": request["nonce"],
+            }
+            return 200, {}, _canonical({
+                **body, "signature": self.signed(
+                    self.god_private, POLICY_TRANSITION_DOMAIN, body
+                )
+            })
+
+        client = SignedHTTPSPolicyTransitionClient(
+            "https://god.example/v1/anchor-transitions",
+            signer_id="god-policy-root", policy_id="cryptic-main-policy-v1",
+            trusted_public_key=self.god_public, clock=lambda: self.now,
+            transport=transport,
+        )
+        authorization = client.authorize_transition({
+            "network_id": "test-net", "sequence": 8, "policy_hash": "8" * 64,
+            "expected_sequence": 7, "expected_policy_hash": "7" * 64,
+        })
+        self.assertEqual(authorization["schema"], POLICY_TRANSITION_SCHEMA)
+        self.assertEqual(authorization["sequence"], 8)
+        self.assertEqual(authorization["expected_sequence"], 7)
+
+    def test_policy_transition_client_rejects_tuple_substitution(self):
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            body = {
+                "schema": POLICY_TRANSITION_SCHEMA,
+                "signer_id": "god-policy-root",
+                "capability": request["capability"],
+                "policy_id": request["policy_id"],
+                "network_id": request["network_id"],
+                "expected_sequence": request["expected_sequence"],
+                "expected_policy_hash": request["expected_policy_hash"],
+                "sequence": request["sequence"] + 1,
+                "policy_hash": request["policy_hash"],
+                "issued_at": request["issued_at"],
+                "expires_at": self.now + 120,
+                "nonce": request["nonce"],
+            }
+            return 200, {}, _canonical({
+                **body, "signature": self.signed(
+                    self.god_private, POLICY_TRANSITION_DOMAIN, body
+                )
+            })
+
+        client = SignedHTTPSPolicyTransitionClient(
+            "https://god.example/v1/anchor-transitions",
+            signer_id="god-policy-root", policy_id="cryptic-main-policy-v1",
+            trusted_public_key=self.god_public, clock=lambda: self.now,
+            transport=transport,
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "binding_mismatch"):
+            client.authorize_transition({
+                "network_id": "test-net", "sequence": 8, "policy_hash": "8" * 64,
+                "expected_sequence": 7, "expected_policy_hash": "7" * 64,
+            })
+
+    def test_anchor_write_fails_closed_without_god_authorization_provider(self):
+        anchor = HTTPSSequenceAnchor(
+            "https://anchor.example", signer_id="anchor-root",
+            trusted_public_key=self.public, write_token="T" * 40,
+            clock=lambda: self.now,
+            transport=lambda *_: self.fail("transport must not be called"),
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "authorization_provider_required"):
+            anchor.advance_sequence("test-net", 1, "1" * 64)
 
     def test_anchor_write_requires_authentication(self):
         anchor = HTTPSSequenceAnchor(
@@ -225,9 +327,10 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
+            authorization_provider=self.anchor_authorization_provider(),
             clock=lambda: self.now, transport=transport,
         )
-        self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64, authorization=self.policy_authorization("test", 6, "6" * 64, 5, "5" * 64, "04" * 16)))
+        self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64))
 
     def test_god_gate_uses_signed_remote_decision(self):
         def transport(method, url, headers, raw, timeout):
