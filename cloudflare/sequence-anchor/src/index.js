@@ -1,86 +1,9 @@
 const ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1";
 const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
 const ZERO_HASH = "0".repeat(64);
-const MAX_BODY_BYTES = 8192;
+const MAX_BODY_BYTES = 1_048_576;
 const HEX_256 = /^[0-9a-f]{64}$/;
 const NONCE = /^[0-9a-f]{32}$/;
-const POLICY_SCHEMA = "CRYPTIC-GOD-POLICY-TRANSITION/1";
-const POLICY_DOMAIN = new TextEncoder().encode(POLICY_SCHEMA + "\0");
-const POLICY_CAPABILITY = "cryptic.sequence_anchor.advance";
-const MAX_POLICY_TTL_SECONDS = 300;
-
-function decodeHex(value) {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
-    throw new Error("god_policy_public_key_invalid");
-  }
-  return Uint8Array.from(value.match(/../g), byte => parseInt(byte, 16));
-}
-
-async function verifyPolicyAuthorization(authorization, transition, networkId, env, now) {
-  const required = ["schema", "signer_id", "capability", "policy_id", "network_id",
-    "expected_sequence", "expected_policy_hash", "sequence", "policy_hash",
-    "issued_at", "expires_at", "nonce", "signature"];
-  if (!authorization || typeof authorization !== "object" || Array.isArray(authorization) ||
-      Object.keys(authorization).sort().join("|") !== required.slice().sort().join("|")) {
-    return { ok: false, reason: "policy_authorization_schema_invalid" };
-  }
-  if (!env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX || !env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256 ||
-      !env.ANCHOR_GOD_POLICY_SIGNER_ID || !env.ANCHOR_POLICY_ID) {
-    return { ok: false, reason: "god_policy_trust_not_configured" };
-  }
-  if (!HEX_256.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX) ||
-      !HEX_256.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256)) {
-    return { ok: false, reason: "god_policy_trust_configuration_invalid" };
-  }
-  const a = authorization;
-  if (a.schema !== POLICY_SCHEMA || a.signer_id !== env.ANCHOR_GOD_POLICY_SIGNER_ID ||
-      a.capability !== POLICY_CAPABILITY || a.policy_id !== env.ANCHOR_POLICY_ID ||
-      a.network_id !== networkId || a.expected_sequence !== transition.expected_sequence ||
-      a.expected_policy_hash !== transition.expected_policy_hash ||
-      a.sequence !== transition.sequence || a.policy_hash !== transition.policy_hash ||
-      !NONCE.test(a.nonce) || !Number.isSafeInteger(a.issued_at) ||
-      !Number.isSafeInteger(a.expires_at) || a.expires_at <= a.issued_at ||
-      a.expires_at - a.issued_at > MAX_POLICY_TTL_SECONDS ||
-      a.issued_at > now + 30 || a.expires_at < now - 30) {
-    return { ok: false, reason: "policy_authorization_binding_or_expiry_invalid" };
-  }
-  try {
-    if (typeof a.signature !== "string" ||
-        !/^[A-Za-z0-9+/]{86}==$/.test(a.signature)) {
-      return { ok: false, reason: "policy_authorization_signature_invalid" };
-    }
-    const publicRaw = decodeHex(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX);
-    const fingerprintBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", publicRaw));
-    const fingerprint = Array.from(fingerprintBytes, byte => byte.toString(16).padStart(2, "0")).join("");
-    if (!/^[0-9a-f]{64}$/.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) ||
-        fingerprint !== env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) {
-      return { ok: false, reason: "god_policy_trust_fingerprint_pin_mismatch" };
-    }
-    let publicKey;
-    try {
-      publicKey = await crypto.subtle.importKey(
-        "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
-      );
-    } catch {
-      return { ok: false, reason: "god_policy_trust_configuration_invalid" };
-    }
-    const signature = decodeBase64(a.signature);
-    if (signature.length !== 64) throw new Error("signature_length_invalid");
-    const unsigned = Object.fromEntries(Object.entries(a).filter(([key]) => key !== "signature"));
-    const payload = new TextEncoder().encode(canonical(unsigned));
-    const message = new Uint8Array(POLICY_DOMAIN.length + payload.length);
-    message.set(POLICY_DOMAIN);
-    message.set(payload, POLICY_DOMAIN.length);
-    const valid = await crypto.subtle.verify("Ed25519", publicKey, signature, message);
-    return valid
-      ? { ok: true, signerId: a.signer_id, nonce: a.nonce, expiresAt: a.expires_at }
-      : { ok: false, reason: "policy_authorization_signature_invalid" };
-  } catch {
-    return { ok: false, reason: "policy_authorization_signature_invalid" };
-  }
-}
-
-
 function canonical(value) {
   if (Array.isArray(value)) return "[" + value.map(canonical).join(",") + "]";
   if (value && typeof value === "object") {
@@ -469,14 +392,9 @@ async function advanceAnchor(request, networkId, env) {
     return json({ error: "sequence_not_increasing" }, 409);
   }
   try {
-    // Expired authorization receipts are safe to prune. A nonce is inserted
-    // only when the exact expected anchor state still exists (or is absent for
-    // initialization); duplicate signer/nonce pairs cannot be reused.
-    await env.ANCHOR_DB.prepare(
-      "DELETE FROM used_authorization_nonces WHERE expires_at < ?"
-    ).bind(now - 30).run();
-    const nonceResult = await env.ANCHOR_DB.prepare(`
-      INSERT INTO used_authorization_nonces(signer_id, nonce, network_id, expires_at)
+    // Persist the full certificate digest only while the expected tuple is current.
+    const receiptResult = await env.ANCHOR_DB.prepare(`
+      INSERT INTO used_finality_certificates(certificate_digest, network_id, sequence, accepted_at)
       SELECT ?, ?, ?, ?
       WHERE ((? = 0 AND ? = ? AND NOT EXISTS (
         SELECT 1 FROM anchors WHERE network_id = ?
@@ -484,19 +402,19 @@ async function advanceAnchor(request, networkId, env) {
         SELECT 1 FROM anchors
         WHERE network_id = ? AND sequence = ? AND policy_hash = ?
       ))
-      ON CONFLICT(signer_id, nonce) DO NOTHING
+      ON CONFLICT(certificate_digest) DO NOTHING
     `).bind(
-      authorization.signerId, authorization.nonce, networkId, authorization.expiresAt,
+      authorization.certificateDigest, networkId, body.sequence, now,
       body.expected_sequence, body.expected_policy_hash, ZERO_HASH, networkId,
       networkId, body.expected_sequence, body.expected_policy_hash
     ).run();
-    if (!nonceResult?.success || nonceResult.meta?.changes !== 1) {
-      return json({ error: "authorization_replayed_or_state_changed" }, 412);
+    if (!receiptResult?.success || receiptResult.meta?.changes !== 1) {
+      return json({ error: "certificate_replayed_or_state_changed" }, 412);
     }
 
     // One conditional UPSERT remains the anchor linearization point. The
-    // nonce receipt is consumed first in the same request; a failed CAS may
-    // consume a proof, so clients must obtain a fresh GOD authorization.
+    // certificate receipt is consumed before CAS; a failed CAS requires a
+    // new certificate bound to the updated expected tuple.
     const result = await env.ANCHOR_DB.prepare(`
       INSERT INTO anchors(network_id, sequence, policy_hash, updated_at)
       SELECT ?, ?, ?, ?
