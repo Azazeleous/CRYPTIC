@@ -15,7 +15,7 @@ The HCCGN miner implementation is not modified by this coordinator.
 2. The coordinator resolves the target using the configured active-policy
    resolver at the job's network, height, epoch, and issue-time boundary.
    Caller-supplied targets are not accepted.
-3. The coordinator signs and persists the bounded job before returning it.
+3. The coordinator signs and persists the bounded job against one assigned worker before returning it. A different authenticated worker cannot fetch or submit against that job.
 4. An authenticated worker retrieves the job through
    `GET /v1/pool/jobs/{job_id}`.
 5. The worker submits its proof envelope through `POST /v1/pool/shares`.
@@ -30,7 +30,8 @@ The HCCGN miner implementation is not modified by this coordinator.
 ## Active policy and job lifecycle
 
 - Jobs have a bounded lifetime of at most 300 seconds.
-- Jobs are persisted before being returned to workers.
+- Jobs are persisted before being returned to their assigned worker.
+- The operator must allocate non-overlapping nonce windows when issuing jobs to different workers; worker binding alone does not partition the nonce space.
 - Revoked jobs are rejected.
 - Shares are checked against the currently active target policy at submission
   time, not merely the target that was active when the job was issued. A policy
