@@ -136,3 +136,47 @@ statement was exercised against D1:
 This verifies the D1 SQL behavior and cleanup for a single sequential test.
 It does not establish concurrent multi-region behavior, signed Worker request
 execution, rollback resistance, or independent service administration.
+
+## GOD policy-transition issuer API
+
+```text
+POST <GOD_ANCHOR_TRANSITION_URL>
+Content-Type: application/json
+Accept: application/json
+
+Request schema: CRYPTIC-GOD-POLICY-TRANSITION-REQUEST/1
+Response schema: CRYPTIC-GOD-POLICY-TRANSITION/1
+```
+
+The request contains exactly: `schema`, `capability`, `policy_id`,
+`network_id`, `expected_sequence`, `expected_policy_hash`, `sequence`,
+`policy_hash`, `issued_at`, and `nonce`. The capability is
+`cryptic.sequence_anchor.advance`; the nonce is 32 lowercase hexadecimal
+characters. The GOD service evaluates the actual policy and authorization
+state before responding. It MUST NOT act as a blind signing oracle.
+
+A successful response contains exactly: `schema`, `signer_id`, `capability`,
+`policy_id`, `network_id`, `expected_sequence`, `expected_policy_hash`,
+`sequence`, `policy_hash`, `issued_at`, `expires_at`, `nonce`, and
+`signature`. The response repeats the request's tuple, issued_at, and nonce.
+Its Ed25519 signature covers canonical UTF-8 JSON of all response fields
+except `signature`, prefixed by `CRYPTIC-GOD-POLICY-TRANSITION/1` and one NUL
+byte. The client checks the signer, policy, capability, exact tuple, nonce,
+validity window, and signature. The Worker independently checks the same
+signature, policy pin, tuple, validity window, and one-time nonce receipt.
+
+Return HTTP 200 only for an authorized transition; return 403 for a policy
+denial. Do not sign caller-supplied tuples merely because the caller is
+authenticated. The service must enforce policy version, caller identity,
+network scope, signer revocation/rotation, and an auditable governance decision.
+The private GOD policy key remains inside the independently administered GOD
+signing boundary. The validator and anchor Worker receive only the public key
+and independently sourced fingerprint.
+
+```bash
+# Example environment names only; supply values from the approved operator
+# secret manager. Never put credentials or private keys on the command line.
+GOD_ANCHOR_TRANSITION_URL=https://<approved-god-authority>/v1/anchor-transitions
+GOD_POLICY_SIGNER_ID=<approved-signer-id>
+CRYPTIC_ANCHOR_POLICY_ID=<approved-policy-id>
+```
