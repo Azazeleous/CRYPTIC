@@ -38,7 +38,8 @@ class HCCGNRegistryError(ValueError):
 class HCCGNSequenceAnchor(Protocol):
     """Externally protected monotonic checkpoint for policy sequence/hash."""
     def read_sequence(self, network_id: str) -> tuple[int, str] | None: ...
-    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool: ...
+    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str,
+                         *, certificate: Mapping[str, Any] | None = None) -> bool: ...
 
 
 def _canonical(value: Any) -> bytes:
@@ -219,7 +220,13 @@ class HCCGNActiveTargetPolicy:
         digest = hashlib.sha256(POLICY_DOMAIN + _canonical(policy) + signature).hexdigest()
         return policy, target, digest
 
-    def install(self, snapshot: Mapping[str, Any]) -> str:
+    def digest_snapshot(self, snapshot: Mapping[str, Any]) -> str:
+        """Return the signed HCCGN policy digest that a GCF proposal must bind."""
+        _policy, _target, digest = self._verify_snapshot(snapshot)
+        return digest
+
+    def install(self, snapshot: Mapping[str, Any], *,
+                finality_certificate: Mapping[str, Any] | None = None) -> str:
         policy, target, digest = self._verify_snapshot(snapshot)
         now = _uint(int(self.clock()), "clock")
         if not policy["issued_at"] <= now <= policy["expires_at"]:
@@ -234,7 +241,11 @@ class HCCGNActiveTargetPolicy:
             try:
                 anchored = anchor.read_sequence(network)
                 if anchored is None:
-                    if anchor.advance_sequence(network, seq, digest) is not True:
+                    if not isinstance(finality_certificate, Mapping):
+                        raise HCCGNRegistryError("gcf_finality_certificate_required")
+                    if anchor.advance_sequence(
+                        network, seq, digest, certificate=finality_certificate
+                    ) is not True:
                         raise HCCGNRegistryError("external_sequence_anchor_update_failed")
                 else:
                     if not isinstance(anchored, tuple) or len(anchored) != 2:
@@ -249,8 +260,13 @@ class HCCGNActiveTargetPolicy:
                         raise HCCGNRegistryError("external_sequence_anchor_response_invalid") from exc
                     if seq < anchored_sequence or (seq == anchored_sequence and digest != anchored_hash):
                         raise HCCGNRegistryError("external_sequence_anchor_rollback")
-                    if seq > anchored_sequence and anchor.advance_sequence(network, seq, digest) is not True:
-                        raise HCCGNRegistryError("external_sequence_anchor_update_failed")
+                    if seq > anchored_sequence:
+                        if not isinstance(finality_certificate, Mapping):
+                            raise HCCGNRegistryError("gcf_finality_certificate_required")
+                        if anchor.advance_sequence(
+                            network, seq, digest, certificate=finality_certificate
+                        ) is not True:
+                            raise HCCGNRegistryError("external_sequence_anchor_update_failed")
             except HCCGNRegistryError:
                 raise
             except Exception as exc:
