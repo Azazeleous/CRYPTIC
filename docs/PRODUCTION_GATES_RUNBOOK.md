@@ -168,3 +168,12 @@ Existing databases using the earlier round-scoped primary key are migrated on st
 **Liveness trade-off:** this conservative rule does not implement round-change unlocks. A validator locked to a candidate for a height/phase remains locked for that height/phase, even if the network later needs another round. A future round-change protocol must define and verify a signed unlock/locking certificate, safety-preserving POLC rules, timeout evidence, and restart recovery before relaxing this invariant. Do not clear locks manually or treat a timeout as authorization to vote for another candidate.
 
 This is a local engine safety invariant, not evidence of a complete multi-validator round controller or live multi-host BFT operation. CI must exercise cross-round conflicts and legacy-database migration before the capability is promoted.
+
+
+Verification on code commit 0ec655907a3f1a986ccd7c5c66f9efe525336a58:
+- CRYPTIC CI run 45037739415 passed 398 tests (2 skipped).
+- Production-gate contracts run 45037739458 passed on Ubuntu and Windows, including the cross-round vote-lock and SQLite migration cases.
+- Mining-engine tests run 45037739237 passed.
+- GAIA local trophy run 45037739324 passed.
+
+The initial Windows run exposed only a test-fixture file-handle cleanup issue; both SQLite fixture connections are now explicitly closed, and the corrected Windows run passed.
