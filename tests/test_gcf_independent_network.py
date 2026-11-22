@@ -102,6 +102,20 @@ class IndependentVerifierTests(unittest.TestCase):
             ))
         return self.engine.finalize(digest)["certificate"]
 
+    def test_proposal_can_bind_anchor_sequence_independently_of_block_height(self):
+        base = self.proposal
+        proposal = make_proposal(
+            network_id=base["network_id"], epoch=base["epoch"], height=17, round=base["round"],
+            parent_hash=base["parent_hash"], payload_hash=base["payload_hash"],
+            proof_hash=base["proof_hash"], justice_commitment=base["justice_commitment"],
+            proposer_id=base["proposer_id"], proposer_private_key_hex=self.proposer_private,
+            nonce=base["nonce"], issued_at=base["issued_at"], expires_at=base["expires_at"],
+            anchor_sequence=3,
+        )
+        _digest, normalized = self.engine._validate_proposal(proposal)
+        self.assertEqual(normalized["height"], 17)
+        self.assertEqual(normalized["anchor_sequence"], 3)
+
     def test_independent_verifier_accepts_engine_certificate(self):
         cert = self.build_certificate()
         result = verify_certificate(
