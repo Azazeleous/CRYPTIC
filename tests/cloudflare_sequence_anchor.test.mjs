@@ -165,7 +165,7 @@ test("signed GOD transition authorizes initialization and advancement; stale CAS
     headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
       "content-type": "application/json" }, body: first,
   });
-  assert.equal(initialized.status, 200);
+  assert.equal(initialized.status, 200, JSON.stringify(await initialized.clone().json()));
   const initRecord = await initialized.json();
   assert.equal(initRecord.accepted, true);
   assert.equal(initRecord.nonce, first.nonce);
@@ -230,7 +230,7 @@ test("rejects missing, forged, mismatched, wrong-policy and replayed GOD authori
 
   const valid = { ...base, authorization: await authorize(godPrivateKey, base, "25".repeat(16)) };
   response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: valid });
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   const replay = { ...base, nonce: "26".repeat(16), authorization: valid.authorization };
   response = await request(env, "PUT", "/v1/anchors/test-net", { headers, body: replay });
   assert.equal(response.status, 412);
