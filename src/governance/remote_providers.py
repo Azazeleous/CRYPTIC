@@ -910,24 +910,87 @@ class PersistentGCFVoteSigner:
         try:
             db.execute("PRAGMA synchronous=FULL")
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("""
+            authorization = db.execute("""
+                SELECT value_digest,round_change_certificate_digest,
+                       highest_polc_round,highest_polc_value_digest
+                FROM gcf_vote_authorized_proposals
+                WHERE network_id=? AND epoch=? AND height=? AND round=? AND candidate_digest=?
+            """, (self.network_id, self.epoch, body["height"], body["round"], digest)).fetchone()
+            if authorization is None:
+                raise RemoteProviderError("vote_signing_proposal_authorization_required")
+            lock = db.execute("""
                 SELECT validator_set_hash,candidate_digest,message_digest
                 FROM gcf_vote_signing_locks
                 WHERE network_id=? AND epoch=? AND height=?
                   AND vote_type=? AND validator_id=?
             """, (self.network_id, self.epoch, body["height"],
                   body["vote_type"], self.validator_id)).fetchone()
-            if row is not None:
-                if row[0] != self.validator_set_hash:
+            state = db.execute("""
+                SELECT round,candidate_digest,value_digest
+                FROM gcf_vote_signing_round_state
+                WHERE network_id=? AND epoch=? AND height=?
+                  AND vote_type=? AND validator_id=?
+            """, (self.network_id, self.epoch, body["height"],
+                  body["vote_type"], self.validator_id)).fetchone()
+            if lock is not None:
+                if lock[0] != self.validator_set_hash:
                     raise RemoteProviderError("vote_signing_validator_set_changed")
-                if row[1] != digest or row[2] != message_digest:
-                    raise RemoteProviderError("vote_signing_lock_conflict")
+                if lock[1] == digest and lock[2] == message_digest:
+                    # Exact-message retry after an ambiguous HSM result.
+                    pass
+                else:
+                    if state is None:
+                        raise RemoteProviderError("vote_signing_legacy_lock_transition_forbidden")
+                    if state[1] != lock[1]:
+                        raise RemoteProviderError("vote_signing_lock_state_corrupt")
+                    same_value = authorization[0] == state[2]
+                    if same_value:
+                        if body["round"] <= state[0]:
+                            raise RemoteProviderError("vote_signing_round_not_advancing")
+                    else:
+                        highest_round, highest_value = authorization[2], authorization[3]
+                        if (highest_round is None or highest_round <= state[0]
+                                or highest_round >= body["round"]
+                                or highest_value != authorization[0]):
+                            raise RemoteProviderError("vote_signing_round_change_not_authorized")
+                    db.execute("""
+                        INSERT OR IGNORE INTO gcf_vote_signing_history
+                        VALUES(?,?,?,?,?,?,?,?,?,'INTENT',?)
+                    """, (lock[2], self.network_id, self.epoch, body["height"],
+                          state[0], body["vote_type"], self.validator_id,
+                          lock[1], state[2], int(self.clock())))
+                    db.execute("""
+                        UPDATE gcf_vote_signing_locks
+                        SET candidate_digest=?,message_digest=?
+                        WHERE network_id=? AND epoch=? AND height=?
+                          AND vote_type=? AND validator_id=?
+                    """, (digest, message_digest, self.network_id, self.epoch,
+                          body["height"], body["vote_type"], self.validator_id))
+                    db.execute("""
+                        UPDATE gcf_vote_signing_round_state
+                        SET round=?,candidate_digest=?,value_digest=?
+                        WHERE network_id=? AND epoch=? AND height=?
+                          AND vote_type=? AND validator_id=?
+                    """, (body["round"], digest, authorization[0], self.network_id,
+                          self.epoch, body["height"], body["vote_type"], self.validator_id))
             else:
+                if state is not None:
+                    raise RemoteProviderError("vote_signing_round_state_orphaned")
                 db.execute("""
                     INSERT INTO gcf_vote_signing_locks VALUES(?,?,?,?,?,?,?,?)
                 """, (self.network_id, self.epoch, body["height"],
                       body["vote_type"], self.validator_id, self.validator_set_hash,
                       digest, message_digest))
+                db.execute("""
+                    INSERT INTO gcf_vote_signing_round_state VALUES(?,?,?,?,?,?,?,?)
+                """, (self.network_id, self.epoch, body["height"], body["vote_type"],
+                      self.validator_id, body["round"], digest, authorization[0]))
+            db.execute("""
+                INSERT OR IGNORE INTO gcf_vote_signing_history
+                VALUES(?,?,?,?,?,?,?,?,?,'INTENT',?)
+            """, (message_digest, self.network_id, self.epoch, body["height"],
+                  body["round"], body["vote_type"], self.validator_id,
+                  digest, authorization[0], int(self.clock())))
             db.execute("COMMIT")
         except Exception:
             if db.in_transaction:
@@ -943,6 +1006,9 @@ class PersistentGCFVoteSigner:
             self.public_key.verify(signature, message)
         except (TypeError, ValueError, InvalidSignature) as exc:
             raise RemoteProviderError("vote_signer_signature_invalid") from exc
+        with closing(sqlite3.connect(self.db_path, timeout=15, isolation_level=None)) as db:
+            db.execute("UPDATE gcf_vote_signing_history SET state='SIGNED' WHERE message_digest=?",
+                       (message_digest,))
         return signature
 
 
