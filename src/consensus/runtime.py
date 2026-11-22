@@ -20,7 +20,7 @@ from src.consensus.hccgn_registry import (
 )
 from src.consensus.hccgn_work import HCCGNWorkProofProvider, PROFILE_ID
 from src.consensus.http_api import GCFWSGI
-from src.governance.god_adapter import GODNetworkAuthorizer
+from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
 from src.governance.remote_providers import load_independently_pinned_root
 
@@ -69,7 +69,7 @@ class ConsensusRuntime:
     work_provider: HCCGNWorkProofProvider
     hccgn_gate: HCCGNVerifierAdapter
     justice_gate: JusticeEvidenceVerifier
-    god_gate: GODNetworkAuthorizer
+    god_gate: ValidatorSetProposalAuthorizer
     engine: GCFEngine
     adam_store: AdamCommitStore
     apex: APEXValidator
@@ -89,7 +89,7 @@ def build_consensus_runtime(
     god_gate: Any | None,
     policy_evidence_verifier: Callable | None,
     justice_evidence_verifier: Callable | None,
-    consensus_endpoint: str,
+    consensus_endpoint: str | None = None,
     clock=None,
     require_external_anchor: bool = True,
 ) -> ConsensusRuntime:
@@ -102,8 +102,6 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("network_id_invalid")
     if not isinstance(god_signer_id, str) or not god_signer_id:
         raise RuntimeConfigurationError("god_signer_id_invalid")
-    if not isinstance(consensus_endpoint, str) or not consensus_endpoint:
-        raise RuntimeConfigurationError("consensus_endpoint_required")
     if require_external_anchor and sequence_anchor is None:
         raise RuntimeConfigurationError("external_sequence_anchor_required")
     root = Path(data_dir).expanduser()
@@ -156,10 +154,11 @@ def build_consensus_runtime(
         policy_verifier=policy_evidence_verifier,
         evidence_verifier=justice_evidence_verifier,
     )
-    god_authorizer = GODNetworkAuthorizer(
-        god_gate=god_gate, endpoint=consensus_endpoint
-    )
     validator_set = ValidatorSet(network_id, epoch, validators)
+    # Proposal admission is governed by the configured validator set. The
+    # independent GCF PREVOTE/PRECOMMIT weighted quorum still controls finality.
+    # god_gate is retained as a compatibility argument but is not consulted.
+    god_authorizer = ValidatorSetProposalAuthorizer(validator_set)
     engine_kwargs = {
         "hccgn_verifier": hccgn_gate,
         "god_authorizer": god_authorizer,
