@@ -134,6 +134,10 @@ const GCF_SCHEMA = "GCF/1";
 const GCF_PROPOSAL_DOMAIN = new TextEncoder().encode("GCF/1|PROPOSAL|ED25519\0");
 const GCF_VOTE_DOMAIN = new TextEncoder().encode("GCF/1|VOTE|ED25519\0");
 const GCF_CERT_DOMAIN = new TextEncoder().encode("GCF/1|FINALITY-CERTIFICATE\0");
+const GCF_ROUND_CHANGE_DOMAIN = new TextEncoder().encode("GCF/1|ROUND-CHANGE|ED25519\\0");
+const GCF_ROUND_CHANGE_CERT_DOMAIN = new TextEncoder().encode("GCF/1|ROUND-CHANGE-CERTIFICATE\\0");
+const GCF_POLC_SCHEMA = "GCF-POLC/1";
+const GCF_ROUND_CHANGE_SCHEMA = "GCF-ROUND-CHANGE/1";
 
 async function sha256Hex(bytes) {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
