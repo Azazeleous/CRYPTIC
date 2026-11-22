@@ -24,6 +24,7 @@ CERT_DOMAIN = b"GCF/1|FINALITY-CERTIFICATE\x00"
 ZERO_HASH = "0" * 64
 MAX_SQLITE_INT = (1 << 63) - 1
 MAX_ROUND_CHANGE_MESSAGE_BYTES = 1_048_576
+MAX_PROPOSAL_BYTES = 4_194_304
 
 
 class GCFError(ValueError):
@@ -379,7 +380,10 @@ class GCFEngine:
         proposer = self.validator_set.validators.get(proposal["proposer_id"])
         if proposer is None or proposer.public_key_hex != public:
             raise GCFError("PROPOSER_NOT_IN_ACTIVE_VALIDATOR_SET")
-        digest = sha256_hex(canonical_bytes(dict(proposal)))
+        encoded_proposal = canonical_bytes(dict(proposal))
+        if len(encoded_proposal) > MAX_PROPOSAL_BYTES:
+            raise GCFError("PROPOSAL_TOO_LARGE")
+        digest = sha256_hex(encoded_proposal)
         if proposal["round"] == 0:
             if "round_change_certificate" in proposal:
                 raise GCFError("ROUND_ZERO_MUST_NOT_CARRY_ROUND_CHANGE_CERTIFICATE")
