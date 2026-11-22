@@ -251,7 +251,7 @@ test("certificate digest replay is rejected even when request nonce changes", as
   ctx.env.ANCHOR_DB.rows.delete("test-net");
   const replay = { ...first, nonce: "f".repeat(32) };
   assert.equal((await put(ctx, replay, true)).status, 412);
-  assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").sequence, 1);
+  assert.equal(ctx.env.ANCHOR_DB.rows.has("test-net"), false);
 });
 
 test("missing pinned validator-set configuration fails closed as unavailable", async () => {
