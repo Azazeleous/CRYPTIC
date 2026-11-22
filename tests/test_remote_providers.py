@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from src.governance.remote_providers import (
     ANCHOR_DOMAIN, ANCHOR_SCHEMA, DECISION_SCHEMA, RESPONSE_DOMAIN,
+    POLICY_TRANSITION_DOMAIN, POLICY_TRANSITION_SCHEMA,
     HTTPSSequenceAnchor, HTTPSJusticeProviders, RemoteProviderError,
     SignedHTTPSDecisionClient, load_independently_pinned_root,
     HTTPSHSMEd25519Signer, GODHTTPSGate, make_proposal_with_signer,
@@ -30,9 +31,30 @@ class RemoteProviderTests(unittest.TestCase):
     def setUp(self):
         self.now = 1_800_000_000
         self.private, self.public = keypair()
+        self.god_private, self.god_public = keypair()
 
     def signed(self, private, domain, body):
         return base64.b64encode(private.sign(domain + _canonical(body))).decode("ascii")
+
+    def policy_authorization(self, network, sequence, digest, expected_sequence,
+                             expected_hash, nonce):
+        body = {
+            "schema": POLICY_TRANSITION_SCHEMA,
+            "signer_id": "god-policy-root",
+            "capability": "cryptic.sequence_anchor.advance",
+            "policy_id": "cryptic-main-policy-v1",
+            "network_id": network,
+            "expected_sequence": expected_sequence,
+            "expected_policy_hash": expected_hash,
+            "sequence": sequence,
+            "policy_hash": digest,
+            "issued_at": self.now - 1,
+            "expires_at": self.now + 120,
+            "nonce": nonce,
+        }
+        return {**body, "signature": self.signed(
+            self.god_private, POLICY_TRANSITION_DOMAIN, body
+        )}
 
     def test_decision_client_binds_signed_response_to_exact_request(self):
         def transport(method, url, headers, raw, timeout):
@@ -127,6 +149,18 @@ class RemoteProviderTests(unittest.TestCase):
                 })
             self.assertEqual(headers.get("Authorization"), "Bearer " + "T" * 40)
             request = json.loads(raw)
+            authorization = request["authorization"]
+            signature = base64.b64decode(authorization["signature"], validate=True)
+            unsigned_authorization = {k: v for k, v in authorization.items() if k != "signature"}
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+            Ed25519PublicKey.from_public_bytes(self.god_public).verify(
+                signature, POLICY_TRANSITION_DOMAIN + _canonical(unsigned_authorization)
+            )
+            self.assertEqual(authorization["network_id"], network)
+            self.assertEqual(authorization["sequence"], request["sequence"])
+            self.assertEqual(authorization["policy_hash"], request["policy_hash"])
+            self.assertEqual(authorization["expected_sequence"], request["expected_sequence"])
+            self.assertEqual(authorization["expected_policy_hash"], request["expected_policy_hash"])
             if current is None:
                 if headers.get("If-None-Match") != "*":
                     return 412, {}, b""
@@ -158,10 +192,10 @@ class RemoteProviderTests(unittest.TestCase):
         self.assertIsNone(anchor.read_sequence("test-net"))
         digest1 = "1" * 64
         digest2 = "2" * 64
-        self.assertTrue(anchor.advance_sequence("test-net", 1, digest1))
+        self.assertTrue(anchor.advance_sequence("test-net", 1, digest1, authorization=self.policy_authorization("test-net", 1, digest1, 0, "0" * 64, "01" * 16)))
         self.assertEqual(anchor.read_sequence("test-net"), (1, digest1))
-        self.assertFalse(anchor.advance_sequence("test-net", 1, digest1))
-        self.assertTrue(anchor.advance_sequence("test-net", 2, digest2))
+        self.assertFalse(anchor.advance_sequence("test-net", 1, digest1, authorization=self.policy_authorization("test-net", 1, digest1, 1, digest1, "02" * 16)))
+        self.assertTrue(anchor.advance_sequence("test-net", 2, digest2, authorization=self.policy_authorization("test-net", 2, digest2, 1, digest1, "03" * 16)))
         self.assertEqual(anchor.read_sequence("test-net"), (2, digest2))
 
     def test_anchor_write_requires_authentication(self):
@@ -193,7 +227,7 @@ class RemoteProviderTests(unittest.TestCase):
             trusted_public_key=self.public, write_token="T" * 40,
             clock=lambda: self.now, transport=transport,
         )
-        self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64))
+        self.assertFalse(anchor.advance_sequence("test", 6, "6" * 64, authorization=self.policy_authorization("test", 6, "6" * 64, 5, "5" * 64, "04" * 16)))
 
     def test_god_gate_uses_signed_remote_decision(self):
         def transport(method, url, headers, raw, timeout):
