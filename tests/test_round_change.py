@@ -144,7 +144,7 @@ class RoundChangeProofTests(unittest.TestCase):
         self.assertIn("VOTE_TIME_INVALID", result["reason"])
 
     def test_polc_vote_list_is_bounded_by_validator_set(self):
-        polc = self.polc(self.proposal("h"))
+        polc = self.polc(self.proposal("8"))
         polc["prevotes"] = polc["prevotes"] + [dict(polc["prevotes"][0])]
         polc["digest"] = polc_digest(polc)
         result = verify_polc(polc, validator_set=self.vset, clock=lambda: self.now)
