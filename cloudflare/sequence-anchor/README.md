@@ -98,9 +98,13 @@ anchor.advance_sequence(
 ```
 
 The proposal must use the previous anchor hash as `parent_hash`, and the new
-policy hash as `payload_hash`. The caller must supply a certificate that was
-finalized for that exact proposal. The client performs signed anchor reads
-and CAS writes; the Worker independently performs certificate verification.
+policy hash as `payload_hash`. For HCCGN policy updates, compute the digest
+with `HCCGNActiveTargetPolicy.digest_snapshot(snapshot)`, finalize a GCF
+proposal bound to that digest/sequence/parent, then pass the exact certificate
+to `HCCGNActiveTargetPolicy.install(snapshot, finality_certificate=certificate)`.
+An externally anchored policy install now fails closed without that certificate.
+The client performs signed anchor reads and CAS writes; the Worker independently
+performs certificate verification.
 
 ## Local deployment sequence
 
