@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from src.consensus.gcf import ValidatorSet
 from src.consensus.peer_transport import (
@@ -29,7 +29,7 @@ class RecordingPeerNode(GCFPeerNode):
 
 
 def issue_certificate(subject_key, issuer_name, issuer_key, *, common_name,
-                     is_ca=False, dns_name=None):
+                     is_ca=False, dns_name=None, extended_key_usage=None):
     now = dt.datetime.now(dt.timezone.utc)
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
     builder = (
@@ -42,6 +42,11 @@ def issue_certificate(subject_key, issuer_name, issuer_key, *, common_name,
         .not_valid_after(now + dt.timedelta(days=2))
         .add_extension(x509.BasicConstraints(ca=is_ca, path_length=1 if is_ca else None), critical=True)
     )
+    if extended_key_usage:
+        builder = builder.add_extension(
+            x509.ExtendedKeyUsage([extended_key_usage]),
+            critical=False,
+        )
     if dns_name:
         builder = builder.add_extension(
             x509.SubjectAlternativeName([
@@ -119,10 +124,12 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
         ca_cert = issue_certificate(ca_key, ca_name, ca_key, common_name="CRYPTIC test CA", is_ca=True)
         sender_cert = issue_certificate(
             self.keys["v0"], ca_name, ca_key, common_name="validator-v0",
+            extended_key_usage=ExtendedKeyUsageOID.CLIENT_AUTH,
         )
         receiver_cert = issue_certificate(
             self.keys["v1"], ca_name, ca_key, common_name="localhost",
             dns_name="localhost",
+            extended_key_usage=ExtendedKeyUsageOID.SERVER_AUTH,
         )
         ca_path = Path(self.temp.name) / "ca.pem"
         sender_cert_path = Path(self.temp.name) / "sender.pem"
