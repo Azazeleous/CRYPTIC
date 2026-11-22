@@ -13,6 +13,8 @@ from src.governance.remote_providers import (
     ANCHOR_DOMAIN, ANCHOR_SCHEMA, DECISION_SCHEMA, RESPONSE_DOMAIN,
     GOD_ANCHOR_AUTH_DOMAIN, GOD_ANCHOR_AUTH_SCHEMA,
     HTTPSSequenceAnchor, HTTPSJusticeProviders, RemoteProviderError,
+    SignedHTTPSAnchorAuthorizationClient, GOD_ANCHOR_AUTH_DOMAIN,
+    GOD_ANCHOR_AUTH_SCHEMA, GOD_ANCHOR_AUTH_REQUEST_SCHEMA,
     SignedHTTPSDecisionClient, load_independently_pinned_root,
     HTTPSHSMEd25519Signer, GODHTTPSGate, make_proposal_with_signer,
     make_vote_with_signer, _canonical,
@@ -110,6 +112,67 @@ class RemoteProviderTests(unittest.TestCase):
         self.assertIsNotNone(providers.verify_evidence)
         with self.assertRaisesRegex(RemoteProviderError, "must_be_independent"):
             HTTPSJusticeProviders(policy=policy, evidence=policy)
+
+    def test_god_anchor_authorization_client_verifies_exact_tuple(self):
+        update = {
+            "schema": ANCHOR_SCHEMA, "network_id": "test-net",
+            "sequence": 8, "policy_hash": "8" * 64,
+            "expected_sequence": 7, "expected_policy_hash": "7" * 64,
+            "issued_at": self.now, "nonce": "ab" * 16,
+        }
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            self.assertEqual(request["schema"], GOD_ANCHOR_AUTH_REQUEST_SCHEMA)
+            body = {
+                "schema": GOD_ANCHOR_AUTH_SCHEMA, "signer_id": "god-root",
+                **{key: request[key] for key in (
+                    "network_id", "sequence", "policy_hash", "expected_sequence",
+                    "expected_policy_hash", "issued_at", "nonce"
+                )},
+            }
+            return 200, {}, _canonical({
+                **body, "signature": self.signed(
+                    self.god_private, GOD_ANCHOR_AUTH_DOMAIN, body
+                )
+            })
+        client = SignedHTTPSAnchorAuthorizationClient(
+            "https://god.example/anchor-authorize", signer_id="god-root",
+            trusted_public_key=self.god_public, clock=lambda: self.now,
+            transport=transport,
+        )
+        proof = client(update)
+        self.assertEqual(proof["policy_hash"], update["policy_hash"])
+        self.assertEqual(proof["expected_policy_hash"], update["expected_policy_hash"])
+
+    def test_god_anchor_authorization_client_rejects_tuple_substitution(self):
+        update = {
+            "schema": ANCHOR_SCHEMA, "network_id": "test-net",
+            "sequence": 8, "policy_hash": "8" * 64,
+            "expected_sequence": 7, "expected_policy_hash": "7" * 64,
+            "issued_at": self.now, "nonce": "ab" * 16,
+        }
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            body = {
+                "schema": GOD_ANCHOR_AUTH_SCHEMA, "signer_id": "god-root",
+                "network_id": request["network_id"], "sequence": request["sequence"],
+                "policy_hash": "f" * 64,
+                "expected_sequence": request["expected_sequence"],
+                "expected_policy_hash": request["expected_policy_hash"],
+                "issued_at": request["issued_at"], "nonce": request["nonce"],
+            }
+            return 200, {}, _canonical({
+                **body, "signature": self.signed(
+                    self.god_private, GOD_ANCHOR_AUTH_DOMAIN, body
+                )
+            })
+        client = SignedHTTPSAnchorAuthorizationClient(
+            "https://god.example/anchor-authorize", signer_id="god-root",
+            trusted_public_key=self.god_public, clock=lambda: self.now,
+            transport=transport,
+        )
+        with self.assertRaisesRegex(RemoteProviderError, "request_binding_mismatch"):
+            client(update)
 
     def test_anchor_initialization_and_monotonic_cas(self):
         state = {}
