@@ -59,7 +59,7 @@ class GCFPeerMeshTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def test_broadcast_reports_per_peer_acceptance_without_claiming_quorum(self):
+    async def test_broadcast_reports_per_peer_acceptance_without_claiming_quorum(self):
         mesh = GCFPeerMesh(
             node=self.node,
             tls_context=self.tls,
