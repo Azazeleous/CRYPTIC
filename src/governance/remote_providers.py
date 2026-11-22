@@ -30,6 +30,7 @@ ANCHOR_DOMAIN = b"CRYPTIC-SEQUENCE-ANCHOR/1\x00"
 DECISION_SCHEMA = "CRYPTIC-REMOTE-DECISION/1"
 ANCHOR_SCHEMA = "CRYPTIC-SEQUENCE-ANCHOR/1"
 POLICY_TRANSITION_SCHEMA = "CRYPTIC-GOD-POLICY-TRANSITION/1"
+POLICY_TRANSITION_REQUEST_SCHEMA = "CRYPTIC-GOD-POLICY-TRANSITION-REQUEST/1"
 POLICY_TRANSITION_DOMAIN = b"CRYPTIC-GOD-POLICY-TRANSITION/1\x00"
 MAX_RESPONSE_BYTES = 65_536
 MAX_TTL_SECONDS = 300
@@ -202,6 +203,117 @@ class HTTPSJusticeProviders:
         )
 
 
+class SignedHTTPSPolicyTransitionClient:
+    """Obtain and verify GOD authorization for one exact anchor transition.
+
+    The remote authority must evaluate its actual governance rules before
+    signing. This client verifies the signed response; the anchor Worker
+    independently verifies it again before accepting the transition.
+    """
+
+    def __init__(self, endpoint: str, *, signer_id: str, policy_id: str,
+                 trusted_public_key: bytes, timeout: float = 5.0,
+                 clock: Callable[[], float] = time.time,
+                 transport: Callable | None = None):
+        self.endpoint = _https_endpoint(endpoint)
+        if not isinstance(signer_id, str) or not signer_id:
+            raise RemoteProviderError("policy_transition_signer_id_invalid")
+        if not isinstance(policy_id, str) or not policy_id:
+            raise RemoteProviderError("policy_transition_policy_id_invalid")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 30:
+            raise RemoteProviderError("timeout_invalid")
+        self.signer_id = signer_id
+        self.policy_id = policy_id
+        self.key = _public_key(trusted_public_key)
+        self.timeout = float(timeout)
+        self.clock = clock
+        self.transport = transport or _default_transport
+
+    def authorize_transition(self, transition: Mapping[str, Any]) -> dict:
+        if not isinstance(transition, Mapping):
+            raise RemoteProviderError("policy_transition_request_invalid")
+        required_transition = {
+            "network_id", "sequence", "policy_hash",
+            "expected_sequence", "expected_policy_hash",
+        }
+        if set(transition) != required_transition:
+            raise RemoteProviderError("policy_transition_request_schema_invalid")
+        network_id = transition["network_id"]
+        sequence = transition["sequence"]
+        expected_sequence = transition["expected_sequence"]
+        policy_hash = transition["policy_hash"]
+        expected_hash = transition["expected_policy_hash"]
+        if (not isinstance(network_id, str) or not network_id or len(network_id.encode("utf-8")) > 256
+                or isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1
+                or isinstance(expected_sequence, bool) or not isinstance(expected_sequence, int)
+                or expected_sequence < 0 or sequence <= expected_sequence):
+            raise RemoteProviderError("policy_transition_fields_invalid")
+        for digest in (policy_hash, expected_hash):
+            if (not isinstance(digest, str) or len(digest) != 64
+                    or any(ch not in "0123456789abcdef" for ch in digest)):
+                raise RemoteProviderError("policy_transition_hash_invalid")
+        issued_at = int(self.clock())
+        nonce = secrets.token_hex(16)
+        request_body = {
+            "schema": POLICY_TRANSITION_REQUEST_SCHEMA,
+            "capability": "cryptic.sequence_anchor.advance",
+            "policy_id": self.policy_id,
+            "network_id": network_id,
+            "expected_sequence": expected_sequence,
+            "expected_policy_hash": expected_hash,
+            "sequence": sequence,
+            "policy_hash": policy_hash,
+            "issued_at": issued_at,
+            "nonce": nonce,
+        }
+        status, _headers, raw = self.transport(
+            "POST", self.endpoint,
+            {"Content-Type": "application/json", "Accept": "application/json"},
+            _canonical(request_body), self.timeout,
+        )
+        if status != 200:
+            raise RemoteProviderError(f"god_policy_transition_http_status_{status}")
+        try:
+            authorization = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RemoteProviderError("god_policy_transition_json_invalid") from exc
+        required = {
+            "schema", "signer_id", "capability", "policy_id", "network_id",
+            "expected_sequence", "expected_policy_hash", "sequence",
+            "policy_hash", "issued_at", "expires_at", "nonce", "signature",
+        }
+        if not isinstance(authorization, dict) or set(authorization) != required:
+            raise RemoteProviderError("god_policy_transition_response_schema_invalid")
+        expected = {
+            "schema": POLICY_TRANSITION_SCHEMA,
+            "signer_id": self.signer_id,
+            "capability": request_body["capability"],
+            "policy_id": self.policy_id,
+            "network_id": network_id,
+            "expected_sequence": expected_sequence,
+            "expected_policy_hash": expected_hash,
+            "sequence": sequence,
+            "policy_hash": policy_hash,
+            "issued_at": issued_at,
+            "nonce": nonce,
+        }
+        if any(authorization.get(key) != value for key, value in expected.items()):
+            raise RemoteProviderError("god_policy_transition_binding_mismatch")
+        expires_at = authorization["expires_at"]
+        now = int(self.clock())
+        if (isinstance(expires_at, bool) or not isinstance(expires_at, int)
+                or expires_at <= issued_at
+                or expires_at - issued_at > MAX_TTL_SECONDS
+                or issued_at > now + MAX_CLOCK_SKEW_SECONDS
+                or expires_at < now - MAX_CLOCK_SKEW_SECONDS):
+            raise RemoteProviderError("god_policy_transition_expired_or_invalid")
+        unsigned = {key: value for key, value in authorization.items()
+                    if key != "signature"}
+        _verify_signature(self.key, authorization["signature"],
+                          POLICY_TRANSITION_DOMAIN, unsigned)
+        return authorization
+
+
 class HTTPSSequenceAnchor:
     """Atomic compare-and-swap client for an independent sequence-anchor service.
 
@@ -220,6 +332,7 @@ class HTTPSSequenceAnchor:
 
     def __init__(self, endpoint: str, *, signer_id: str, trusted_public_key: bytes,
                  write_token: str | None = None,
+                 authorization_provider: SignedHTTPSPolicyTransitionClient | None = None,
                  timeout: float = 5.0, clock: Callable[[], float] = time.time,
                  transport: Callable | None = None):
         self.endpoint = _https_endpoint(endpoint)
@@ -235,6 +348,7 @@ class HTTPSSequenceAnchor:
                 or any(ch.isspace() for ch in write_token)):
             raise RemoteProviderError("anchor_write_token_invalid")
         self.write_token = write_token
+        self.authorization_provider = authorization_provider
         self.key = _public_key(trusted_public_key)
         self.timeout = float(timeout)
         self.clock = clock
@@ -293,8 +407,7 @@ class HTTPSSequenceAnchor:
         response = self._signed(raw, network_id, expected_nonce=nonce)
         return response["sequence"], response["policy_hash"]
 
-    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str, *,
-                         authorization: Mapping[str, Any] | None = None) -> bool:
+    def advance_sequence(self, network_id: str, sequence: int, policy_hash: str) -> bool:
         if self.write_token is None:
             raise RemoteProviderError("anchor_write_authentication_required")
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
@@ -306,8 +419,8 @@ class HTTPSSequenceAnchor:
                 raise ValueError("hash")
         except ValueError as exc:
             raise RemoteProviderError("anchor_policy_hash_invalid") from exc
-        if not isinstance(authorization, Mapping):
-            raise RemoteProviderError("anchor_policy_authorization_required")
+        if self.authorization_provider is None:
+            raise RemoteProviderError("anchor_policy_authorization_provider_required")
         current = self.read_sequence(network_id)
         if current is None:
             expected_sequence, expected_hash = 0, "0" * 64
@@ -317,6 +430,16 @@ class HTTPSSequenceAnchor:
             if sequence <= expected_sequence:
                 return False
             condition = {"If-Match": f'"{expected_sequence}:{expected_hash}"'}
+        transition = {
+            "network_id": network_id,
+            "sequence": sequence,
+            "policy_hash": policy_hash,
+            "expected_sequence": expected_sequence,
+            "expected_policy_hash": expected_hash,
+        }
+        authorization = self.authorization_provider.authorize_transition(transition)
+        if not isinstance(authorization, Mapping):
+            raise RemoteProviderError("anchor_policy_authorization_invalid")
         body = {
             "schema": ANCHOR_SCHEMA, "network_id": network_id,
             "sequence": sequence, "policy_hash": policy_hash,
