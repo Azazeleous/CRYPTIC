@@ -399,7 +399,7 @@ class RemoteProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             vote_signer = PersistentGCFVoteSigner(
                 signer, validator_id="validator-1", validator_set=validator_set,
-                db_path=Path(directory) / "vote-locks.sqlite3", initialize=True,
+                db_path=Path(directory) / "vote-locks.sqlite3", initialize=True, clock=lambda: self.now,
             )
             vote = make_vote_with_signer(
                 signer=vote_signer, validator_id="validator-1", proposal=proposal,
@@ -451,7 +451,7 @@ class RemoteProviderTests(unittest.TestCase):
             db_path = Path(directory) / "vote-locks.sqlite3"
             guarded = PersistentGCFVoteSigner(
                 signer, validator_id="validator-1",
-                validator_set=validator_set, db_path=db_path, initialize=True,
+                validator_set=validator_set, db_path=db_path, clock=lambda: self.now, initialize=True, clock=lambda: self.now,
             )
             make_vote_with_signer(
                 signer=guarded, validator_id="validator-1",
@@ -467,7 +467,7 @@ class RemoteProviderTests(unittest.TestCase):
 
             restarted = PersistentGCFVoteSigner(
                 signer, validator_id="validator-1",
-                validator_set=validator_set, db_path=db_path,
+                validator_set=validator_set, db_path=db_path, clock=lambda: self.now,
             )
             with self.assertRaisesRegex(RemoteProviderError, "vote_signing_lock_conflict"):
                 make_vote_with_signer(
@@ -520,7 +520,7 @@ class RemoteProviderTests(unittest.TestCase):
             guards = [
                 PersistentGCFVoteSigner(
                     signer, validator_id="validator-1",
-                    validator_set=validator_set, db_path=db_path,
+                    validator_set=validator_set, db_path=db_path, clock=lambda: self.now,
                     initialize=(_ == 0),
                 )
                 for _ in range(2)
@@ -586,7 +586,7 @@ class RemoteProviderTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             guard = PersistentGCFVoteSigner(
                 signer, validator_id="validator-1", validator_set=validator_set,
-                db_path=Path(directory) / "vote-locks.sqlite3", initialize=True,
+                db_path=Path(directory) / "vote-locks.sqlite3", initialize=True, clock=lambda: self.now,
             )
             with self.assertRaisesRegex(RemoteProviderError, "hsm_http_status_503"):
                 make_vote_with_signer(
@@ -622,7 +622,7 @@ class RemoteProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(RemoteProviderError, "vote_lock_database_missing"):
                 PersistentGCFVoteSigner(
                     signer, validator_id="validator-1",
-                    validator_set=validator_set, db_path=missing,
+                    validator_set=validator_set, db_path=missing, clock=lambda: self.now,
                 )
             self.assertFalse(missing.exists())
 
