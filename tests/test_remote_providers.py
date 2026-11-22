@@ -476,6 +476,131 @@ class RemoteProviderTests(unittest.TestCase):
                 )
             self.assertEqual(len(signer_calls), signed_count)
 
+
+    def test_persistent_signer_transitions_only_with_higher_verified_polc_and_keeps_history(self):
+        from src.consensus.gcf import (
+            ValidatorSet, make_proposal, make_vote, public_key_hex, canonical_bytes, sha256_hex,
+        )
+        from src.consensus.round_change import (
+            POLC_SCHEMA, make_round_change_message, make_round_change_certificate, polc_digest,
+        )
+
+        other = {f"v{i}": keypair() for i in range(2, 5)}
+        validator_set = ValidatorSet("test-net", 1, {
+            "v1": {"public_key_hex": self.public.hex(), "weight": 1},
+            **{name: {"public_key_hex": pair[1].hex(), "weight": 1}
+               for name, pair in other.items()},
+        })
+        signer_calls = []
+
+        def transport(method, url, headers, raw, timeout):
+            request = json.loads(raw)
+            message = base64.b64decode(request["message_b64"], validate=True)
+            signer_calls.append(message)
+            return 200, {}, _canonical({
+                "schema": "CRYPTIC-ED25519-SIGN/1", "key_id": "validator-key-1",
+                "request_id": request["request_id"],
+                "signature": base64.b64encode(self.private.sign(message)).decode("ascii"),
+            })
+
+        remote = HTTPSHSMEd25519Signer(
+            "https://hsm.example/sign", key_id="validator-key-1",
+            public_key=self.public, client_certificate="/provisioned/client.crt",
+            client_private_key="/provisioned/client.key", transport=transport,
+        )
+
+        def proposal(payload, round_number, certificate, nonce):
+            return make_proposal(
+                network_id="test-net", epoch=1, height=22, round=round_number,
+                parent_hash="0" * 64, payload_hash=payload * 64,
+                proof_hash="2" * 64, justice_commitment={"justice_profile": "GAIA-JUSTICE/1"},
+                proposer_id="v1", proposer_private_key_hex=self.private.hex(),
+                nonce=nonce, issued_at=self.now, expires_at=self.now + 300,
+                round_change_certificate=certificate,
+            )
+
+        def message(validator_id, private_key, source, target, polc, nonce):
+            return make_round_change_message(
+                validator_id=validator_id, private_key_hex=private_key.hex(),
+                network_id="test-net", epoch=1, height=22,
+                source_round=source, target_round=target,
+                issued_at=self.now + 2, expires_at=self.now + 300,
+                nonce=nonce, highest_polc=polc,
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            db_path = Path(directory) / "signer.sqlite3"
+            guarded = PersistentGCFVoteSigner(
+                remote, validator_id="v1", validator_set=validator_set,
+                db_path=db_path, initialize=True, clock=lambda: self.now,
+            )
+            proposal_a = proposal("a", 0, None, "a" * 32)
+            make_vote_with_signer(
+                signer=guarded, validator_id="v1", proposal=proposal_a,
+                vote_type="PREVOTE", issued_at=self.now + 1,
+            )
+
+            first_messages = [
+                message(name, pair[0], 0, 1, None, (str(i + 1) * 32))
+                for i, (name, pair) in enumerate(other.items())
+            ]
+            first_certificate = make_round_change_certificate(
+                first_messages, network_id="test-net", epoch=1,
+                height=22, target_round=1,
+            )
+            proposal_b1 = proposal("b", 1, first_certificate, "b" * 32)
+            with self.assertRaisesRegex(
+                RemoteProviderError, "vote_signing_round_change_not_authorized",
+            ):
+                make_vote_with_signer(
+                    signer=guarded, validator_id="v1", proposal=proposal_b1,
+                    vote_type="PREVOTE", issued_at=self.now + 3,
+                )
+
+            round_one_votes = [
+                make_vote(
+                    validator_id=name, validator_private_key_hex=pair[0].private_bytes(
+                        serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                        serialization.NoEncryption(),
+                    ).hex(),
+                    proposal=proposal_b1, vote_type="PREVOTE", issued_at=self.now + 1,
+                )
+                for name, pair in other.items()
+            ]
+            polc = {
+                "schema": POLC_SCHEMA, "proposal": proposal_b1,
+                "candidate_digest": sha256_hex(canonical_bytes(proposal_b1)),
+                "validator_set_hash": validator_set.digest,
+                "prevotes": round_one_votes,
+            }
+            polc["digest"] = polc_digest(polc)
+            second_messages = [
+                message(name, pair[0], 1, 2, polc, (str(i + 5) * 32))
+                for i, (name, pair) in enumerate(other.items())
+            ]
+            second_certificate = make_round_change_certificate(
+                second_messages, network_id="test-net", epoch=1,
+                height=22, target_round=2,
+            )
+            proposal_b2 = proposal("b", 2, second_certificate, "c" * 32)
+            signed = make_vote_with_signer(
+                signer=guarded, validator_id="v1", proposal=proposal_b2,
+                vote_type="PREVOTE", issued_at=self.now + 4,
+            )
+            self.assertEqual(signed["round"], 2)
+            self.assertEqual(len(signer_calls), 2)
+            with sqlite3.connect(db_path) as db:
+                state = db.execute(
+                    "SELECT round,value_digest FROM gcf_vote_signing_round_state "
+                    "WHERE height=22 AND vote_type='PREVOTE' AND validator_id='v1'"
+                ).fetchone()
+                history = db.execute(
+                    "SELECT COUNT(*) FROM gcf_vote_signing_history "
+                    "WHERE height=22 AND vote_type='PREVOTE' AND validator_id='v1'"
+                ).fetchone()[0]
+            self.assertEqual(state[0], 2)
+            self.assertEqual(history, 2)
+
     def test_pre_sign_lock_is_atomic_across_signer_instances(self):
         from src.consensus.gcf import VOTE_DOMAIN
         calls = []
