@@ -197,9 +197,13 @@ async function advanceAnchor(request, networkId, env) {
   } catch { return json({ error: "invalid_json" }, 400); }
   if (canonical(body) !== decoded) return json({ error: "noncanonical_json" }, 400);
   const fields = ["schema", "network_id", "sequence", "policy_hash",
-    "expected_sequence", "expected_policy_hash", "issued_at", "nonce", "authorization"];
+    "expected_sequence", "expected_policy_hash", "issued_at", "nonce"];
+  const suppliedFields = body && typeof body === "object" && !Array.isArray(body)
+    ? Object.keys(body).sort().join("|") : "";
+  const allowedFields = [fields.slice().sort().join("|"),
+    [...fields, "authorization"].sort().join("|")];
   if (!body || typeof body !== "object" || Array.isArray(body) ||
-      Object.keys(body).sort().join("|") !== fields.slice().sort().join("|")) {
+      !allowedFields.includes(suppliedFields)) {
     return json({ error: "request_schema_invalid" }, 400);
   }
   const now = Math.floor(Date.now() / 1000);
