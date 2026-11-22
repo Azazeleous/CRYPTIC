@@ -700,7 +700,8 @@ class PersistentGCFVoteSigner:
     def sign(self, message: bytes) -> bytes:
         from src.consensus.gcf import VOTE_DOMAIN, SCHEMA, canonical_bytes
 
-        if not isinstance(message, bytes) or not message.startswith(VOTE_DOMAIN):
+        if (not isinstance(message, bytes) or len(message) > 1_048_576
+                or not message.startswith(VOTE_DOMAIN)):
             raise RemoteProviderError("vote_signing_domain_required")
         raw = message[len(VOTE_DOMAIN):]
         try:
@@ -717,7 +718,10 @@ class PersistentGCFVoteSigner:
         }
         if set(body) != required or body.get("schema") != SCHEMA:
             raise RemoteProviderError("vote_signing_fields_invalid")
-        if (body.get("network_id") != self.network_id
+        if (not isinstance(body.get("network_id"), str)
+                or body.get("network_id") != self.network_id
+                or isinstance(body.get("epoch"), bool)
+                or not isinstance(body.get("epoch"), int)
                 or body.get("epoch") != self.epoch):
             raise RemoteProviderError("vote_signing_network_or_epoch_mismatch")
         if body.get("validator_id") != self.validator_id:
@@ -787,7 +791,7 @@ class PersistentGCFVoteSigner:
         return signature
 
 
-def make_vote_with_signer(*, signer: HTTPSHSMEd25519Signer, validator_id: str,
+def make_vote_with_signer(*, signer: PersistentGCFVoteSigner, validator_id: str,
                           proposal: Mapping[str, Any], vote_type: str,
                           approve: bool = True, polc_digest: str | None = None,
                           issued_at: int | None = None) -> dict:
