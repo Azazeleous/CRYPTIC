@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -194,7 +195,7 @@ def build_consensus_runtime(
             sequence_anchor=sequence_anchor,
             proposer_id=policy_update_proposer_id,
             proposer_signer=policy_update_signer,
-            clock=clock or __import__("time").time,
+            clock=clock or time.time,
         )
     http = GCFWSGI(engine, apex_validator=apex)
     for database_path in (
