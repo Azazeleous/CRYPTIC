@@ -923,12 +923,41 @@ class PersistentGCFVoteSigner:
             """, (self.network_id, self.epoch, body["height"], body["round"], digest)).fetchone()
             if authorization is None:
                 raise RemoteProviderError("vote_signing_proposal_authorization_required")
+            all_locks = db.execute("""
+                SELECT vote_type,candidate_digest,message_digest
+                FROM gcf_vote_signing_locks
+                WHERE network_id=? AND epoch=? AND height=? AND validator_id=?
+            """, (self.network_id, self.epoch, body["height"], self.validator_id)).fetchall()
+            for legacy_lock in all_locks:
+                state_row = db.execute("""
+                    SELECT candidate_digest FROM gcf_vote_signing_round_state
+                    WHERE network_id=? AND epoch=? AND height=?
+                      AND vote_type=? AND validator_id=?
+                """, (self.network_id, self.epoch, body["height"],
+                      legacy_lock[0], self.validator_id)).fetchone()
+                exact_legacy_retry = (
+                    legacy_lock[0] == body["vote_type"]
+                    and legacy_lock[1] == digest
+                    and legacy_lock[2] == message_digest
+                )
+                if state_row is None and not exact_legacy_retry:
+                    raise RemoteProviderError("vote_signing_legacy_lock_transition_forbidden")
+                if state_row is not None and state_row[0] != legacy_lock[1]:
+                    raise RemoteProviderError("vote_signing_lock_state_corrupt")
             prior_states = db.execute("""
-                SELECT vote_type,round,value_digest
+                SELECT vote_type,round,candidate_digest,value_digest
                 FROM gcf_vote_signing_round_state
                 WHERE network_id=? AND epoch=? AND height=? AND validator_id=?
             """, (self.network_id, self.epoch, body["height"], self.validator_id)).fetchall()
             for prior_state in prior_states:
+                lock_row = db.execute("""
+                    SELECT candidate_digest FROM gcf_vote_signing_locks
+                    WHERE network_id=? AND epoch=? AND height=?
+                      AND vote_type=? AND validator_id=?
+                """, (self.network_id, self.epoch, body["height"],
+                      prior_state[0], self.validator_id)).fetchone()
+                if lock_row is None or lock_row[0] != prior_state[2]:
+                    raise RemoteProviderError("vote_signing_lock_state_corrupt")
                 if body["round"] < prior_state[1]:
                     raise RemoteProviderError("vote_signing_round_regression")
                 if authorization[0] != prior_state[2]:
