@@ -134,7 +134,7 @@ class RoundChangeProofTests(unittest.TestCase):
 
     def test_stale_prevote_cannot_be_reused_as_live_polc(self):
         proposal = self.proposal(
-            "g", issued_at=self.now - 600, expires_at=self.now + 600,
+            "9", issued_at=self.now - 600, expires_at=self.now + 600,
         )
         polc = self.polc(proposal, vote_issued_at=self.now - 400)
         result = verify_polc(
@@ -145,7 +145,7 @@ class RoundChangeProofTests(unittest.TestCase):
 
     def test_polc_vote_list_is_bounded_by_validator_set(self):
         polc = self.polc(self.proposal("8"))
-        polc["prevotes"] = polc["prevotes"] + [dict(polc["prevotes"][0])]
+        polc["prevotes"] = polc["prevotes"] + [dict(polc["prevotes"][0])] * 2
         polc["digest"] = polc_digest(polc)
         result = verify_polc(polc, validator_set=self.vset, clock=lambda: self.now)
         self.assertFalse(result["valid"])
