@@ -481,6 +481,9 @@ class RemoteProviderTests(unittest.TestCase):
             client_private_key="/provisioned/client.key",
             transport=lambda *_: (500, {}, b""),
         )
+        from src.consensus.gcf import VOTE_DOMAIN
+        with self.assertRaisesRegex(RemoteProviderError, "durable_vote_signing_lock_required"):
+            signer.sign(VOTE_DOMAIN + b"{}")
         with self.assertRaisesRegex(RemoteProviderError, "durable_vote_signing_lock_required"):
             make_vote_with_signer(
                 signer=signer, validator_id="validator-1",
