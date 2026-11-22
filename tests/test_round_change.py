@@ -283,11 +283,15 @@ class RoundChangeProofTests(unittest.TestCase):
             engine = GCFEngine(db_path, self.vset, clock=lambda: self.now)
             for validator in ("v1", "v2", "v3"):
                 engine.submit_round_change(self.message(validator))
-            with sqlite3.connect(db_path) as db:
+            db = sqlite3.connect(db_path)
+            try:
                 db.execute(
                     "UPDATE round_change_certificates SET certificate_digest=?",
                     ("0" * 64,),
                 )
+                db.commit()
+            finally:
+                db.close()
             with self.assertRaisesRegex(
                 GCFError, "PERSISTED_ROUND_CHANGE_CERTIFICATE_DIGEST_MISMATCH",
             ):
