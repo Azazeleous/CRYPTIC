@@ -212,8 +212,8 @@ class SignedHTTPSPolicyTransitionClient:
     """
 
     def __init__(self, endpoint: str, *, signer_id: str, policy_id: str,
-                 trusted_public_key: bytes, timeout: float = 5.0,
-                 clock: Callable[[], float] = time.time,
+                 trusted_public_key: bytes, request_token: str | None = None,
+                 timeout: float = 5.0, clock: Callable[[], float] = time.time,
                  transport: Callable | None = None):
         self.endpoint = _https_endpoint(endpoint)
         if not isinstance(signer_id, str) or not signer_id:
@@ -224,6 +224,12 @@ class SignedHTTPSPolicyTransitionClient:
             raise RemoteProviderError("timeout_invalid")
         self.signer_id = signer_id
         self.policy_id = policy_id
+        if request_token is None:
+            request_token = os.environ.get("CRYPTIC_GOD_POLICY_TOKEN")
+        if (not isinstance(request_token, str) or len(request_token) < 32
+                or any(ch.isspace() for ch in request_token)):
+            raise RemoteProviderError("god_policy_request_authentication_required")
+        self.request_token = request_token
         self.key = _public_key(trusted_public_key)
         self.timeout = float(timeout)
         self.clock = clock
@@ -268,7 +274,8 @@ class SignedHTTPSPolicyTransitionClient:
         }
         status, _headers, raw = self.transport(
             "POST", self.endpoint,
-            {"Content-Type": "application/json", "Accept": "application/json"},
+            {"Content-Type": "application/json", "Accept": "application/json",
+             "Authorization": "Bearer " + self.request_token},
             _canonical(request_body), self.timeout,
         )
         if status != 200:
@@ -301,7 +308,13 @@ class SignedHTTPSPolicyTransitionClient:
             raise RemoteProviderError("god_policy_transition_binding_mismatch")
         expires_at = authorization["expires_at"]
         now = int(self.clock())
-        if (isinstance(expires_at, bool) or not isinstance(expires_at, int)
+        if (isinstance(authorization["issued_at"], bool)
+                or not isinstance(authorization["issued_at"], int)
+                or isinstance(authorization["sequence"], bool)
+                or not isinstance(authorization["sequence"], int)
+                or isinstance(authorization["expected_sequence"], bool)
+                or not isinstance(authorization["expected_sequence"], int)
+                or isinstance(expires_at, bool) or not isinstance(expires_at, int)
                 or expires_at <= issued_at
                 or expires_at - issued_at > MAX_TTL_SECONDS
                 or issued_at > now + MAX_CLOCK_SKEW_SECONDS
@@ -323,7 +336,9 @@ class HTTPSSequenceAnchor:
                    issued_at, nonce, signature}; HTTP 404 means uninitialized.
       PUT same URL with If-None-Match:* for initialization or If-Match:"seq:hash"
         for advancement. Body contains schema, network_id, sequence, policy_hash,
-        expected_sequence, expected_policy_hash, issued_at, nonce.
+        expected_sequence, expected_policy_hash, issued_at, nonce, and a
+        GOD-signed authorization obtained from authorization_provider. The
+        provider is called after the signed prior tuple is read.
         -> signed {schema, signer_id, network_id, sequence, policy_hash,
                    accepted, issued_at, nonce, signature}.
       HTTP 409/412 is a compare-and-swap conflict. The server MUST commit the
