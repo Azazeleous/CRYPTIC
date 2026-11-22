@@ -485,7 +485,9 @@ class RemoteProviderTests(unittest.TestCase):
         from src.governance.remote_providers import make_round_change_message_with_signer
 
         validator_set = ValidatorSet("test-net", 1, {
-            "validator-1": {"public_key_hex": self.public.hex(), "weight": 1},
+            "validator-1": {"public_key_hex": self.public.public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw,
+            ).hex(), "weight": 1},
         })
         signer_calls = []
 
