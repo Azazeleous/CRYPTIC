@@ -338,9 +338,8 @@ class HTTPSSequenceAnchor:
                    issued_at, nonce, signature}; HTTP 404 means uninitialized.
       PUT same URL with If-None-Match:* for initialization or If-Match:"seq:hash"
         for advancement. Body contains schema, network_id, sequence, policy_hash,
-        expected_sequence, expected_policy_hash, issued_at, nonce, and a
-        GOD-signed authorization obtained from authorization_provider. The
-        provider is called after the signed prior tuple is read.
+        expected_sequence, expected_policy_hash, issued_at, nonce, and the
+        exact GCF/1 finality certificate for the proposed transition.
         -> signed {schema, signer_id, network_id, sequence, policy_hash,
                    accepted, issued_at, nonce, signature}.
       HTTP 409/412 is a compare-and-swap conflict. The server MUST commit the
@@ -367,6 +366,8 @@ class HTTPSSequenceAnchor:
                 or any(ch.isspace() for ch in write_token)):
             raise RemoteProviderError("anchor_write_token_invalid")
         self.write_token = write_token
+        # Retained as a source-compatibility argument only; anchor writes no
+        # longer consult a separate GOD transition service.
         self.authorization_provider = authorization_provider
         self.key = _public_key(trusted_public_key)
         self.timeout = float(timeout)
