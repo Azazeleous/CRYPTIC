@@ -616,7 +616,7 @@ class GCFEngine:
         from src.consensus.round_change import verify_round_change_certificate
         with self._db() as db:
             row = db.execute("""
-                SELECT certificate_json FROM round_change_certificates
+                SELECT certificate_json,certificate_digest FROM round_change_certificates
                 WHERE network_id=? AND epoch=? AND height=? AND target_round=?
             """, (self.validator_set.network_id, self.validator_set.epoch,
                   height, target_round)).fetchone()
@@ -629,6 +629,8 @@ class GCFEngine:
         )
         if not checked["valid"]:
             raise GCFError("PERSISTED_ROUND_CHANGE_CERTIFICATE_INVALID:" + checked["reason"])
+        if checked["digest"] != row["certificate_digest"]:
+            raise GCFError("PERSISTED_ROUND_CHANGE_CERTIFICATE_DIGEST_MISMATCH")
         return certificate
 
     def finalize(self, candidate_digest: str) -> dict:
