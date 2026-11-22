@@ -49,7 +49,7 @@ The GCF engine persists its conservative vote-admission lock keyed by:
 
 `(network_id, epoch, height, vote_type, validator_id)`
 
-The round is retained as lock metadata, but is deliberately not part of the lock key. A validator that has voted for one candidate in a phase cannot vote for a different candidate in that phase at another round. Timeout, process restart, peer loss, or proposal expiry does not release this lock.
+The round is retained as lock metadata, but is deliberately not part of the lock key. The engine and persistent signer check both PREVOTE and PRECOMMIT state for the same validator/height: a different value requires a verified POLC strictly above every conflicting prior round, and a same-round proposal-digest substitution is rejected across phases. The same value may continue into a later round. Timeout, process restart, peer loss, or proposal expiry does not release a lock.
 
 The remote `PersistentGCFVoteSigner` independently records proposal authorization, a durable round-state row, and immutable pre-sign history keyed by network, epoch, height, phase, validator, and message digest. It binds the candidate digest and full signed-message digest. An ambiguous signer result permits only an identical-message retry. Legacy lock rows without round-state metadata cannot transition.
 
