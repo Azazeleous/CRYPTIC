@@ -126,13 +126,28 @@ performs certificate verification.
 
 ## Staged Cloudflare deployment record
 
-The Worker was previously uploaded to the connected Cloudflare account as
-`cryptic-production-sequence-anchor` (deployment
-`697e0e25b28a4e109eda04dd98769e1b`) with D1 database
-`1d6199f8-8a49-45c4-abd6-ac816a91a487`. Workers.dev was disabled and no zone
-route targeted it. That deployment predates this certificate-verification
-change and remains dormant; it is not evidence that the corrected source is
-deployed or that the anchor is live.
+The corrected Worker source from PR #33 commit
+`aa83c24e9527ff918d0d16baa4aa0555f7a153db` was uploaded to the connected
+Cloudflare account as `cryptic-production-sequence-anchor`.
+
+- Deployment ID: `b539142b233842d9b71bc8da1c6b27ea`
+- Worker version tag: `f4b9f90848404d10ac3efdb1f701d762`
+- D1 database: `1d6199f8-8a49-45c4-abd6-ac816a91a487`
+- Remote D1 tables created: `anchors`, `used_authorization_nonces`,
+  `used_finality_certificates`.
+- Remote D1 SQL for migrations 0001–0003 was applied idempotently. The
+  Wrangler `d1_migrations` history table has not been initialized; a later
+  Wrangler migration run must record these migrations and may safely replay
+  their `CREATE TABLE/INDEX IF NOT EXISTS` statements.
+- Worker settings retain `workers_dev = false`; the route list is empty.
+- The Worker secrets list is empty. No signing key, validator-set trust
+  configuration, signer identity, or bearer write token has been provisioned.
+
+This is a real code upload and D1 schema initialization, not an activated
+anchor service. The Worker remains intentionally dormant and cannot accept
+authenticated writes or verify a production validator set until independent
+trust configuration and secrets are provisioned.
+
 
 ## Activation boundary
 
