@@ -24,8 +24,8 @@ async function verifyPolicyAuthorization(authorization, transition, networkId, e
       Object.keys(authorization).sort().join("|") !== required.slice().sort().join("|")) {
     return { ok: false, reason: "policy_authorization_schema_invalid" };
   }
-  if (!env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX || !env.ANCHOR_GOD_POLICY_SIGNER_ID ||
-      !env.ANCHOR_POLICY_ID) {
+  if (!env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX || !env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256 ||
+      !env.ANCHOR_GOD_POLICY_SIGNER_ID || !env.ANCHOR_POLICY_ID) {
     return { ok: false, reason: "god_policy_trust_not_configured" };
   }
   const a = authorization;
@@ -45,9 +45,15 @@ async function verifyPolicyAuthorization(authorization, transition, networkId, e
         !/^[A-Za-z0-9+/]{86}==$/.test(a.signature)) {
       return { ok: false, reason: "policy_authorization_signature_invalid" };
     }
+    const publicRaw = decodeHex(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX);
+    const fingerprintBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", publicRaw));
+    const fingerprint = Array.from(fingerprintBytes, byte => byte.toString(16).padStart(2, "0")).join("");
+    if (!/^[0-9a-f]{64}$/.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) ||
+        fingerprint !== env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) {
+      return { ok: false, reason: "god_policy_fingerprint_pin_mismatch" };
+    }
     const publicKey = await crypto.subtle.importKey(
-      "raw", decodeHex(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX),
-      { name: "Ed25519" }, false, ["verify"]
+      "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
     );
     const signature = decodeBase64(a.signature);
     if (signature.length !== 64) throw new Error("signature_length_invalid");
@@ -299,7 +305,9 @@ export default {
     if (url.pathname === "/health") {
       return json({ service: "cryptic-sequence-anchor", schema: ANCHOR_SCHEMA,
         configured: Boolean(env.ANCHOR_DB && env.ANCHOR_SIGNER_ID &&
-          env.ANCHOR_SIGNING_KEY_PKCS8_B64 && env.ANCHOR_WRITE_TOKEN) });
+          env.ANCHOR_SIGNING_KEY_PKCS8_B64 && env.ANCHOR_WRITE_TOKEN &&
+          env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX && env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256 &&
+          env.ANCHOR_GOD_POLICY_SIGNER_ID && env.ANCHOR_POLICY_ID) });
     }
     const match = url.pathname.match(/^\/v1\/anchors\/([^/]+)$/);
     if (!match) return json({ error: "not_found" }, 404);
