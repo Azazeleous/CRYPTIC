@@ -485,9 +485,7 @@ class RemoteProviderTests(unittest.TestCase):
         from src.governance.remote_providers import make_round_change_message_with_signer
 
         validator_set = ValidatorSet("test-net", 1, {
-            "validator-1": {"public_key_hex": self.public.public_bytes(
-                serialization.Encoding.Raw, serialization.PublicFormat.Raw,
-            ).hex(), "weight": 1},
+            "validator-1": {"public_key_hex": self.public.hex(), "weight": 1},
         })
         signer_calls = []
 
@@ -680,7 +678,7 @@ class RemoteProviderTests(unittest.TestCase):
             self.assertEqual(len(signer_calls), 2)
 
             third_messages = [
-                message(name, pair[0], 2, 3, None, (str(i + 8) * 32))
+                message(name, pair[0], 2, 3, None, (f"{i + 8:02x}" * 16))
                 for i, (name, pair) in enumerate(other.items())
             ]
             third_certificate = make_round_change_certificate(
