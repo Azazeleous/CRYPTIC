@@ -4,7 +4,8 @@ import unittest
 from pathlib import Path
 
 from src.consensus.gcf import (
-    GCFEngine, GCFError, ValidatorSet, make_proposal, make_vote, public_key_hex, sha256_hex,
+    GCFEngine, GCFError, ValidatorSet, make_proposal, make_vote, public_key_hex,
+    sha256_hex, verify_finality_certificate,
 )
 from src.consensus.round_change import (
     POLC_SCHEMA, make_round_change_certificate, make_round_change_message,
@@ -422,6 +423,37 @@ class RoundChangeProofTests(unittest.TestCase):
             ).canonical_bytes(proposal_b_round_two)))
             self.assertEqual(history, 2)
             self.assertNotEqual(lock["candidate_digest"], digest_a)
+
+            for validator in ("v2", "v3", "v4"):
+                engine.submit_vote(make_vote(
+                    validator_id=validator,
+                    validator_private_key_hex=self.private[validator],
+                    proposal=proposal_b_round_two, vote_type="PREVOTE",
+                    issued_at=self.now + 4,
+                ))
+            _, final_polc_digest = engine._polc(
+                engine._connect(), sha256_hex(__import__(
+                    "src.consensus.gcf", fromlist=["canonical_bytes"]
+                ).canonical_bytes(proposal_b_round_two))
+            )
+            for validator in ("v1", "v2", "v3"):
+                engine.submit_vote(make_vote(
+                    validator_id=validator,
+                    validator_private_key_hex=self.private[validator],
+                    proposal=proposal_b_round_two, vote_type="PRECOMMIT",
+                    polc_digest=final_polc_digest, issued_at=self.now + 5,
+                ))
+            finality = engine.finalize(sha256_hex(__import__(
+                "src.consensus.gcf", fromlist=["canonical_bytes"]
+            ).canonical_bytes(proposal_b_round_two)))
+            verified = verify_finality_certificate(
+                finality["certificate"],
+                hccgn_verifier=lambda *_: True,
+                god_authorizer=lambda *_: True,
+                justice_verifier=lambda *_: True,
+                clock=lambda: self.now + 5,
+            )
+            self.assertTrue(verified["valid"], verified)
 
     def test_engine_rejects_conflicting_round_transition_without_higher_polc(self):
         with tempfile.TemporaryDirectory() as directory:
