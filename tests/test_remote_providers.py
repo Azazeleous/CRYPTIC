@@ -519,6 +519,19 @@ class RemoteProviderTests(unittest.TestCase):
             retry = make_round_change_message_with_signer(**kwargs)
             self.assertEqual(signed, retry)
             self.assertEqual(len(signer_calls), 1)
+            from src.consensus.round_change import make_round_change_message
+            private_hex = self.private.private_bytes(
+                serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                serialization.NoEncryption(),
+            ).hex()
+            expected = make_round_change_message(
+                validator_id="validator-1", private_key_hex=private_hex,
+                network_id="test-net", epoch=1, height=7,
+                source_round=0, target_round=1, issued_at=self.now,
+                expires_at=self.now + 300, nonce="a" * 32,
+                highest_polc=None,
+            )
+            self.assertEqual(signed["signature"], expected["signature"])
             verified = verify_round_change_message(
                 signed, validator_set=validator_set, height=7,
                 target_round=1, clock=lambda: self.now,
