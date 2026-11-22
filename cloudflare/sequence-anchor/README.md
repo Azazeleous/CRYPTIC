@@ -20,7 +20,7 @@ transition-signing service.
 - The validator set is independently pinned through Worker configuration.
   The Worker recomputes its canonical SHA-256 set hash and fails closed when
   the configured network, epoch, or hash does not match.
-- The certificate binds the anchor transition: proposal height equals the
+- The certificate binds the anchor transition: proposal anchor_sequence equals the
   new anchor sequence, proposal parent hash equals the expected prior anchor
   hash, and proposal payload hash equals the new anchor policy hash.
 - A D1 receipt keyed by the full certificate digest rejects replay. The conditional D1 UPSERT remains the atomic
