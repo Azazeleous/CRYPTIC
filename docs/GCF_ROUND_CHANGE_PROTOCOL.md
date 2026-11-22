@@ -2,9 +2,9 @@
 
 Status: **PROOF-BOUND ROUND ADMISSION, LOCAL LOCK TRANSITIONS, PERSISTENT SIGNER GUARDS, AND WORKER VERIFICATION IMPLEMENTED — OPERATIONAL ACTIVATION DISABLED**
 
-This document specifies the GCF round-change transition rules. The branch accepts authenticated GCF-P2P/1 ROUND_CHANGE envelopes, durably collects signed messages, and verifies strict weighted-quorum certificates. Every proposal above round zero now carries its round-change certificate in the signed proposal body. The engine binds that certificate to the exact height and target round, checks the highest POLC against a stable value digest, and permits a conflicting local vote-lock transition only when a higher-round POLC proves the new value. The persistent vote signer independently verifies and records proposal authorization, retains immutable signing-intent history, and enforces the same higher-POLC rule locally. The Cloudflare Worker independently verifies round-change certificates and nested POLCs before accepting finality certificates. These changes implement the software proof path; they do not establish HSM-side enforcement or independent multi-host operational evidence. The existing cross-round locks remain authoritative.
+This document specifies the GCF round-change transition rules. The branch accepts authenticated GCF-P2P/1 ROUND_CHANGE envelopes, durably collects signed messages, and verifies strict weighted-quorum certificates. Every proposal above round zero now carries its round-change certificate in the signed proposal body. The engine binds that certificate to the exact height and target round, checks the highest POLC against a stable value digest, and permits a conflicting local vote-lock transition only when a higher-round POLC proves the new value. The persistent vote signer independently verifies and records proposal authorization, retains immutable signing-intent history, and enforces the same higher-POLC rule locally. The Cloudflare Worker independently verifies round-change certificates and nested POLCs before accepting finality certificates. These changes implement the software proof path; they do not establish HSM-side enforcement or independent multi-host operational evidence. Historical signed-vote and signing-intent records remain authoritative and are retained across transitions.
 
-## 1.1 Implemented proof-verification slice (not a complete round-change protocol)
+## 1.1 Implemented proof-verification and transition path
 
 The branch now contains `src/consensus/round_change.py` and
 `tests/test_round_change.py`. The module provides pure, fail-closed
@@ -51,7 +51,7 @@ The GCF engine persists its conservative vote-admission lock keyed by:
 
 The round is retained as lock metadata, but is deliberately not part of the lock key. A validator that has voted for one candidate in a phase cannot vote for a different candidate in that phase at another round. Timeout, process restart, peer loss, or proposal expiry does not release this lock.
 
-The remote `PersistentGCFVoteSigner` independently records a durable pre-sign intent keyed by network, epoch, height, phase, and validator. It binds both the candidate digest and the full signed-message digest. An ambiguous signer result permits only an identical-message retry.
+The remote `PersistentGCFVoteSigner` independently records proposal authorization, a durable round-state row, and immutable pre-sign history keyed by network, epoch, height, phase, validator, and message digest. It binds the candidate digest and full signed-message digest. An ambiguous signer result permits only an identical-message retry. Legacy lock rows without round-state metadata cannot transition.
 
 The engine now distinguishes stable value identity from round-specific proposal identity. A later proposal may retain the same value across rounds; changing to a different value requires a verified POLC at a round strictly higher than the local recorded vote-lock round and below the new proposal round. The persistent signer applies the same rule using its own durable round-state table. Historical signed intents remain in the signing-history table and are never erased by a transition. Legacy signer lock rows without corresponding round-state metadata are fail-closed for transitions.
 
@@ -59,7 +59,7 @@ This remains deliberately conservative rather than a full Tendermint-compatible 
 
 ## 2. Protocol objective and invariants
 
-A future implementation may advance from round (r) to round (R>r) only with an authenticated round-change certificate whose signer weight is strictly greater than two-thirds of the active validator-set weight.
+A later-round proposal may be admitted only with an authenticated round-change certificate whose signer weight is strictly greater than two-thirds of the active validator-set weight and whose target round exactly matches the proposal round.
 
 The protocol must preserve all of these invariants:
 
@@ -72,16 +72,16 @@ The protocol must preserve all of these invariants:
 7. **Local lock preservation:** a validator must not sign a conflicting PREVOTE merely because a timeout elapsed or a round-change certificate exists. It may change its local consensus lock only after validating a POLC at a strictly higher round than its recorded lock round.
 8. **Separate signing history:** changing a consensus lock must never erase historical signed messages, signing intents, or equivocation evidence.
 9. **Deterministic proof selection:** when multiple valid POLCs prove the same candidate at the same round, every verifier must select the same proof independent of message arrival order (the implementation selects the lexicographically smallest canonical POLC digest).
-9. **Restart equivalence:** after restart, the validator must recover the same lock, highest valid POLC, and signed-message history before it can sign another vote.
-10. **Finality unchanged:** a height finalizes only with the existing strict weighted PREVOTE/PRECOMMIT requirements and a certificate that independently verifies all proposal, vote, POLC, validator-set, and transition bindings.
+10. **Restart equivalence:** after restart, the validator must recover the same lock, highest valid POLC, and signed-message history before it can sign another vote.
+11. **Finality unchanged:** a height finalizes only with the existing strict weighted PREVOTE/PRECOMMIT requirements and a certificate that independently verifies all proposal, vote, POLC, validator-set, and transition bindings.
 
-## 3. Proposed message model
+## 3. Implemented message model
 
-The following is a design target, not an accepted wire format.
+The following is the accepted GCF/1 round-change wire model implemented by this branch.
 
 ### 3.1 Signed round-change message
 
-A `GCF-ROUND-CHANGE/1` message should bind:
+A `GCF-ROUND-CHANGE/1` message binds:
 
 - schema;
 - network_id and epoch;
@@ -110,7 +110,7 @@ The proof must bind:
 
 Every embedded vote must be revalidated. A caller-supplied weight, a claimed boolean, or a digest without the underlying signed votes is not proof.
 
-The current `_polc()` helper derives a POLC from votes stored locally for one candidate. A future implementation needs a reusable verifier that can validate an externally supplied proof without trusting a remote node's database or claimed weight.
+The engine's `_polc()` helper derives a POLC from locally stored votes. The independent `verify_polc()` function validates externally supplied signed vote sets without trusting a remote node's database or claimed weight.
 
 ### 3.3 Round-change certificate
 
@@ -145,9 +145,9 @@ The design must distinguish three records that the current implementation curren
 
 Do not implement unlocking by deleting or overwriting the existing vote-lock rows.
 
-## 5. Required schema and compatibility work
+## 5. Schema and compatibility status
 
-Before enabling the protocol, specify and review a versioned migration for:
+The branch now persists round-change messages/certificate digests, signer proposal authorization, per-phase round state, and immutable signing-intent history. The remaining schema work before activation is:
 
 - durable consensus-lock records including candidate digest, lock round, POLC digest, and validator-set hash;
 - immutable signing-history records that retain every signed message digest and its exact round;
@@ -160,22 +160,22 @@ The current `approve: bool` field is not a complete representation of Tendermint
 
 Migration must be atomic and fail closed. Existing rows do not contain sufficient information to infer a verified POLC-based lock. Preserve them as historical signing/vote locks; do not synthesize a consensus lock or infer an unlock permission from them. If the migration cannot prove a safe mapping, require an explicit operator-controlled recovery or validator identity/key rotation procedure.
 
-## 6. Required integration points
+## 6. Integration status and remaining authority boundaries
 
-A complete implementation is not complete until all of these components enforce the same transition rules:
+The software path now binds the transition rules across these repository components:
 
-- GCF proposal schema, canonical signing bytes, and proposal validation;
-- GCF vote schema, canonical signing bytes, vote aggregation, and POLC verifier;
-- engine lock acquisition, verified lock transition, and persistent recovery;
-- `PersistentGCFVoteSigner` pre-sign policy and durable database migration;
-- remote HSM/KMS signer authorization, so direct callers cannot bypass local lock policy;
-- peer message schema, authenticated dispatch, replay persistence, and bounded resource handling;
-- finality certificate schema and independent `verify_finality_certificate()`;
-- Cloudflare sequence-anchor Worker verifier and its contract tests;
-- HCCGN policy-update coordinator and proposal broadcast;
-- capability ledger, runbook, and deployment gate evidence.
+- **Implemented:** GCF proposal schema extension, canonical signing bytes, and proposal validation;
+- **Partially implemented:** existing GCF vote schema/aggregation plus independent POLC verification; explicit nil-vote semantics remain undefined;
+- **Implemented:** engine vote-admission lock transition and persistent recovery;
+- **Implemented locally:** `PersistentGCFVoteSigner` proposal authorization, durable transition guard, and signing history;
+- **External requirement:** remote HSM/KMS signer authorization, so direct callers cannot bypass local lock policy;
+- **Implemented:** peer message schema, authenticated dispatch, replay persistence, and bounded resource handling;
+- **Implemented:** finality certificate proposal binding and independent `verify_finality_certificate()`;
+- **Implemented:** Cloudflare sequence-anchor Worker round-change/POLC verifier and contract tests;
+- **Integrated:** HCCGN policy-update coordinator can pass a round-change certificate into a signed proposal;
+- **Updated:** capability ledger and protocol runbook; external deployment gate evidence remains outstanding.
 
-A Python-only lock transition is insufficient if the Worker or HSM still accepts a conflicting signature/certificate.
+The Worker now rejects invalid transition evidence at finality. Production activation remains blocked until the HSM/KMS enforces equivalent policy against direct signing requests.
 
 ## 7. Adversarial verification matrix
 
@@ -210,11 +210,11 @@ Tests must include weighted validator sets, not only equal-weight fixtures, and 
 ## 8. Rollout gates
 
 1. Review the protocol and proof obligations independently before implementation.
-2. Implement the canonical wire schema and pure verification functions first.
-3. Add property-based and adversarial tests before any lock-release code exists.
-4. Integrate engine persistence and local signer enforcement with crash/restart tests.
-5. Add HSM-side enforcement and independent Worker certificate verification.
-6. Run multi-process and multi-host partition/recovery drills with independent operators.
+2. **Completed in this branch:** implement the canonical wire schema and pure verification functions.
+3. **Partially complete:** add adversarial tests before enabling lock transitions; the remaining matrix in Section 7 is still required.
+4. **Implemented with remaining drill work:** integrate engine persistence and local signer enforcement; extend crash/restart and concurrent-transition tests.
+5. **Worker verification implemented; HSM-side enforcement remains external.**
+6. **Outstanding:** run multi-process and multi-host partition/recovery drills with independent operators.
 7. Keep the feature disabled until the complete integration and review evidence is recorded.
 
 No step may mark the protocol production-ready based only on unit tests, loopback TLS, or CI.
