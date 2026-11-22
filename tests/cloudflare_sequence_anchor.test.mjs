@@ -151,7 +151,7 @@ async function makeCertificate(ctx, { sequence, height = sequence, oldHash, newH
   ]));
   const precommits = await votes("PRECOMMIT", polcDigest);
   return {
-    schema: "GCF/1", network_id: network, epoch, height, round: 0,
+    schema: "GCF/1", network_id: network, epoch, height, round,
     candidate_digest: candidateDigest, proposal,
     validator_set: { network_id: "test-net", epoch: 1,
       validators: ctx.validators, validator_set_hash: ctx.env.ANCHOR_VALIDATOR_SET_SHA256 },
