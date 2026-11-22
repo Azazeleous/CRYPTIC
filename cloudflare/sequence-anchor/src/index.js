@@ -205,6 +205,227 @@ async function readBoundedBody(request) {
   return output;
 }
 
+
+
+const GCF_SCHEMA = "GCF/1";
+const GCF_PROPOSAL_DOMAIN = new TextEncoder().encode("GCF/1|PROPOSAL|ED25519\0");
+const GCF_VOTE_DOMAIN = new TextEncoder().encode("GCF/1|VOTE|ED25519\0");
+const GCF_CERT_DOMAIN = new TextEncoder().encode("GCF/1|FINALITY-CERTIFICATE\0");
+
+async function sha256Hex(bytes) {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  return Array.from(digest, b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function strictHex(value, length = 64) {
+  return typeof value === "string" && value.length === length &&
+    new RegExp("^[0-9a-f]{" + length + "}$").test(value);
+}
+
+function strictBase64(value) {
+  if (typeof value !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error("certificate_signature_encoding_invalid");
+  }
+  return decodeBase64(value);
+}
+
+async function verifyGcfSignature(publicHex, signatureText, domain, body) {
+  if (!strictHex(publicHex)) return false;
+  const publicKey = await crypto.subtle.importKey(
+    "raw", Uint8Array.from(publicHex.match(/../g), x => parseInt(x, 16)),
+    { name: "Ed25519" }, false, ["verify"]
+  );
+  const signature = strictBase64(signatureText);
+  if (signature.length !== 64) return false;
+  const payload = new TextEncoder().encode(canonical(body));
+  const message = new Uint8Array(domain.length + payload.length);
+  message.set(domain); message.set(payload, domain.length);
+  return crypto.subtle.verify("Ed25519", publicKey, signature, message);
+}
+
+async function loadPinnedValidatorSet(env, networkId) {
+  const required = ["ANCHOR_VALIDATOR_SET_JSON", "ANCHOR_VALIDATOR_SET_SHA256",
+    "ANCHOR_VALIDATOR_NETWORK_ID", "ANCHOR_VALIDATOR_EPOCH"];
+  if (required.some(key => !env[key])) {
+    return { ok: false, unavailable: true, reason: "validator_set_trust_not_configured" };
+  }
+  if (!strictHex(env.ANCHOR_VALIDATOR_SET_SHA256) ||
+      env.ANCHOR_VALIDATOR_NETWORK_ID !== networkId ||
+      !/^[1-9][0-9]*$/.test(String(env.ANCHOR_VALIDATOR_EPOCH))) {
+    return { ok: false, unavailable: true, reason: "validator_set_trust_configuration_invalid" };
+  }
+  let configured;
+  try { configured = JSON.parse(env.ANCHOR_VALIDATOR_SET_JSON); }
+  catch { return { ok: false, unavailable: true, reason: "validator_set_configuration_invalid" }; }
+  if (!configured || typeof configured !== "object" || Array.isArray(configured) ||
+      Object.keys(configured).sort().join("|") !== ["network_id", "epoch", "validators"].sort().join("|") ||
+      configured.network_id !== networkId ||
+      configured.epoch !== Number(env.ANCHOR_VALIDATOR_EPOCH) ||
+      !Array.isArray(configured.validators) || configured.validators.length < 1 ||
+      configured.validators.length > 256) {
+    return { ok: false, unavailable: true, reason: "validator_set_configuration_invalid" };
+  }
+  const validators = new Map();
+  let totalWeight = 0;
+  let previousId = null;
+  const normalized = [];
+  for (const item of configured.validators) {
+    if (!item || typeof item !== "object" || Array.isArray(item) ||
+        Object.keys(item).sort().join("|") !== ["validator_id", "public_key_hex", "weight"].sort().join("|") ||
+        typeof item.validator_id !== "string" || !item.validator_id ||
+        !strictHex(item.public_key_hex) ||
+        !Number.isSafeInteger(item.weight) || item.weight < 1 ||
+        validators.has(item.validator_id)) {
+      return { ok: false, unavailable: true, reason: "validator_set_configuration_invalid" };
+    }
+    if (previousId !== null && item.validator_id <= previousId) {
+      return { ok: false, unavailable: true, reason: "validator_set_order_invalid" };
+    }
+    previousId = item.validator_id;
+    validators.set(item.validator_id, item);
+    totalWeight += item.weight;
+    if (!Number.isSafeInteger(totalWeight)) {
+      return { ok: false, unavailable: true, reason: "validator_set_weight_invalid" };
+    }
+    normalized.push(item);
+  }
+  const setBody = { network_id: networkId, epoch: configured.epoch, validators: normalized };
+  const setHash = await sha256Hex(new TextEncoder().encode(canonical(setBody)));
+  if (setHash !== env.ANCHOR_VALIDATOR_SET_SHA256) {
+    return { ok: false, unavailable: true, reason: "validator_set_hash_pin_mismatch" };
+  }
+  return { ok: true, validators, totalWeight, quorumWeight: Math.floor((2 * totalWeight) / 3) + 1,
+    setHash, epoch: configured.epoch };
+}
+
+async function verifyGcfProposal(proposal, certificate, vset) {
+  const required = ["schema", "network_id", "epoch", "height", "round", "parent_hash",
+    "payload_hash", "proof_hash", "justice_commitment", "issued_at", "expires_at",
+    "proposer_id", "proposer_public_key", "nonce", "signature"];
+  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal) ||
+      Object.keys(proposal).sort().join("|") !== required.slice().sort().join("|") ||
+      proposal.schema !== GCF_SCHEMA || proposal.network_id !== certificate.network_id ||
+      proposal.epoch !== certificate.epoch || !Number.isSafeInteger(proposal.height) || proposal.height < 1 ||
+      !Number.isSafeInteger(proposal.round) || proposal.round < 0 ||
+      !strictHex(proposal.parent_hash) || !strictHex(proposal.payload_hash) ||
+      !strictHex(proposal.proof_hash) ||
+      !Number.isSafeInteger(proposal.issued_at) || !Number.isSafeInteger(proposal.expires_at) ||
+      proposal.expires_at <= proposal.issued_at ||
+      proposal.expires_at - proposal.issued_at > 3600 ||
+      typeof proposal.proposer_id !== "string" || !proposal.proposer_id ||
+      typeof proposal.nonce !== "string" || proposal.nonce.length < 16 || proposal.nonce.length > 128 ||
+      !proposal.justice_commitment || typeof proposal.justice_commitment !== "object" ||
+      Array.isArray(proposal.justice_commitment)) {
+    return { ok: false, reason: "gcf_proposal_invalid" };
+  }
+  const proposer = vset.validators.get(proposal.proposer_id);
+  if (!proposer || proposer.public_key_hex !== proposal.proposer_public_key) {
+    return { ok: false, reason: "gcf_proposer_not_in_pinned_validator_set" };
+  }
+  const unsigned = Object.fromEntries(Object.entries(proposal).filter(([key]) => key !== "signature"));
+  if (!await verifyGcfSignature(proposer.public_key_hex, proposal.signature, GCF_PROPOSAL_DOMAIN, unsigned)) {
+    return { ok: false, reason: "gcf_proposal_signature_invalid" };
+  }
+  const digest = await sha256Hex(new TextEncoder().encode(canonical(proposal)));
+  if (digest !== certificate.candidate_digest) return { ok: false, reason: "gcf_candidate_digest_mismatch" };
+  return { ok: true, digest };
+}
+
+async function verifyGcfVoteSet(votes, kind, proposal, digest, vset, polcDigest = null) {
+  if (!Array.isArray(votes) || votes.length > vset.validators.size) {
+    return { ok: false, reason: kind.toLowerCase() + "_vote_set_invalid" };
+  }
+  let weight = 0, previousId = null;
+  const seen = new Set();
+  const required = ["schema", "network_id", "epoch", "height", "round", "candidate_digest",
+    "validator_id", "vote_type", "approve", "polc_digest", "issued_at", "signature"];
+  for (const vote of votes) {
+    if (!vote || typeof vote !== "object" || Array.isArray(vote) ||
+        Object.keys(vote).sort().join("|") !== required.slice().sort().join("|") ||
+        vote.schema !== GCF_SCHEMA || vote.network_id !== proposal.network_id ||
+        vote.epoch !== proposal.epoch || vote.height !== proposal.height ||
+        vote.round !== proposal.round || vote.candidate_digest !== digest ||
+        vote.vote_type !== kind || vote.approve !== true ||
+        !Number.isSafeInteger(vote.issued_at) ||
+        vote.issued_at < proposal.issued_at || vote.issued_at > proposal.expires_at ||
+        (kind === "PREVOTE" && vote.polc_digest !== null) ||
+        (kind === "PRECOMMIT" && vote.polc_digest !== polcDigest)) {
+      return { ok: false, reason: kind.toLowerCase() + "_vote_fields_invalid" };
+    }
+    if (typeof vote.validator_id !== "string" || seen.has(vote.validator_id) ||
+        (previousId !== null && vote.validator_id <= previousId)) {
+      return { ok: false, reason: kind.toLowerCase() + "_duplicate_or_unsorted_signer" };
+    }
+    const validator = vset.validators.get(vote.validator_id);
+    if (!validator) return { ok: false, reason: "gcf_vote_unknown_validator" };
+    const unsigned = Object.fromEntries(Object.entries(vote).filter(([key]) => key !== "signature"));
+    if (!await verifyGcfSignature(validator.public_key_hex, vote.signature, GCF_VOTE_DOMAIN, unsigned)) {
+      return { ok: false, reason: kind.toLowerCase() + "_vote_signature_invalid" };
+    }
+    seen.add(vote.validator_id);
+    previousId = vote.validator_id;
+    weight += validator.weight;
+  }
+  return { ok: true, weight, reached: weight >= vset.quorumWeight };
+}
+
+async function verifyFinalityCertificate(certificate, transition, networkId, env) {
+  const vsetResult = await loadPinnedValidatorSet(env, networkId);
+  if (!vsetResult.ok) return vsetResult;
+  const vset = vsetResult;
+  const required = ["schema", "network_id", "epoch", "height", "round", "candidate_digest",
+    "proposal", "validator_set", "polc", "precommits", "total_voting_weight", "precommit_weight"];
+  if (!certificate || typeof certificate !== "object" || Array.isArray(certificate) ||
+      Object.keys(certificate).sort().join("|") !== required.slice().sort().join("|") ||
+      certificate.schema !== GCF_SCHEMA || certificate.network_id !== networkId ||
+      certificate.epoch !== vset.epoch || certificate.height !== transition.sequence ||
+      certificate.proposal?.height !== transition.sequence ||
+      certificate.round !== certificate.proposal?.round ||
+      certificate.total_voting_weight !== vset.totalWeight ||
+      certificate.validator_set?.network_id !== networkId ||
+      certificate.validator_set?.epoch !== vset.epoch ||
+      certificate.validator_set?.validator_set_hash !== vset.setHash ||
+      !Array.isArray(certificate.validator_set?.validators) ||
+      canonical(certificate.validator_set.validators) !== canonical(
+        Array.from(vset.validators.values()).map(v => ({
+          validator_id: v.validator_id, public_key_hex: v.public_key_hex, weight: v.weight
+        }))
+      )) {
+    return { ok: false, reason: "gcf_certificate_or_validator_set_binding_invalid" };
+  }
+  const proposalResult = await verifyGcfProposal(certificate.proposal, certificate, vset);
+  if (!proposalResult.ok) return proposalResult;
+  if (certificate.proposal.parent_hash !== transition.expected_policy_hash ||
+      certificate.proposal.payload_hash !== transition.policy_hash) {
+    return { ok: false, reason: "gcf_anchor_transition_binding_invalid" };
+  }
+  const prevotes = certificate.polc?.prevotes;
+  const prevoteResult = await verifyGcfVoteSet(prevotes, "PREVOTE",
+    certificate.proposal, proposalResult.digest, vset);
+  if (!prevoteResult.ok || !prevoteResult.reached) {
+    return { ok: false, reason: prevoteResult.reason || "gcf_prevote_quorum_missing" };
+  }
+  const polcBody = { schema: GCF_SCHEMA, candidate_digest: proposalResult.digest,
+    validator_set_hash: vset.setHash, prevotes };
+  const polcDigest = await sha256Hex(new Uint8Array([
+    ...GCF_CERT_DOMAIN, ...new TextEncoder().encode(canonical(polcBody))
+  ]));
+  if (certificate.polc?.digest !== polcDigest) return { ok: false, reason: "gcf_polc_digest_mismatch" };
+  const precommitResult = await verifyGcfVoteSet(certificate.precommits, "PRECOMMIT",
+    certificate.proposal, proposalResult.digest, vset, polcDigest);
+  if (!precommitResult.ok || !precommitResult.reached) {
+    return { ok: false, reason: precommitResult.reason || "gcf_precommit_quorum_missing" };
+  }
+  if (certificate.precommit_weight !== precommitResult.weight) {
+    return { ok: false, reason: "gcf_precommit_weight_mismatch" };
+  }
+  const certificateDigest = await sha256Hex(new Uint8Array([
+    ...GCF_CERT_DOMAIN, ...new TextEncoder().encode(canonical(certificate))
+  ]));
+  return { ok: true, certificateDigest, signerId: "validator-set:" + vset.setHash,
+    nonce: certificateDigest.slice(0, 32), expiresAt: Math.floor(Date.now() / 1000) + 31536000 };
+}
+
 async function advanceAnchor(request, networkId, env) {
   if (!await authorized(request, env)) return json({ error: "unauthorized" }, 401);
   let raw;
@@ -217,7 +438,7 @@ async function advanceAnchor(request, networkId, env) {
   } catch { return json({ error: "invalid_json" }, 400); }
   if (canonical(body) !== decoded) return json({ error: "noncanonical_json" }, 400);
   const fields = ["schema", "network_id", "sequence", "policy_hash",
-    "expected_sequence", "expected_policy_hash", "issued_at", "nonce", "authorization"];
+    "expected_sequence", "expected_policy_hash", "issued_at", "nonce", "certificate"];
   if (!body || typeof body !== "object" || Array.isArray(body) ||
       Object.keys(body).sort().join("|") !== fields.slice().sort().join("|")) {
     return json({ error: "request_schema_invalid" }, 400);
@@ -230,11 +451,10 @@ async function advanceAnchor(request, networkId, env) {
       !validTimestamp(body.issued_at, now) || !NONCE.test(body.nonce)) {
     return json({ error: "request_fields_invalid" }, 400);
   }
-  const authorization = await verifyPolicyAuthorization(body.authorization, body,
-    networkId, env, now);
+  const authorization = await verifyFinalityCertificate(body.certificate, body,
+    networkId, env);
   if (!authorization.ok) {
-    const trustUnavailable = authorization.reason.startsWith("god_policy_trust_");
-    return json({ error: authorization.reason }, trustUnavailable ? 503 : 403);
+    return json({ error: authorization.reason }, authorization.unavailable ? 503 : 403);
   }
 
   const ifNoneMatch = request.headers.get("if-none-match");
@@ -318,8 +538,8 @@ export default {
       return json({ service: "cryptic-sequence-anchor", schema: ANCHOR_SCHEMA,
         configured: Boolean(env.ANCHOR_DB && env.ANCHOR_SIGNER_ID &&
           env.ANCHOR_SIGNING_KEY_PKCS8_B64 && env.ANCHOR_WRITE_TOKEN &&
-          env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX && env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256 &&
-          env.ANCHOR_GOD_POLICY_SIGNER_ID && env.ANCHOR_POLICY_ID) });
+          env.ANCHOR_VALIDATOR_SET_JSON && env.ANCHOR_VALIDATOR_SET_SHA256 &&
+          env.ANCHOR_VALIDATOR_NETWORK_ID && env.ANCHOR_VALIDATOR_EPOCH) });
     }
     const match = url.pathname.match(/^\/v1\/anchors\/([^/]+)$/);
     if (!match) return json({ error: "not_found" }, 404);
