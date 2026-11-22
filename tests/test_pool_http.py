@@ -72,6 +72,13 @@ class PoolWSGITests(unittest.TestCase):
         self.assertEqual(status, "200 OK")
         self.assertEqual(payload["job_id"], self.job["job_id"])
 
+    def test_other_authenticated_worker_cannot_fetch_assigned_job(self):
+        status, payload = self.request(
+            "GET", "/v1/pool/jobs/" + self.job["job_id"], worker="worker-b"
+        )
+        self.assertEqual(status, "403 Forbidden")
+        self.assertEqual(payload["error"], "job_not_assigned_to_worker")
+
     def test_submission_uses_authenticated_identity_not_header(self):
         submission = execute_pool_job(
             self.job, trusted_issuer_public_key_hex=self.public_hex,
