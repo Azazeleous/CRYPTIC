@@ -13,7 +13,10 @@ import json
 import os
 import stat
 import secrets
+import sqlite3
 import time
+from contextlib import closing
+from pathlib import Path
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -642,13 +645,157 @@ def make_proposal_with_signer(*, signer: HTTPSHSMEd25519Signer, **fields) -> dic
     return {**body, "signature": base64.b64encode(signature).decode("ascii")}
 
 
+class PersistentGCFVoteSigner:
+    """Durable pre-sign lock around a validator's remote Ed25519 signer.
+
+    The lock is committed with SQLite WAL + synchronous=FULL before the
+    underlying signer is called. A failed/ambiguous signer request therefore
+    keeps the same vote intent locked; only an identical message may be retried.
+    This is a local signing guard. The HSM service must enforce its own policy
+    if callers can reach it without going through this process.
+    """
+    vote_lock_enforced = True
+
+    def __init__(self, signer: HTTPSHSMEd25519Signer, *, validator_id: str,
+                 validator_set: Any, db_path: str | Path):
+        if not isinstance(validator_id, str) or not validator_id:
+            raise RemoteProviderError("vote_signer_validator_id_invalid")
+        validator = getattr(validator_set, "validators", {}).get(validator_id)
+        if validator is None:
+            raise RemoteProviderError("vote_signer_not_in_validator_set")
+        signer_public = getattr(signer, "public_key_hex", None)
+        if signer_public != validator.public_key_hex:
+            raise RemoteProviderError("vote_signer_public_key_mismatch")
+        if not callable(getattr(signer, "sign", None)):
+            raise RemoteProviderError("vote_signer_interface_invalid")
+        if str(db_path) == ":memory:":
+            raise RemoteProviderError("durable_vote_lock_database_required")
+        self.signer = signer
+        self.validator_id = validator_id
+        self.network_id = validator_set.network_id
+        self.epoch = validator_set.epoch
+        self.validator_set_hash = validator_set.digest
+        self.public_key_hex = signer_public
+        self.public_key = _public_key(bytes.fromhex(signer_public))
+        self.db_path = str(db_path)
+        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.db_path, timeout=15)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS gcf_vote_signing_locks(
+                  network_id TEXT NOT NULL,
+                  epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL,
+                  vote_type TEXT NOT NULL CHECK(vote_type IN ('PREVOTE','PRECOMMIT')),
+                  validator_id TEXT NOT NULL,
+                  validator_set_hash TEXT NOT NULL,
+                  candidate_digest TEXT NOT NULL,
+                  message_digest TEXT NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
+                )
+            """)
+            db.commit()
+
+    def sign(self, message: bytes) -> bytes:
+        from src.consensus.gcf import VOTE_DOMAIN, SCHEMA, canonical_bytes
+
+        if not isinstance(message, bytes) or not message.startswith(VOTE_DOMAIN):
+            raise RemoteProviderError("vote_signing_domain_required")
+        raw = message[len(VOTE_DOMAIN):]
+        try:
+            body = json.loads(raw.decode("utf-8"))
+            if not isinstance(body, dict) or canonical_bytes(body) != raw:
+                raise ValueError("noncanonical_vote")
+        except Exception as exc:
+            raise RemoteProviderError("vote_signing_message_invalid") from exc
+
+        required = {
+            "schema", "network_id", "epoch", "height", "round",
+            "candidate_digest", "validator_id", "vote_type", "approve",
+            "polc_digest", "issued_at",
+        }
+        if set(body) != required or body.get("schema") != SCHEMA:
+            raise RemoteProviderError("vote_signing_fields_invalid")
+        if (body.get("network_id") != self.network_id
+                or body.get("epoch") != self.epoch):
+            raise RemoteProviderError("vote_signing_network_or_epoch_mismatch")
+        if body.get("validator_id") != self.validator_id:
+            raise RemoteProviderError("vote_signing_validator_mismatch")
+        if body.get("vote_type") not in {"PREVOTE", "PRECOMMIT"}:
+            raise RemoteProviderError("vote_signing_phase_invalid")
+        if not isinstance(body.get("approve"), bool):
+            raise RemoteProviderError("vote_signing_approval_invalid")
+        for field, minimum in (("height", 1), ("round", 0), ("issued_at", 0)):
+            value = body.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise RemoteProviderError("vote_signing_integer_invalid")
+        digest = body.get("candidate_digest")
+        try:
+            if not isinstance(digest, str) or len(bytes.fromhex(digest)) != 32 or bytes.fromhex(digest).hex() != digest:
+                raise ValueError("candidate_digest")
+        except ValueError as exc:
+            raise RemoteProviderError("vote_signing_candidate_digest_invalid") from exc
+        if body["vote_type"] == "PREVOTE" and body["polc_digest"] is not None:
+            raise RemoteProviderError("vote_signing_prevote_polc_invalid")
+        if body["vote_type"] == "PRECOMMIT" and body["approve"]:
+            polc = body["polc_digest"]
+            try:
+                if not isinstance(polc, str) or len(bytes.fromhex(polc)) != 32 or bytes.fromhex(polc).hex() != polc:
+                    raise ValueError("polc_digest")
+            except ValueError as exc:
+                raise RemoteProviderError("vote_signing_precommit_polc_invalid") from exc
+
+        message_digest = hashlib.sha256(message).hexdigest()
+        db = sqlite3.connect(self.db_path, timeout=15, isolation_level=None)
+        try:
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute("""
+                SELECT validator_set_hash,candidate_digest,message_digest
+                FROM gcf_vote_signing_locks
+                WHERE network_id=? AND epoch=? AND height=?
+                  AND vote_type=? AND validator_id=?
+            """, (self.network_id, self.epoch, body["height"],
+                  body["vote_type"], self.validator_id)).fetchone()
+            if row is not None:
+                if row[0] != self.validator_set_hash:
+                    raise RemoteProviderError("vote_signing_validator_set_changed")
+                if row[1] != digest or row[2] != message_digest:
+                    raise RemoteProviderError("vote_signing_lock_conflict")
+            else:
+                db.execute("""
+                    INSERT INTO gcf_vote_signing_locks VALUES(?,?,?,?,?,?,?,?)
+                """, (self.network_id, self.epoch, body["height"],
+                      body["vote_type"], self.validator_id, self.validator_set_hash,
+                      digest, message_digest))
+            db.execute("COMMIT")
+        except Exception:
+            if db.in_transaction:
+                db.execute("ROLLBACK")
+            raise
+        finally:
+            db.close()
+
+        # A failed or timed-out signer call leaves the durable intent in place.
+        # Repeating the exact message is safe; a changed message is not allowed.
+        signature = self.signer.sign(message)
+        try:
+            self.public_key.verify(signature, message)
+        except (TypeError, ValueError, InvalidSignature) as exc:
+            raise RemoteProviderError("vote_signer_signature_invalid") from exc
+        return signature
+
+
 def make_vote_with_signer(*, signer: HTTPSHSMEd25519Signer, validator_id: str,
                           proposal: Mapping[str, Any], vote_type: str,
                           approve: bool = True, polc_digest: str | None = None,
                           issued_at: int | None = None) -> dict:
-    """GCF/1 vote builder using a remote signer instead of raw private bytes."""
+    """GCF/1 vote builder requiring a durable pre-sign vote lock."""
     from src.consensus.gcf import VOTE_DOMAIN, SCHEMA, canonical_bytes, sha256_hex
     import time as _time
+    if not isinstance(signer, PersistentGCFVoteSigner):
+        raise RemoteProviderError("durable_vote_signing_lock_required")
     body = {
         "schema": SCHEMA, "network_id": proposal["network_id"],
         "epoch": proposal["epoch"], "height": proposal["height"],
