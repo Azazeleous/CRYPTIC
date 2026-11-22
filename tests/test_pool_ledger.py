@@ -27,6 +27,14 @@ class PoolLedgerTests(unittest.TestCase):
         with sqlite3.connect(self.ledger.database) as conn:
             with self.assertRaises(sqlite3.IntegrityError):
                 conn.execute("DELETE FROM pool_events")
+    def test_share_table_tampering_is_detected_by_journal_audit(self):
+        self.ledger.record_accepted_share(self.share)
+        import sqlite3
+        with sqlite3.connect(self.ledger.database) as conn:
+            conn.execute("DROP TRIGGER pool_shares_no_delete")
+            conn.execute("DELETE FROM pool_shares")
+        self.assertFalse(self.ledger.verify_chain())
+
     def test_tampered_event_chain_is_detected(self):
         self.ledger.record_accepted_share(self.share)
         import sqlite3
