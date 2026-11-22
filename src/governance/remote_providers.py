@@ -1021,6 +1021,7 @@ def make_vote_with_signer(*, signer: PersistentGCFVoteSigner, validator_id: str,
     import time as _time
     if not isinstance(signer, PersistentGCFVoteSigner):
         raise RemoteProviderError("durable_vote_signing_lock_required")
+    signer.authorize_proposal(proposal)
     body = {
         "schema": SCHEMA, "network_id": proposal["network_id"],
         "epoch": proposal["epoch"], "height": proposal["height"],
