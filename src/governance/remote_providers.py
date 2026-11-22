@@ -572,6 +572,12 @@ class HTTPSHSMEd25519Signer:
         self.client_private_key = client_private_key
 
     def sign(self, message: bytes) -> bytes:
+        from src.consensus.gcf import VOTE_DOMAIN
+        if isinstance(message, bytes) and message.startswith(VOTE_DOMAIN):
+            raise RemoteProviderError("durable_vote_signing_lock_required")
+        return self._sign_message(message)
+
+    def _sign_message(self, message: bytes) -> bytes:
         if not isinstance(message, bytes) or not message or len(message) > 1_048_576:
             raise RemoteProviderError("hsm_message_invalid")
         request_id = secrets.token_hex(16)
@@ -666,7 +672,7 @@ class PersistentGCFVoteSigner:
         signer_public = getattr(signer, "public_key_hex", None)
         if signer_public != validator.public_key_hex:
             raise RemoteProviderError("vote_signer_public_key_mismatch")
-        if not callable(getattr(signer, "sign", None)):
+        if not callable(getattr(signer, "_sign_message", None)):
             raise RemoteProviderError("vote_signer_interface_invalid")
         if str(db_path) == ":memory:":
             raise RemoteProviderError("durable_vote_lock_database_required")
@@ -783,7 +789,7 @@ class PersistentGCFVoteSigner:
 
         # A failed or timed-out signer call leaves the durable intent in place.
         # Repeating the exact message is safe; a changed message is not allowed.
-        signature = self.signer.sign(message)
+        signature = self.signer._sign_message(message)
         try:
             self.public_key.verify(signature, message)
         except (TypeError, ValueError, InvalidSignature) as exc:
