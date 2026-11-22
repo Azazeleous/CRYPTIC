@@ -139,7 +139,8 @@ Cloudflare account as `cryptic-production-sequence-anchor`.
   Wrangler `d1_migrations` history table has not been initialized; a later
   Wrangler migration run must record these migrations and may safely replay
   their `CREATE TABLE/INDEX IF NOT EXISTS` statements.
-- Worker settings retain `workers_dev = false`; the route list is empty.
+- `wrangler.toml` specifies `workers_dev = false`; the deployed route list is
+  empty, and the script's workers.dev subdomain is explicitly disabled.
 - The Worker secrets list is empty. No signing key, validator-set trust
   configuration, signer identity, or bearer write token has been provisioned.
 
