@@ -177,3 +177,18 @@ Verification on code commit 0ec655907a3f1a986ccd7c5c66f9efe525336a58:
 - GAIA local trophy run 45037739324 passed.
 
 The initial Windows run exposed only a test-fixture file-handle cleanup issue; both SQLite fixture connections are now explicitly closed, and the corrected Windows run passed.
+
+
+## GCF/1 pre-sign vote lock at the remote signer boundary
+
+The vote builder now requires PersistentGCFVoteSigner. This wrapper verifies that the HSM signer's public key is the active validator key, parses the exact canonical GCF/1 vote message, and atomically records a lock keyed by network, epoch, height, phase, and validator. The lock includes both the candidate digest and the full vote-message digest, so a changed round or changed vote body cannot be signed under the same height/phase. The SQLite WAL transaction uses synchronous=FULL and commits before the HSM request is sent. Only the identical message can be retried after an ambiguous signer timeout; a different message is rejected before another signing request.
+
+HTTPSHSMEd25519Signer.sign() now rejects GCF vote-domain messages unless they pass through the durable wrapper, and make_vote_with_signer() rejects an unguarded signer. Proposal signing remains separate. This prevents accidental bypass through the standard vote-builder path.
+
+**Trust boundary:** this is a local pre-sign guard, not a substitute for HSM-side authorization. If another process or operator can call the HSM endpoint directly, the HSM service must enforce the same per-validator height/phase lock before releasing a signature. The local lock database is consensus safety state: it must be on persistent protected storage, backed up and recovered under the operator's change-control process, and must not be recreated empty while reusing the same validator identity. SQLite WAL/synchronous=FULL is not physical power-loss certification; Gate 5 remains separate. No timeout-based lock clearing or round-change unlock is implemented.
+
+Verification on code commit 0636a522afd44545e0eec788da77cef2ae9a2248:
+- CRYPTIC CI run 45038077326 passed 400 tests (2 skipped).
+- Production-gate contracts run 45038077427 passed on Ubuntu and Windows.
+- Mining-engine tests run 45038077341 passed.
+- GAIA local trophy run 45038077382 passed.
