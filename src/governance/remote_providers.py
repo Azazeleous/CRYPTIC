@@ -663,7 +663,8 @@ class PersistentGCFVoteSigner:
     vote_lock_enforced = True
 
     def __init__(self, signer: HTTPSHSMEd25519Signer, *, validator_id: str,
-                 validator_set: Any, db_path: str | Path):
+                 validator_set: Any, db_path: str | Path,
+                 initialize: bool = False):
         if not isinstance(validator_id, str) or not validator_id:
             raise RemoteProviderError("vote_signer_validator_id_invalid")
         validator = getattr(validator_set, "validators", {}).get(validator_id)
@@ -676,6 +677,9 @@ class PersistentGCFVoteSigner:
             raise RemoteProviderError("vote_signer_interface_invalid")
         if str(db_path) == ":memory:":
             raise RemoteProviderError("durable_vote_lock_database_required")
+        if type(initialize) is not bool:
+            raise RemoteProviderError("vote_lock_initialize_flag_invalid")
+
         self.signer = signer
         self.validator_id = validator_id
         self.network_id = validator_set.network_id
@@ -684,24 +688,73 @@ class PersistentGCFVoteSigner:
         self.public_key_hex = signer_public
         self.public_key = _public_key(bytes.fromhex(signer_public))
         self.db_path = str(db_path)
-        Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(self.db_path, timeout=15)) as db:
+        path = Path(self.db_path)
+        if not path.exists() and not initialize:
+            raise RemoteProviderError("vote_lock_database_missing")
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        identity = (
+            self.network_id, self.epoch, self.validator_id,
+            self.public_key_hex, self.validator_set_hash,
+        )
+        with closing(sqlite3.connect(self.db_path, timeout=15, isolation_level=None)) as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.execute("PRAGMA synchronous=FULL")
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS gcf_vote_signing_locks(
-                  network_id TEXT NOT NULL,
-                  epoch INTEGER NOT NULL,
-                  height INTEGER NOT NULL,
-                  vote_type TEXT NOT NULL CHECK(vote_type IN ('PREVOTE','PRECOMMIT')),
-                  validator_id TEXT NOT NULL,
-                  validator_set_hash TEXT NOT NULL,
-                  candidate_digest TEXT NOT NULL,
-                  message_digest TEXT NOT NULL,
-                  PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
-                )
-            """)
-            db.commit()
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                tables = {
+                    row[0] for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                identity_table = "gcf_vote_signer_identity"
+                lock_table = "gcf_vote_signing_locks"
+                if identity_table not in tables and lock_table not in tables:
+                    if not initialize:
+                        raise RemoteProviderError("vote_lock_database_uninitialized")
+                    if tables:
+                        raise RemoteProviderError("vote_lock_database_not_empty")
+                    db.execute("""
+                        CREATE TABLE gcf_vote_signer_identity(
+                          singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+                          network_id TEXT NOT NULL,
+                          epoch INTEGER NOT NULL,
+                          validator_id TEXT NOT NULL,
+                          public_key_hex TEXT NOT NULL,
+                          validator_set_hash TEXT NOT NULL
+                        )
+                    """)
+                    db.execute("""
+                        CREATE TABLE gcf_vote_signing_locks(
+                          network_id TEXT NOT NULL,
+                          epoch INTEGER NOT NULL,
+                          height INTEGER NOT NULL,
+                          vote_type TEXT NOT NULL CHECK(vote_type IN ('PREVOTE','PRECOMMIT')),
+                          validator_id TEXT NOT NULL,
+                          validator_set_hash TEXT NOT NULL,
+                          candidate_digest TEXT NOT NULL,
+                          message_digest TEXT NOT NULL,
+                          PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
+                        )
+                    """)
+                    db.execute(
+                        "INSERT INTO gcf_vote_signer_identity VALUES(1,?,?,?,?,?)",
+                        identity,
+                    )
+                elif identity_table not in tables or lock_table not in tables:
+                    raise RemoteProviderError("vote_lock_database_incomplete")
+                else:
+                    stored = db.execute("""
+                        SELECT network_id,epoch,validator_id,public_key_hex,validator_set_hash
+                        FROM gcf_vote_signer_identity WHERE singleton=1
+                    """).fetchone()
+                    if stored != identity:
+                        raise RemoteProviderError("vote_lock_identity_mismatch")
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
 
     def sign(self, message: bytes) -> bytes:
         from src.consensus.gcf import VOTE_DOMAIN, SCHEMA, canonical_bytes
