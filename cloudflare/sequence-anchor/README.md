@@ -128,3 +128,21 @@ statement was exercised against D1:
 This verifies the D1 SQL behavior and cleanup for a single sequential test.
 It does not establish concurrent multi-region behavior, signed Worker request
 execution, rollback resistance, or independent service administration.
+
+
+## GOD authorization endpoint contract
+
+The GOD authorization service accepts a canonical JSON POST request with schema
+CRYPTIC-GOD-ANCHOR-AUTH-REQUEST/1 and the fields network_id, sequence,
+policy_hash, expected_sequence, expected_policy_hash, issued_at, and nonce.
+It returns a canonical JSON object with schema CRYPTIC-GOD-ANCHOR-AUTH/1,
+signer_id, those same tuple fields, and signature. The signature is Ed25519
+over canonical UTF-8 JSON of the response fields excluding signature, prefixed
+by the bytes CRYPTIC-GOD-ANCHOR-AUTH/1 followed by one NUL byte.
+
+The service must authorize the proposed policy transition under its actual
+governance rules before signing. It must not blindly sign caller-supplied
+tuples. It should audit the decision, apply signer/key rotation and revocation
+policy, and return a denial/non-200 response when the requested transition is
+not authorized. The CRYPTIC client and Cloudflare Worker both verify the
+returned signer identity, freshness, signature, nonce, and exact tuple.
