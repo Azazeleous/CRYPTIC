@@ -224,11 +224,12 @@ async function loadPinnedValidatorSet(env, networkId) {
 async function verifyGcfProposal(proposal, certificate, vset) {
   const required = ["schema", "network_id", "epoch", "height", "round", "parent_hash",
     "payload_hash", "proof_hash", "justice_commitment", "issued_at", "expires_at",
-    "proposer_id", "proposer_public_key", "nonce", "signature"];
+    "proposer_id", "proposer_public_key", "nonce", "signature", "anchor_sequence"];
   if (!proposal || typeof proposal !== "object" || Array.isArray(proposal) ||
       Object.keys(proposal).sort().join("|") !== required.slice().sort().join("|") ||
       proposal.schema !== GCF_SCHEMA || proposal.network_id !== certificate.network_id ||
       proposal.epoch !== certificate.epoch || !Number.isSafeInteger(proposal.height) || proposal.height < 1 ||
+      !Number.isSafeInteger(proposal.anchor_sequence) || proposal.anchor_sequence < 1 ||
       !Number.isSafeInteger(proposal.round) || proposal.round < 0 ||
       !strictHex(proposal.parent_hash) || !strictHex(proposal.payload_hash) ||
       !strictHex(proposal.proof_hash) ||
@@ -301,8 +302,9 @@ async function verifyFinalityCertificate(certificate, transition, networkId, env
   if (!certificate || typeof certificate !== "object" || Array.isArray(certificate) ||
       Object.keys(certificate).sort().join("|") !== required.slice().sort().join("|") ||
       certificate.schema !== GCF_SCHEMA || certificate.network_id !== networkId ||
-      certificate.epoch !== vset.epoch || certificate.height !== transition.sequence ||
-      certificate.proposal?.height !== transition.sequence ||
+      certificate.epoch !== vset.epoch ||
+      certificate.height !== certificate.proposal?.height ||
+      certificate.proposal?.anchor_sequence !== transition.sequence ||
       certificate.round !== certificate.proposal?.round ||
       certificate.total_voting_weight !== vset.totalWeight ||
       certificate.validator_set?.network_id !== networkId ||
