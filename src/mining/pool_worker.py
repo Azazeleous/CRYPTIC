@@ -8,10 +8,10 @@ from src.mining.pool_protocol import verify_pool_job
 class PoolWorkerError(ValueError):
     """Worker could not safely execute or submit a pool job."""
 
-def execute_pool_job(job:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,expected_pool_id:str,expected_network_id:str,worker_id:str,now:int)->dict:
+def execute_pool_job(job:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,expected_issuer_id:str,expected_pool_id:str,expected_network_id:str,worker_id:str,now:int)->dict:
     """Execute exactly the signed nonce window and return a proof submission."""
     if not isinstance(worker_id,str) or not worker_id or len(worker_id.encode("utf-8"))>256: raise PoolWorkerError("worker_id_invalid")
-    body=verify_pool_job(job,trusted_issuer_public_key_hex=trusted_issuer_public_key_hex,expected_pool_id=expected_pool_id,expected_network_id=expected_network_id,now=now)
+    body=verify_pool_job(job,trusted_issuer_public_key_hex=trusted_issuer_public_key_hex,expected_issuer_id=expected_issuer_id,expected_pool_id=expected_pool_id,expected_network_id=expected_network_id,now=now)
     try:
         header=HCCGNWorkHeader(network_hash(body["network_id"]),body["height"],body["epoch"],body["issued_at"],bytes.fromhex(body["parent_hash"]),bytes.fromhex(body["payload_hash"]),body["primary_stride"],body["compact_stride"],body["nonce_start"],bytes.fromhex(body["target"]))
         solved,digest,proof,proof_hash,attempts,elapsed=mine_nonce(header,start_nonce=body["nonce_start"],max_attempts=body["max_attempts"])
