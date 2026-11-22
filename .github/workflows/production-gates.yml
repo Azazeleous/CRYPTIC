@@ -41,6 +41,8 @@ jobs:
         run: python -m unittest discover -s tests -p "test_gcf_independent_network.py" -v
       - name: Verify authenticated HCCGN target policy
         run: python -m unittest discover -s tests -p "test_hccgn_registry.py" -v
+      - name: Verify GCF round-change proof primitives (no lock mutation)
+        run: python -m unittest discover -s tests -p "test_round_change.py" -v
       - name: Set up Node.js for Cloudflare Worker contract tests
         uses: actions/setup-node@v4
         with:
