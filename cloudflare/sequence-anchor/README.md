@@ -150,6 +150,8 @@ Request schema: CRYPTIC-GOD-POLICY-TRANSITION-REQUEST/1
 Response schema: CRYPTIC-GOD-POLICY-TRANSITION/1
 ```
 
+The client requires a separate caller-authentication secret in `CRYPTIC_GOD_POLICY_TOKEN` (or `request_token=`). It sends this only as an HTTPS Bearer header to the GOD service; this authenticates the requesting validator and does not grant policy authority. The GOD service must map the authenticated caller to its validator identity and evaluate governance policy independently.
+
 The request contains exactly: `schema`, `capability`, `policy_id`,
 `network_id`, `expected_sequence`, `expected_policy_hash`, `sequence`,
 `policy_hash`, `issued_at`, and `nonce`. The capability is
@@ -179,6 +181,7 @@ and independently sourced fingerprint.
 # Example environment names only; supply values from the approved operator
 # secret manager. Never put credentials or private keys on the command line.
 GOD_ANCHOR_TRANSITION_URL=https://<approved-god-authority>/v1/anchor-transitions
+CRYPTIC_GOD_POLICY_TOKEN=<secret-from-approved-secret-manager>
 GOD_POLICY_SIGNER_ID=<approved-signer-id>
 CRYPTIC_ANCHOR_POLICY_ID=<approved-policy-id>
 ```
