@@ -374,10 +374,10 @@ async function advanceAnchor(request, networkId, env) {
       !validTimestamp(body.issued_at, now) || !NONCE.test(body.nonce)) {
     return json({ error: "request_fields_invalid" }, 400);
   }
-  const authorization = await verifyFinalityCertificate(body.certificate, body,
+  const certificateVerification = await verifyFinalityCertificate(body.certificate, body,
     networkId, env);
-  if (!authorization.ok) {
-    return json({ error: authorization.reason }, authorization.unavailable ? 503 : 403);
+  if (!certificateVerification.ok) {
+    return json({ error: certificateVerification.reason }, certificateVerification.unavailable ? 503 : 403);
   }
 
   const ifNoneMatch = request.headers.get("if-none-match");
@@ -404,7 +404,7 @@ async function advanceAnchor(request, networkId, env) {
       ))
       ON CONFLICT(certificate_digest) DO NOTHING
     `).bind(
-      authorization.certificateDigest, networkId, body.sequence, now,
+      certificateVerification.certificateDigest, networkId, body.sequence, now,
       body.expected_sequence, body.expected_policy_hash, ZERO_HASH, networkId,
       networkId, body.expected_sequence, body.expected_policy_hash
     ).run();
