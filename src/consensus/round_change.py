@@ -63,9 +63,12 @@ def polc_digest(polc: Mapping[str, Any]) -> str:
 
 
 def verify_polc(polc: Mapping[str, Any], *, validator_set: ValidatorSet,
-                clock: Callable[[], float] = time.time) -> dict:
+                clock: Callable[[], float] = time.time,
+                proof_depth: int = 0) -> dict:
     """Verify a complete affirmative PREVOTE certificate; never trust claimed weight."""
     try:
+        if isinstance(proof_depth, bool) or not isinstance(proof_depth, int) or not 0 <= proof_depth <= 8:
+            return _fail("polc_proof_depth_exceeded")
         if not isinstance(polc, Mapping) or set(polc) != {
             "schema", "proposal", "candidate_digest", "validator_set_hash",
             "prevotes", "digest",
@@ -83,7 +86,7 @@ def verify_polc(polc: Mapping[str, Any], *, validator_set: ValidatorSet,
         # proposal expiry and vote freshness against the verifier's real clock;
         # never reset the clock to attacker-controlled signed timestamps.
         engine = _engine_for(validator_set, clock)
-        digest, normalized = engine._validate_proposal(proposal)
+        digest, normalized = engine._validate_proposal(proposal, _proof_depth=proof_depth)
         if digest != polc["candidate_digest"]:
             return _fail("polc_candidate_mismatch")
         votes = polc["prevotes"]
@@ -122,8 +125,15 @@ def verify_round_change_message(message: Mapping[str, Any], *,
                                 height: int,
                                 target_round: int,
                                 clock: Callable[[], float] = time.time,
-                                max_age_seconds: int = 300) -> dict:
+                                max_age_seconds: int = 300,
+                                proof_depth: int = 0) -> dict:
     try:
+        if (isinstance(proof_depth, bool) or not isinstance(proof_depth, int)
+                or not 0 <= proof_depth <= 8):
+            return _fail("round_change_proof_depth_exceeded")
+        if (isinstance(proof_depth, bool) or not isinstance(proof_depth, int)
+                or not 0 <= proof_depth <= 8):
+            return _fail("round_change_proof_depth_exceeded")
         if (isinstance(height, bool) or not isinstance(height, int)
                 or not 1 <= height <= MAX_SQLITE_INT
                 or isinstance(target_round, bool) or not isinstance(target_round, int)
@@ -170,7 +180,10 @@ def verify_round_change_message(message: Mapping[str, Any], *,
             return _fail("round_change_signature_invalid")
         polc = message["highest_polc"]
         if polc is not None:
-            checked = verify_polc(polc, validator_set=validator_set, clock=clock)
+            checked = verify_polc(
+                polc, validator_set=validator_set, clock=clock,
+                proof_depth=proof_depth + 1,
+            )
             if not checked["valid"]:
                 return _fail("round_change_polc_invalid:" + checked["reason"])
             if (checked["height"] != height
@@ -192,7 +205,8 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
                                     validator_set: ValidatorSet,
                                     height: int,
                                     clock: Callable[[], float] = time.time,
-                                    max_age_seconds: int = 300) -> dict:
+                                    max_age_seconds: int = 300,
+                                    proof_depth: int = 0) -> dict:
     """Verify unique signed messages and strict weighted quorum, then select highest POLC."""
     try:
         if (isinstance(height, bool) or not isinstance(height, int)
@@ -228,6 +242,7 @@ def verify_round_change_certificate(certificate: Mapping[str, Any], *,
             checked = verify_round_change_message(
                 message, validator_set=validator_set, height=height,
                 target_round=target, clock=clock, max_age_seconds=max_age_seconds,
+                proof_depth=proof_depth,
             )
             if not checked["valid"]:
                 return _fail("round_change_message_rejected:" + checked["reason"])
