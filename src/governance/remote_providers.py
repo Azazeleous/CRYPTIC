@@ -646,7 +646,7 @@ class HTTPSHSMEd25519Signer:
                         raise RemoteProviderError("round_change_signing_equivocation")
                     if row[2] == "SIGNED" and row[3] is not None:
                         db.execute("COMMIT")
-                        return {**body, "signature": base64.b64encode(row[3]).decode("ascii")}
+                        return {**body, "signature": row[3].hex()}
                 else:
                     db.execute("""
                         INSERT INTO gcf_round_change_signing_locks
@@ -672,7 +672,7 @@ class HTTPSHSMEd25519Signer:
                   body["target_round"], self.validator_id, message_digest, message_json))
             if updated.rowcount != 1:
                 raise RemoteProviderError("round_change_signing_persistence_conflict")
-        return {**body, "signature": base64.b64encode(signature).decode("ascii")}
+        return {**body, "signature": signature.hex()}
 
     def sign(self, message: bytes) -> bytes:
         from src.consensus.gcf import VOTE_DOMAIN
