@@ -376,6 +376,9 @@ class GCFEngine:
         body = _unsigned(proposal)
         if not verify_object(public, proposal["signature"], PROPOSAL_DOMAIN, body):
             raise GCFError("PROPOSER_SIGNATURE_INVALID")
+        proposer = self.validator_set.validators.get(proposal["proposer_id"])
+        if proposer is None or proposer.public_key_hex != public:
+            raise GCFError("PROPOSER_NOT_IN_ACTIVE_VALIDATOR_SET")
         digest = sha256_hex(canonical_bytes(dict(proposal)))
         if proposal["round"] == 0:
             if "round_change_certificate" in proposal:
