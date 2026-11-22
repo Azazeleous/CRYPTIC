@@ -25,6 +25,8 @@ P2P_SCHEMA = "GCF-P2P/1"
 P2P_DOMAIN = b"GCF-P2P/1|MESSAGE|ED25519\x00"
 MAX_FRAME_BYTES = 1_048_576
 MAX_CLOCK_SKEW_SECONDS = 120
+DEFAULT_MAX_PEER_CONNECTIONS = 128
+DEFAULT_PEER_IO_TIMEOUT_SECONDS = 10.0
 
 
 class PeerTransportError(ValueError):
@@ -54,7 +56,9 @@ class GCFPeerNode:
     def __init__(self, *, engine: Any, validator_set: ValidatorSet,
                  node_id: str, private_key_hex: str,
                  peer_certificate_fingerprints: Mapping[str, str],
-                 replay_db_path: str | Path, clock=time.time):
+                 replay_db_path: str | Path, clock=time.time,
+                 max_connections: int = DEFAULT_MAX_PEER_CONNECTIONS,
+                 io_timeout_seconds: float = DEFAULT_PEER_IO_TIMEOUT_SECONDS):
         if node_id not in validator_set.validators:
             raise PeerTransportError("LOCAL_NODE_NOT_IN_VALIDATOR_SET")
         if public_key_hex(private_key_hex) != validator_set.validators[node_id].public_key_hex:
@@ -75,7 +79,17 @@ class GCFPeerNode:
             if peer_id not in validator_set.validators:
                 raise PeerTransportError("PEER_ID_NOT_IN_VALIDATOR_SET")
             self.peer_fingerprints[normalized] = peer_id
+        if (isinstance(max_connections, bool) or not isinstance(max_connections, int)
+                or not 1 <= max_connections <= 1024):
+            raise PeerTransportError("MAX_CONNECTIONS_INVALID")
+        if (isinstance(io_timeout_seconds, bool)
+                or not isinstance(io_timeout_seconds, (int, float))
+                or not 0.1 <= io_timeout_seconds <= 60):
+            raise PeerTransportError("PEER_IO_TIMEOUT_INVALID")
         self.clock = clock
+        self.max_connections = max_connections
+        self.io_timeout_seconds = float(io_timeout_seconds)
+        self._connection_slots = asyncio.Semaphore(max_connections)
         self.replay_db_path = str(replay_db_path)
         Path(self.replay_db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
@@ -186,6 +200,11 @@ class GCFPeerNode:
 
     async def _handle_connection(self, reader: asyncio.StreamReader,
                                  writer: asyncio.StreamWriter) -> None:
+        async with self._connection_slots:
+            await self._process_connection(reader, writer)
+
+    async def _process_connection(self, reader: asyncio.StreamReader,
+                                  writer: asyncio.StreamWriter) -> None:
         try:
             tls = writer.get_extra_info("ssl_object")
             cert = tls.getpeercert(binary_form=True) if tls else None
@@ -195,11 +214,15 @@ class GCFPeerNode:
             peer_id = self.peer_fingerprints.get(fingerprint)
             if peer_id is None:
                 raise PeerTransportError("TLS_PEER_CERTIFICATE_NOT_ALLOWLISTED")
-            prefix = await reader.readexactly(4)
+            prefix = await asyncio.wait_for(
+                reader.readexactly(4), timeout=self.io_timeout_seconds,
+            )
             length = int.from_bytes(prefix, "big")
             if length < 1 or length > MAX_FRAME_BYTES:
                 raise PeerTransportError("FRAME_LENGTH_INVALID")
-            raw = await reader.readexactly(length)
+            raw = await asyncio.wait_for(
+                reader.readexactly(length), timeout=self.io_timeout_seconds,
+            )
 
             def unique_object(pairs):
                 out = {}
@@ -212,6 +235,9 @@ class GCFPeerNode:
             envelope = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
             response = self.handle_envelope(peer_id, envelope)
             status = "accepted"
+        except asyncio.TimeoutError:
+            response = {"accepted": False, "error": "PEER_IO_TIMEOUT"}
+            status = "rejected"
         except Exception as exc:
             response = {"accepted": False, "error": str(exc)[:180]}
             status = "rejected"
@@ -221,13 +247,17 @@ class GCFPeerNode:
                 separators=(",", ":"), ensure_ascii=False,
             ).encode("utf-8")
             writer.write(len(body).to_bytes(4, "big") + body)
-            await writer.drain()
+            await asyncio.wait_for(
+                writer.drain(), timeout=self.io_timeout_seconds,
+            )
         except Exception:
             pass
         finally:
             writer.close()
             try:
-                await writer.wait_closed()
+                await asyncio.wait_for(
+                    writer.wait_closed(), timeout=self.io_timeout_seconds,
+                )
             except Exception:
                 pass
 
@@ -239,6 +269,8 @@ class GCFPeerNode:
         return await asyncio.start_server(
             self._handle_connection, host, port,
             ssl=tls_context, limit=MAX_FRAME_BYTES + 4,
+            backlog=self.max_connections,
+            ssl_handshake_timeout=self.io_timeout_seconds,
         )
 
     async def send(self, host: str, port: int, tls_context: ssl.SSLContext,
