@@ -80,9 +80,9 @@ async function setup() {
     "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
   ) };
 }
-async function request(env, method, path, { headers = {}, body } = {}) {
+async function request(env, method, path, { headers = {}, body, signGod = true } = {}) {
   let wireBody = body;
-  if (method === "PUT" && body && !Object.prototype.hasOwnProperty.call(body, "authorization")) {
+  if (method === "PUT" && signGod && body && !Object.prototype.hasOwnProperty.call(body, "authorization")) {
     const unsigned = {
       schema: GOD_SCHEMA, signer_id: env.GOD_ANCHOR_AUTH_SIGNER_ID,
       network_id: body.network_id, sequence: body.sequence, policy_hash: body.policy_hash,
@@ -130,10 +130,10 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
 
 test("valid bearer without GOD authorization is rejected", async () => {
   const { env } = await setup();
-  const body = { ...writeBody("test-net", 1, "1".repeat(64), 0, ZERO), authorization: null };
+  const body = writeBody("test-net", 1, "1".repeat(64), 0, ZERO);
   const response = await request(env, "PUT", "/v1/anchors/test-net", {
     headers: { authorization: "Bearer " + TOKEN, "if-none-match": "*",
-      "content-type": "application/json" }, body,
+      "content-type": "application/json" }, body, signGod: false,
   });
   assert.equal(response.status, 403);
   assert.equal(env.ANCHOR_DB.rows.size, 0);
