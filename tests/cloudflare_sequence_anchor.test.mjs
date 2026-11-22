@@ -257,7 +257,7 @@ test("rejects a GOD public key whose independently pinned fingerprint does not m
       "content-type": "application/json" }, body,
   });
   assert.equal(response.status, 503);
-  assert.equal((await response.json()).error, "god_policy_fingerprint_pin_mismatch");
+  assert.equal((await response.json()).error, "god_policy_trust_fingerprint_pin_mismatch");
   assert.equal(env.ANCHOR_DB.rows.size, 0);
 });
 
