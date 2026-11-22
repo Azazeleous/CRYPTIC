@@ -26,7 +26,7 @@ Consequently, the public G.O.D. repository update documents the boundary only. C
 
 ## Gate 2 — Independent monotonic sequence anchor
 
-**Software delivered:** HTTPSSequenceAnchor submits a GCF/1 finality certificate with each sequence transition. The Cloudflare Worker independently verifies the signed proposal, candidate digest, pinned validator-set hash/network/epoch, proposer membership/key, unique PREVOTE and PRECOMMIT signatures, POLC digest, and strict greater-than-two-thirds voting weight in both phases. The transition is bound to the exact anchor tuple: proposal height equals the new sequence, proposal parent hash equals the expected old anchor hash, and proposal payload hash equals the new policy hash. A bearer token is transport authentication only and cannot authorize a transition.
+**Software delivered:** HTTPSSequenceAnchor submits a GCF/1 finality certificate with each sequence transition. The Cloudflare Worker independently verifies the signed proposal, candidate digest, pinned validator-set hash/network/epoch, proposer membership/key, unique PREVOTE and PRECOMMIT signatures, POLC digest, and strict greater-than-two-thirds voting weight in both phases. The transition is bound to the exact anchor tuple: proposal anchor_sequence equals the new sequence, proposal parent hash equals the expected old anchor hash, and proposal payload hash equals the new policy hash. A bearer token is transport authentication only and cannot authorize a transition.
 
 The Worker requires an independently pinned validator-set configuration:
 - `ANCHOR_VALIDATOR_SET_JSON`: sorted validator IDs, public keys, and weights with exact network and epoch.
