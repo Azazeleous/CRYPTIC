@@ -74,6 +74,7 @@ class GCFPolicyUpdateCoordinator:
         justice_commitment: Mapping[str, Any],
         height: int,
         round: int = 0,
+        round_change_certificate: Mapping[str, Any] | None = None,
         expires_at: int | None = None,
         nonce: str | None = None,
     ) -> dict:
@@ -123,6 +124,7 @@ class GCFPolicyUpdateCoordinator:
                 issued_at=now,
                 expires_at=expiry,
                 anchor_sequence=sequence,
+                round_change_certificate=round_change_certificate,
             )
             accepted = self.engine.submit_proposal(proposal)
             return {
