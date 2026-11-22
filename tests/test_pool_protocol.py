@@ -21,7 +21,7 @@ class PoolProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(PoolJobError,"expired"):
             verify_pool_job(self.job,trusted_issuer_public_key_hex=self.public_hex,expected_issuer_id="pool-issuer",expected_pool_id="gaia-internal",expected_network_id="hccgn-test",now=1121)
     def test_worker_executes_bounded_job(self):
-        result=execute_pool_job(self.job,trusted_issuer_public_key_hex=self.public_hex,expected_issuer_id="pool-issuer",expected_pool_id="gaia-internal",expected_network_id="hccgn-test",expected_issuer_id="pool-issuer",worker_id="hp-aio",now=1001)
+        result=execute_pool_job(self.job,trusted_issuer_public_key_hex=self.public_hex,expected_issuer_id="pool-issuer",expected_pool_id="gaia-internal",expected_network_id="hccgn-test",worker_id="hp-aio",now=1001)
         self.assertEqual(result["schema"],"CRYPTIC-POOL-SUBMISSION/1")
         self.assertEqual(result["worker_id"],"hp-aio")
         self.assertLessEqual(result["measurements"]["attempts"],8)
