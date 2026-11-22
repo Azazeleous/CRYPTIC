@@ -28,6 +28,10 @@ async function verifyPolicyAuthorization(authorization, transition, networkId, e
       !env.ANCHOR_GOD_POLICY_SIGNER_ID || !env.ANCHOR_POLICY_ID) {
     return { ok: false, reason: "god_policy_trust_not_configured" };
   }
+  if (!HEX_256.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX) ||
+      !HEX_256.test(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256)) {
+    return { ok: false, reason: "god_policy_trust_configuration_invalid" };
+  }
   const a = authorization;
   if (a.schema !== POLICY_SCHEMA || a.signer_id !== env.ANCHOR_GOD_POLICY_SIGNER_ID ||
       a.capability !== POLICY_CAPABILITY || a.policy_id !== env.ANCHOR_POLICY_ID ||
@@ -52,9 +56,14 @@ async function verifyPolicyAuthorization(authorization, transition, networkId, e
         fingerprint !== env.ANCHOR_GOD_POLICY_PUBLIC_KEY_SHA256) {
       return { ok: false, reason: "god_policy_fingerprint_pin_mismatch" };
     }
-    const publicKey = await crypto.subtle.importKey(
-      "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
-    );
+    let publicKey;
+    try {
+      publicKey = await crypto.subtle.importKey(
+        "raw", publicRaw, { name: "Ed25519" }, false, ["verify"]
+      );
+    } catch {
+      return { ok: false, reason: "god_policy_trust_configuration_invalid" };
+    }
     const signature = decodeBase64(a.signature);
     if (signature.length !== 64) throw new Error("signature_length_invalid");
     const unsigned = Object.fromEntries(Object.entries(a).filter(([key]) => key !== "signature"));
@@ -223,7 +232,10 @@ async function advanceAnchor(request, networkId, env) {
   }
   const authorization = await verifyPolicyAuthorization(body.authorization, body,
     networkId, env, now);
-  if (!authorization.ok) return json({ error: authorization.reason }, 403);
+  if (!authorization.ok) {
+    const trustUnavailable = authorization.reason.startsWith("god_policy_trust_");
+    return json({ error: authorization.reason }, trustUnavailable ? 503 : 403);
+  }
 
   const ifNoneMatch = request.headers.get("if-none-match");
   const ifMatch = request.headers.get("if-match");
