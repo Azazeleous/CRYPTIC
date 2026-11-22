@@ -667,7 +667,8 @@ class PersistentGCFVoteSigner:
 
     def __init__(self, signer: HTTPSHSMEd25519Signer, *, validator_id: str,
                  validator_set: Any, db_path: str | Path,
-                 initialize: bool = False):
+                 initialize: bool = False,
+                 clock: Callable[[], float] = time.time):
         if not isinstance(validator_id, str) or not validator_id:
             raise RemoteProviderError("vote_signer_validator_id_invalid")
         validator = getattr(validator_set, "validators", {}).get(validator_id)
@@ -684,6 +685,8 @@ class PersistentGCFVoteSigner:
             raise RemoteProviderError("vote_lock_initialize_flag_invalid")
 
         self.signer = signer
+        self.validator_set = validator_set
+        self.clock = clock
         self.validator_id = validator_id
         self.network_id = validator_set.network_id
         self.epoch = validator_set.epoch
@@ -753,11 +756,101 @@ class PersistentGCFVoteSigner:
                     """).fetchone()
                     if stored != identity:
                         raise RemoteProviderError("vote_lock_identity_mismatch")
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS gcf_vote_authorized_proposals(
+                      network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                      height INTEGER NOT NULL, round INTEGER NOT NULL,
+                      candidate_digest TEXT NOT NULL, value_digest TEXT NOT NULL,
+                      round_change_certificate_digest TEXT,
+                      highest_polc_round INTEGER, highest_polc_value_digest TEXT,
+                      PRIMARY KEY(network_id,epoch,height,round,candidate_digest)
+                    )
+                """)
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS gcf_vote_signing_round_state(
+                      network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                      height INTEGER NOT NULL,
+                      vote_type TEXT NOT NULL CHECK(vote_type IN ('PREVOTE','PRECOMMIT')),
+                      validator_id TEXT NOT NULL, round INTEGER NOT NULL,
+                      candidate_digest TEXT NOT NULL, value_digest TEXT NOT NULL,
+                      PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
+                    )
+                """)
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS gcf_vote_signing_history(
+                      message_digest TEXT PRIMARY KEY,
+                      network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                      height INTEGER NOT NULL, round INTEGER NOT NULL,
+                      vote_type TEXT NOT NULL, validator_id TEXT NOT NULL,
+                      candidate_digest TEXT NOT NULL, value_digest TEXT NOT NULL,
+                      state TEXT NOT NULL CHECK(state IN ('INTENT','SIGNED')),
+                      created_at INTEGER NOT NULL
+                    )
+                """)
                 db.execute("COMMIT")
             except Exception:
                 if db.in_transaction:
                     db.execute("ROLLBACK")
                 raise
+
+    def authorize_proposal(self, proposal: Mapping[str, Any]) -> dict:
+        """Verify and durably register the exact proposal and any POLC transition proof."""
+        from src.consensus.gcf import GCFEngine, canonical_bytes, sha256_hex
+        from src.consensus.round_change import value_digest, verify_round_change_certificate
+
+        engine = object.__new__(GCFEngine)
+        engine.validator_set = self.validator_set
+        engine.clock = self.clock
+        engine.max_clock_skew = 30
+        try:
+            candidate_digest, normalized = engine._validate_proposal(proposal)
+        except Exception as exc:
+            raise RemoteProviderError("vote_signing_proposal_not_authorized") from exc
+        stable_value = value_digest(normalized)
+        certificate = normalized.get("round_change_certificate")
+        highest_round = None
+        highest_value = None
+        certificate_digest = None
+        if certificate is not None:
+            checked = verify_round_change_certificate(
+                certificate, validator_set=self.validator_set,
+                height=normalized["height"], clock=self.clock,
+            )
+            if not checked["valid"] or checked["target_round"] != normalized["round"]:
+                raise RemoteProviderError("vote_signing_round_change_certificate_invalid")
+            certificate_digest = checked["digest"]
+            highest_round = checked["highest_polc_round"]
+            if checked["highest_polc"] is not None:
+                highest_value = value_digest(checked["highest_polc"]["proposal"])
+        values = (
+            self.network_id, self.epoch, normalized["height"], normalized["round"],
+            candidate_digest, stable_value, certificate_digest, highest_round, highest_value,
+        )
+        with closing(sqlite3.connect(self.db_path, timeout=15, isolation_level=None)) as db:
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute("""
+                    INSERT OR IGNORE INTO gcf_vote_authorized_proposals
+                    VALUES(?,?,?,?,?,?,?,?,?)
+                """, values)
+                stored = db.execute("""
+                    SELECT network_id,epoch,height,round,candidate_digest,value_digest,
+                           round_change_certificate_digest,highest_polc_round,
+                           highest_polc_value_digest
+                    FROM gcf_vote_authorized_proposals
+                    WHERE network_id=? AND epoch=? AND height=? AND round=? AND candidate_digest=?
+                """, (self.network_id, self.epoch, normalized["height"],
+                      normalized["round"], candidate_digest)).fetchone()
+                if stored != values:
+                    raise RemoteProviderError("vote_signing_proposal_authorization_conflict")
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        return {"candidate_digest": candidate_digest, "value_digest": stable_value,
+                "round": normalized["round"], "round_change_certificate_digest": certificate_digest}
 
     def sign(self, message: bytes) -> bytes:
         from src.consensus.gcf import VOTE_DOMAIN, SCHEMA, canonical_bytes
