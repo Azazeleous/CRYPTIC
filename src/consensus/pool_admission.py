@@ -38,7 +38,7 @@ def admit_pool_submission(submission:Mapping[str,Any],*,trusted_issuer_public_ke
     except Exception as exc: raise PoolAdmissionError("active_target_unavailable") from exc
     if not isinstance(active_target,bytes) or len(active_target)!=32: raise PoolAdmissionError("active_target_invalid")
     if active_target.hex()!=job["target"]: raise PoolAdmissionError("job_target_not_active")
-    proposal={"height":job["height"],"epoch":job["epoch"],"issued_at":job["issued_at"],"parent_hash":job["parent_hash"],"payload_hash":job["payload_hash"]}
+    proposal={"network_id":expected_network_id,"height":job["height"],"epoch":job["epoch"],"issued_at":job["issued_at"],"parent_hash":job["parent_hash"],"payload_hash":job["payload_hash"]}
     try: verified=verify_proof(proof,expected_network_id=expected_network_id,expected_target=active_target,proposal=proposal)
     except Exception as exc: raise PoolAdmissionError("hccgn_proof_rejected:"+type(exc).__name__) from exc
     if verified.get("valid") is not True or verified.get("proof_hash")!=proof_hash: raise PoolAdmissionError("hccgn_proof_rejected")
