@@ -234,23 +234,37 @@ async function verifyGcfProposal(proposal, certificate, vset) {
     "payload_hash", "proof_hash", "justice_commitment", "issued_at", "expires_at",
     "proposer_id", "proposer_public_key", "nonce", "signature", "anchor_sequence"];
   const allowed = new Set([...required, "round_change_certificate"]);
-  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal) ||
-      !required.every(key => Object.hasOwn(proposal, key)) ||
-      Object.keys(proposal).some(key => !allowed.has(key)) ||
-      proposal.schema !== GCF_SCHEMA || proposal.network_id !== certificate.network_id ||
-      proposal.epoch !== certificate.epoch || !Number.isSafeInteger(proposal.height) || proposal.height < 1 ||
+  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal)) {
+    return { ok: false, reason: "gcf_proposal_shape_invalid" };
+  }
+  if (!required.every(key => Object.hasOwn(proposal, key)) ||
+      Object.keys(proposal).some(key => !allowed.has(key))) {
+    return { ok: false, reason: "gcf_proposal_fields_invalid" };
+  }
+  if (proposal.schema !== GCF_SCHEMA || proposal.network_id !== certificate.network_id ||
+      proposal.epoch !== certificate.epoch) {
+    return { ok: false, reason: "gcf_proposal_context_invalid" };
+  }
+  if (!Number.isSafeInteger(proposal.height) || proposal.height < 1 ||
       !Number.isSafeInteger(proposal.anchor_sequence) || proposal.anchor_sequence < 1 ||
-      !Number.isSafeInteger(proposal.round) || proposal.round < 0 ||
-      !strictHex(proposal.parent_hash) || !strictHex(proposal.payload_hash) ||
-      !strictHex(proposal.proof_hash) ||
-      !Number.isSafeInteger(proposal.issued_at) || !Number.isSafeInteger(proposal.expires_at) ||
-      proposal.expires_at <= proposal.issued_at ||
-      proposal.expires_at - proposal.issued_at > 3600 ||
-      typeof proposal.proposer_id !== "string" || !proposal.proposer_id ||
-      typeof proposal.nonce !== "string" || proposal.nonce.length < 16 || proposal.nonce.length > 128 ||
-      !proposal.justice_commitment || typeof proposal.justice_commitment !== "object" ||
+      !Number.isSafeInteger(proposal.round) || proposal.round < 0) {
+    return { ok: false, reason: "gcf_proposal_integer_fields_invalid" };
+  }
+  if (!strictHex(proposal.parent_hash) || !strictHex(proposal.payload_hash) ||
+      !strictHex(proposal.proof_hash)) {
+    return { ok: false, reason: "gcf_proposal_hash_fields_invalid" };
+  }
+  if (!Number.isSafeInteger(proposal.issued_at) || !Number.isSafeInteger(proposal.expires_at) ||
+      proposal.expires_at <= proposal.issued_at || proposal.expires_at - proposal.issued_at > 3600) {
+    return { ok: false, reason: "gcf_proposal_time_fields_invalid" };
+  }
+  if (typeof proposal.proposer_id !== "string" || !proposal.proposer_id ||
+      typeof proposal.nonce !== "string" || proposal.nonce.length < 16 || proposal.nonce.length > 128) {
+    return { ok: false, reason: "gcf_proposal_identity_fields_invalid" };
+  }
+  if (!proposal.justice_commitment || typeof proposal.justice_commitment !== "object" ||
       Array.isArray(proposal.justice_commitment)) {
-    return { ok: false, reason: "gcf_proposal_invalid" };
+    return { ok: false, reason: "gcf_proposal_justice_commitment_invalid" };
   }
   const proposer = vset.validators.get(proposal.proposer_id);
   if (!proposer || proposer.public_key_hex !== proposal.proposer_public_key) {
