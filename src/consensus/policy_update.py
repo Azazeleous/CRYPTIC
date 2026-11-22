@@ -48,6 +48,10 @@ class GCFPolicyUpdateCoordinator:
             raise PolicyUpdateError("proposer_signer_public_key_invalid")
         if engine.validator_set.network_id == "":
             raise PolicyUpdateError("validator_network_invalid")
+        if target_policy.sequence_anchor is not sequence_anchor:
+            raise PolicyUpdateError("policy_and_coordinator_anchor_mismatch")
+        if target_policy.require_external_anchor is not True:
+            raise PolicyUpdateError("external_anchor_requirement_must_be_enabled")
         self.engine = engine
         self.target_policy = target_policy
         self.sequence_anchor = sequence_anchor
