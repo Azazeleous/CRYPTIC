@@ -571,6 +571,105 @@ class HTTPSHSMEd25519Signer:
         self.client_certificate = client_certificate
         self.client_private_key = client_private_key
 
+    def sign_round_change(self, message: Mapping[str, Any]) -> dict:
+        """Sign one immutable round-change message per height/target-round with durable retry."""
+        from src.consensus.round_change import (
+            ROUND_CHANGE_DOMAIN, ROUND_CHANGE_SCHEMA, verify_polc,
+        )
+        from src.consensus.gcf import canonical_bytes
+
+        required = {
+            "schema", "network_id", "epoch", "height", "source_round",
+            "target_round", "validator_id", "issued_at", "expires_at",
+            "nonce", "highest_polc",
+        }
+        if not isinstance(message, Mapping) or set(message) != required:
+            raise RemoteProviderError("round_change_signing_fields_invalid")
+        body = dict(message)
+        if (body["schema"] != ROUND_CHANGE_SCHEMA
+                or body["network_id"] != self.network_id
+                or body["epoch"] != self.epoch
+                or body["validator_id"] != self.validator_id):
+            raise RemoteProviderError("round_change_signing_identity_mismatch")
+        for field, minimum in (
+            ("height", 1), ("source_round", 0), ("target_round", 1),
+            ("issued_at", 0), ("expires_at", 1),
+        ):
+            value = body[field]
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise RemoteProviderError("round_change_signing_integer_invalid")
+        if body["source_round"] >= body["target_round"]:
+            raise RemoteProviderError("round_change_signing_round_range_invalid")
+        now = self.clock()
+        if (body["expires_at"] <= body["issued_at"]
+                or body["expires_at"] - body["issued_at"] > 300
+                or body["issued_at"] > now + 30
+                or now > body["expires_at"]
+                or now - body["issued_at"] > 300):
+            raise RemoteProviderError("round_change_signing_time_invalid")
+        nonce = body["nonce"]
+        if (not isinstance(nonce, str) or len(nonce) != 32
+                or any(ch not in "0123456789abcdef" for ch in nonce)):
+            raise RemoteProviderError("round_change_signing_nonce_invalid")
+        if body["highest_polc"] is not None:
+            checked = verify_polc(
+                body["highest_polc"], validator_set=self.validator_set,
+                clock=self.clock,
+            )
+            if (not checked["valid"]
+                    or checked["proposal"]["height"] != body["height"]
+                    or checked["proposal"]["round"] > body["source_round"]):
+                raise RemoteProviderError("round_change_signing_polc_invalid")
+        encoded = canonical_bytes(body)
+        if len(encoded) > 1_048_576:
+            raise RemoteProviderError("round_change_signing_message_too_large")
+        message_digest = hashlib.sha256(ROUND_CHANGE_DOMAIN + encoded).hexdigest()
+        message_json = encoded.decode("utf-8")
+
+        with closing(sqlite3.connect(self.db_path, timeout=15, isolation_level=None)) as db:
+            db.execute("PRAGMA synchronous=FULL")
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute("""
+                    SELECT message_digest,message_json,state,signature
+                    FROM gcf_round_change_signing_locks
+                    WHERE network_id=? AND epoch=? AND height=? AND target_round=?
+                      AND validator_id=?
+                """, (self.network_id, self.epoch, body["height"],
+                      body["target_round"], self.validator_id)).fetchone()
+                if row is not None:
+                    if row[0] != message_digest or row[1] != message_json:
+                        raise RemoteProviderError("round_change_signing_equivocation")
+                    if row[2] == "SIGNED" and row[3] is not None:
+                        db.execute("COMMIT")
+                        return {**body, "signature": base64.b64encode(row[3]).decode("ascii")}
+                else:
+                    db.execute("""
+                        INSERT INTO gcf_round_change_signing_locks
+                        VALUES(?,?,?,?,?,?,?,'INTENT',NULL,?)
+                    """, (self.network_id, self.epoch, body["height"],
+                          body["target_round"], self.validator_id, message_digest,
+                          message_json, int(now)))
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
+        signature = self.signer._sign_message(ROUND_CHANGE_DOMAIN + encoded)
+        with closing(sqlite3.connect(self.db_path, timeout=15, isolation_level=None)) as db:
+            db.execute("PRAGMA synchronous=FULL")
+            updated = db.execute("""
+                UPDATE gcf_round_change_signing_locks
+                SET state='SIGNED',signature=?
+                WHERE network_id=? AND epoch=? AND height=? AND target_round=?
+                  AND validator_id=? AND message_digest=? AND message_json=?
+            """, (signature, self.network_id, self.epoch, body["height"],
+                  body["target_round"], self.validator_id, message_digest, message_json))
+            if updated.rowcount != 1:
+                raise RemoteProviderError("round_change_signing_persistence_conflict")
+        return {**body, "signature": base64.b64encode(signature).decode("ascii")}
+
     def sign(self, message: bytes) -> bytes:
         from src.consensus.gcf import VOTE_DOMAIN
         if isinstance(message, bytes) and message.startswith(VOTE_DOMAIN):
@@ -785,6 +884,18 @@ class PersistentGCFVoteSigner:
                       candidate_digest TEXT NOT NULL, value_digest TEXT NOT NULL,
                       state TEXT NOT NULL CHECK(state IN ('INTENT','SIGNED')),
                       created_at INTEGER NOT NULL
+                    )
+                """)
+                db.execute("""
+                    CREATE TABLE IF NOT EXISTS gcf_round_change_signing_locks(
+                      network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                      height INTEGER NOT NULL, target_round INTEGER NOT NULL,
+                      validator_id TEXT NOT NULL, message_digest TEXT NOT NULL,
+                      message_json TEXT NOT NULL,
+                      state TEXT NOT NULL CHECK(state IN ('INTENT','SIGNED')),
+                      signature BLOB,
+                      created_at INTEGER NOT NULL,
+                      PRIMARY KEY(network_id,epoch,height,target_round,validator_id)
                     )
                 """)
                 db.execute("COMMIT")
