@@ -121,7 +121,7 @@ class GCFAdamConsensusTests(unittest.TestCase):
             payload_hash=sha256_hex(b"different-state"),
             proof_hash=hashlib.sha256(b"different-proof").hexdigest(),
             justice_commitment=self.proposal["justice_commitment"],
-            proposer_id="proposer-1", proposer_private_key_hex=self.proposer_private,
+            proposer_id="v0", proposer_private_key_hex=self.keys["v0"][0],
             nonce="abcdef0123456789abcdef0123456789",
             issued_at=self.now, expires_at=self.now + 300,
         )
@@ -135,7 +135,7 @@ class GCFAdamConsensusTests(unittest.TestCase):
             validator_id="v0", validator_private_key_hex=self.keys["v0"][0],
             proposal=second, vote_type="PREVOTE", issued_at=self.now,
         )
-        with self.assertRaisesRegex(GCFError, "VALIDATOR_EQUIVOCATION_DETECTED"):
+        with self.assertRaisesRegex(GCFError, "VOTE_EQUIVOCATION_SAME_ROUND"):
             self.engine.submit_vote(conflicting)
 
     def test_votes_after_candidate_expiry_are_rejected(self):
