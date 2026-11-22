@@ -6,8 +6,8 @@ globalThis.crypto ||= webcrypto;
 import worker from "../cloudflare/sequence-anchor/src/index.js";
 
 const ZERO = "0".repeat(64);
-const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\\0");
-const POLICY_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-POLICY-TRANSITION/1\\0");
+const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
+const POLICY_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-POLICY-TRANSITION/1\0");
 const TOKEN = "anchor-test-token-".padEnd(40, "x");
 
 function canonical(value) {
