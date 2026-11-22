@@ -226,6 +226,9 @@ async function loadPinnedValidatorSet(env, networkId) {
 }
 
 async function verifyGcfProposal(proposal, certificate, vset) {
+  if (!proposal || new TextEncoder().encode(canonical(proposal)).byteLength > MAX_PROPOSAL_BYTES) {
+    return { ok: false, reason: "proposal_too_large" };
+  }
   const required = ["schema", "network_id", "epoch", "height", "round", "parent_hash",
     "payload_hash", "proof_hash", "justice_commitment", "issued_at", "expires_at",
     "proposer_id", "proposer_public_key", "nonce", "signature", "anchor_sequence"];
