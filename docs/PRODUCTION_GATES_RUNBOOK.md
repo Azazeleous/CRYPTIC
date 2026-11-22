@@ -109,17 +109,11 @@ The following shows the software wiring only. The endpoint URLs, public keys, si
 ~~~python
 from src.consensus.runtime import build_consensus_runtime
 from src.governance.remote_providers import (
-    GODHTTPSGate,
     HTTPSJusticeProviders,
     HTTPSSequenceAnchor,
     SignedHTTPSDecisionClient,
 )
 
-god_client = SignedHTTPSDecisionClient(
-    GOD_DECISION_URL,
-    signer_id=GOD_SIGNER_ID,
-    trusted_public_key=GOD_PUBLIC_KEY,
-)
 anchor = HTTPSSequenceAnchor(
     SEQUENCE_ANCHOR_URL,
     signer_id=ANCHOR_SIGNER_ID,
@@ -148,12 +142,17 @@ runtime = build_consensus_runtime(
     god_signer_id=GOD_SIGNER_ID,
     god_trust_root_fingerprint=GOD_ROOT_FINGERPRINT_FROM_INDEPENDENT_CHANNEL,
     sequence_anchor=anchor,
-    god_gate=GODHTTPSGate(god_client),
+    god_gate=None,  # compatibility parameter; active ValidatorSet governs proposal admission
     policy_evidence_verifier=justice.verify_policy,
     justice_evidence_verifier=justice.verify_evidence,
     consensus_endpoint=CONSENSUS_ENDPOINT,
     require_external_anchor=True,
+    policy_update_proposer_id=LOCAL_VALIDATOR_ID,
+    policy_update_signer=LOCAL_VALIDATOR_HSM_SIGNER,
 )
+# The coordinator is available as runtime.policy_update.
+# Use prepare(), distribute the proposal, collect signed peer votes,
+# then call finalize_and_install() after both weighted quorums.
 ~~~
 
 For policy changes, use the `runtime.policy_update` coordinator described in Gate 2; it ensures the proposal, finality certificate, and HCCGN install all refer to the same policy digest and anchor sequence. For direct anchor integrations, each `advance_sequence()` call must receive the exact certificate returned by `GCFEngine.finalize(candidate_digest)["certificate"]`. The client reads the signed anchor tuple and submits the certificate; the Worker independently verifies the certificate against its pinned validator set and exact old/new anchor binding before D1 mutation. If the anchor changes between read and write, the CAS fails. Validator proposal/vote signing is a separate call path. Construct HTTPSHSMEd25519Signer with the approved HSM endpoint, mTLS client certificate/private key, key ID, and independently pinned validator public key. Pass that signer to make_proposal_with_signer() and make_vote_with_signer(). The consensus process receives signatures and public keys, not raw validator private-key bytes.
