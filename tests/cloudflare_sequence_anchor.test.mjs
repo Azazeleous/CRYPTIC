@@ -116,11 +116,11 @@ async function request(env, method, path, { headers = {}, body } = {}) {
     method, headers, body: body === undefined ? undefined : canonical(body),
   }), env);
 }
-async function makeCertificate(ctx, { sequence, oldHash, newHash, signers = [0, 1, 2],
+async function makeCertificate(ctx, { sequence, height = sequence, oldHash, newHash, signers = [0, 1, 2],
   network = "test-net", epoch = 1 } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const proposalBody = {
-    schema: "GCF/1", network_id: network, epoch, height: sequence, round: 0,
+    schema: "GCF/1", network_id: network, epoch, height, anchor_sequence: sequence, round: 0,
     parent_hash: oldHash, payload_hash: newHash, proof_hash: "a".repeat(64),
     justice_commitment: { justice_profile: "GAIA-JUSTICE/1", commitment: "b".repeat(64) },
     issued_at: now, expires_at: now + 300, proposer_id: "v1",
@@ -133,7 +133,7 @@ async function makeCertificate(ctx, { sequence, oldHash, newHash, signers = [0, 
     const output = [];
     for (const index of signers) {
       const body = {
-        schema: "GCF/1", network_id: network, epoch, height: sequence, round: 0,
+        schema: "GCF/1", network_id: network, epoch, height, round: 0,
         candidate_digest: candidateDigest, validator_id: "v" + (index + 1),
         vote_type: kind, approve: true, polc_digest: polcDigest, issued_at: now + 1,
       };
@@ -150,7 +150,7 @@ async function makeCertificate(ctx, { sequence, oldHash, newHash, signers = [0, 
   ]));
   const precommits = await votes("PRECOMMIT", polcDigest);
   return {
-    schema: "GCF/1", network_id: network, epoch, height: sequence, round: 0,
+    schema: "GCF/1", network_id: network, epoch, height, round: 0,
     candidate_digest: candidateDigest, proposal,
     validator_set: { network_id: "test-net", epoch: 1,
       validators: ctx.validators, validator_set_hash: ctx.env.ANCHOR_VALIDATOR_SET_SHA256 },
@@ -197,7 +197,7 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
 test("pinned GCF finality certificate authorizes initialization and advancement", async () => {
   const ctx = await setup();
   const firstHash = "1".repeat(64);
-  const firstCert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: firstHash });
+  const firstCert = await makeCertificate(ctx, { sequence: 1, height: 17, oldHash: ZERO, newHash: firstHash });
   const first = writeBody(1, firstHash, 0, ZERO, firstCert);
   const initialized = await put(ctx, first, true);
   assert.equal(initialized.status, 200, JSON.stringify(await initialized.clone().json()));
@@ -206,7 +206,7 @@ test("pinned GCF finality certificate authorizes initialization and advancement"
   await verifyAnchorRecord(record, ctx.anchorPublicKey);
 
   const secondHash = "2".repeat(64);
-  const secondCert = await makeCertificate(ctx, { sequence: 2, oldHash: firstHash, newHash: secondHash });
+  const secondCert = await makeCertificate(ctx, { sequence: 2, height: 18, oldHash: firstHash, newHash: secondHash });
   const second = writeBody(2, secondHash, 1, firstHash, secondCert);
   const advanced = await put(ctx, second);
   assert.equal(advanced.status, 200, JSON.stringify(await advanced.clone().json()));
