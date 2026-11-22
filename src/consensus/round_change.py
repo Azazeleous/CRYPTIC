@@ -36,6 +36,22 @@ def _engine_for(vset: ValidatorSet, clock: Callable[[], float]) -> GCFEngine:
     return engine
 
 
+def value_digest(proposal: Mapping[str, Any]) -> str:
+    """Stable value identity across rounds; excludes round/proposer/time/nonce."""
+    fields = {
+        "network_id": proposal["network_id"],
+        "epoch": proposal["epoch"],
+        "height": proposal["height"],
+        "parent_hash": proposal["parent_hash"],
+        "payload_hash": proposal["payload_hash"],
+        "proof_hash": proposal["proof_hash"],
+        "justice_commitment": proposal["justice_commitment"],
+    }
+    if "anchor_sequence" in proposal:
+        fields["anchor_sequence"] = proposal["anchor_sequence"]
+    return sha256_hex(canonical_bytes(fields))
+
+
 def polc_digest(polc: Mapping[str, Any]) -> str:
     body = {
         "schema": SCHEMA,
