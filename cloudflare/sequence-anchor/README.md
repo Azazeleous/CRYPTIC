@@ -130,8 +130,8 @@ The corrected Worker source from PR #33 commit
 `aa83c24e9527ff918d0d16baa4aa0555f7a153db` was uploaded to the connected
 Cloudflare account as `cryptic-production-sequence-anchor`.
 
-- Deployment ID: `b539142b233842d9b71bc8da1c6b27ea`
-- Worker version tag: `f4b9f90848404d10ac3efdb1f701d762`
+- Deployment ID: `eaf74fb8-cab1-44d1-8391-e79a887695d2`
+- Worker version ID: `b539142b-2338-42d9-b71b-c8da1c6b27ea`
 - D1 database: `1d6199f8-8a49-45c4-abd6-ac816a91a487`
 - Remote D1 tables created: `anchors`, `used_authorization_nonces`,
   `used_finality_certificates`.
