@@ -117,15 +117,16 @@ async function request(env, method, path, { headers = {}, body } = {}) {
   }), env);
 }
 async function makeCertificate(ctx, { sequence, height = sequence, oldHash, newHash, signers = [0, 1, 2],
-  network = "test-net", epoch = 1 } = {}) {
+  network = "test-net", epoch = 1, round = 0, roundChangeCertificate = null } = {}) {
   const now = Math.floor(Date.now() / 1000);
   const proposalBody = {
-    schema: "GCF/1", network_id: network, epoch, height, anchor_sequence: sequence, round: 0,
+    schema: "GCF/1", network_id: network, epoch, height, anchor_sequence: sequence, round,
     parent_hash: oldHash, payload_hash: newHash, proof_hash: "a".repeat(64),
     justice_commitment: { justice_profile: "GAIA-JUSTICE/1", commitment: "b".repeat(64) },
     issued_at: now, expires_at: now + 300, proposer_id: "v1",
     proposer_public_key: ctx.validators[0].public_key_hex, nonce: "proposal-nonce-0001",
   };
+  if (roundChangeCertificate !== null) proposalBody.round_change_certificate = roundChangeCertificate;
   const proposal = { ...proposalBody,
     signature: await sign(ctx.validatorPairs[0].privateKey, PROPOSAL_DOMAIN, proposalBody) };
   const candidateDigest = await sha256(new TextEncoder().encode(canonical(proposal)));
@@ -133,7 +134,7 @@ async function makeCertificate(ctx, { sequence, height = sequence, oldHash, newH
     const output = [];
     for (const index of signers) {
       const body = {
-        schema: "GCF/1", network_id: network, epoch, height, round: 0,
+        schema: "GCF/1", network_id: network, epoch, height, round,
         candidate_digest: candidateDigest, validator_id: "v" + (index + 1),
         vote_type: kind, approve: true, polc_digest: polcDigest, issued_at: now + 1,
       };
@@ -158,6 +159,32 @@ async function makeCertificate(ctx, { sequence, height = sequence, oldHash, newH
     total_voting_weight: 4, precommit_weight: signers.length,
   };
 }
+
+async function makeRoundChangeMessage(ctx, index, {
+  height, sourceRound, targetRound, highestPolc = null, issuedAt = Math.floor(Date.now() / 1000),
+}) {
+  const body = {
+    schema: "GCF-ROUND-CHANGE/1", network_id: "test-net", epoch: 1, height,
+    source_round: sourceRound, target_round: targetRound,
+    validator_id: "v" + (index + 1), issued_at: issuedAt, expires_at: issuedAt + 300,
+    nonce: (index + 1).toString(16).padStart(2, "0").repeat(16),
+    highest_polc: highestPolc,
+  };
+  return { ...body, signature: await sign(
+    ctx.validatorPairs[index].privateKey, ROUND_CHANGE_DOMAIN, body
+  ) };
+}
+async function makeRoundChangeCertificate(messages, { height, targetRound }) {
+  const ordered = messages.slice().sort((a, b) => a.validator_id.localeCompare(b.validator_id));
+  const body = {
+    schema: "GCF-ROUND-CHANGE/1-CERT", network_id: "test-net", epoch: 1,
+    height, target_round: targetRound, messages: ordered,
+  };
+  return { ...body, digest: await sha256(new Uint8Array([
+    ...ROUND_CHANGE_CERT_DOMAIN, ...new TextEncoder().encode(canonical(body))
+  ])) };
+}
+
 function writeBody(sequence, hash, expectedSequence, expectedHash, certificate) {
   return {
     schema: "CRYPTIC-SEQUENCE-ANCHOR/1", network_id: "test-net",
@@ -238,6 +265,52 @@ test("rejects insufficient quorum, forged signatures, wrong epoch, and transitio
   response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+
+test("pinned Worker verifies nested round-change certificates and POLC-bound proposal values", async () => {
+  const ctx = await setup();
+  const now = Math.floor(Date.now() / 1000);
+  const height = 31, policyHash = "9".repeat(64);
+  const firstRoundMessages = await Promise.all([0, 1, 2].map(index =>
+    makeRoundChangeMessage(ctx, index, {
+      height, sourceRound: 0, targetRound: 1, issuedAt: now,
+    })
+  ));
+  const firstRoundCertificate = await makeRoundChangeCertificate(
+    firstRoundMessages, { height, targetRound: 1 },
+  );
+  const roundOneFinality = await makeCertificate(ctx, {
+    sequence: 1, height, oldHash: ZERO, newHash: policyHash,
+    round: 1, roundChangeCertificate: firstRoundCertificate,
+  });
+  const polc = {
+    schema: "GCF-POLC/1", proposal: roundOneFinality.proposal,
+    candidate_digest: roundOneFinality.candidate_digest,
+    validator_set_hash: ctx.env.ANCHOR_VALIDATOR_SET_SHA256,
+    prevotes: roundOneFinality.polc.prevotes,
+    digest: roundOneFinality.polc.digest,
+  };
+  const secondRoundMessages = await Promise.all([0, 1, 2].map(index =>
+    makeRoundChangeMessage(ctx, index, {
+      height, sourceRound: 1, targetRound: 2, highestPolc: polc, issuedAt: now,
+    })
+  ));
+  const secondRoundCertificate = await makeRoundChangeCertificate(
+    secondRoundMessages, { height, targetRound: 2 },
+  );
+  const finality = await makeCertificate(ctx, {
+    sequence: 1, height, oldHash: ZERO, newHash: policyHash,
+    round: 2, roundChangeCertificate: secondRoundCertificate,
+  });
+  const accepted = await put(ctx, writeBody(1, policyHash, 0, ZERO, finality), true);
+  assert.equal(accepted.status, 200, JSON.stringify(await accepted.clone().json()));
+
+  const corrupted = structuredClone(finality);
+  corrupted.proposal.round_change_certificate.messages[0].highest_polc.proposal.payload_hash = "a".repeat(64);
+  const rejected = await put(ctx, writeBody(1, policyHash, 0, ZERO, corrupted), true);
+  assert.equal(rejected.status, 403);
+  assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").policy_hash, policyHash);
 });
 
 test("certificate digest replay is rejected even when request nonce changes", async () => {
