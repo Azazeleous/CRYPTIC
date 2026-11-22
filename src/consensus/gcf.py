@@ -598,12 +598,16 @@ class GCFEngine:
                 if db.in_transaction:
                     db.execute("ROLLBACK")
                 raise
+        observed_weight = self.validator_set.weight_of({
+            item["validator_id"] for item in messages
+        })
         return {
             "accepted": True, "validator_id": checked["validator_id"],
             "height": height, "target_round": target,
             "quorum_reached": bool(result["valid"]),
-            "voting_weight": result.get("weight", 0),
-            "quorum_weight": result.get("quorum_weight", self.validator_set.quorum_weight()),
+            "voting_weight": observed_weight,
+            "quorum_weight": self.validator_set.quorum_weight(),
+            "message_count": len(messages),
             "certificate": certificate if result["valid"] else None,
         }
 
