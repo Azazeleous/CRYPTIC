@@ -1,28 +1,28 @@
 # CRYPTIC Production Gate Runbook v1
 
-This runbook distinguishes deployable software from external authority and hardware evidence. The repository does not manufacture GOD authorization, trust-root pins, validator keys, policy evidence, or durability claims.
+This runbook distinguishes deployable software from external authority and hardware evidence. GCF proposal admission now uses the configured validator set as its local governance policy; GCF finality still requires its existing strict greater-than-two-thirds weighted PREVOTE and PRECOMMIT quorums. The repository does not manufacture trust-root pins, validator keys, policy evidence, or durability claims.
 
 ## Upstream G.O.D. repository boundary
 
 The public `machackabook/G.O.D.` repository is G.O.D. v5.0.1: a browser capability detector, explicit-consent gate, optional read-only Chrome companion, and local evidence-receipt interface. Its published architecture explicitly places a future authenticated SYNAPSE gateway outside that repository. It is **not** the authoritative GOD governance policy service, trust-root issuer, or signed decision endpoint required by this runbook. The cross-repository interface and evidence map is documented at [G.O.D. — CRYPTIC production-gate integration](https://github.com/machackabook/G.O.D./blob/main/docs/CRYPTIC-PRODUCTION-GATE-INTEGRATION.md).
 
-Consequently, the public G.O.D. repository update documents the boundary only; it does not satisfy Gate 1, grant `gcf.consensus.propose`, or change the current fail-closed result. A separate authoritative GOD policy service/repository and independently distributed trust-root evidence are still required.
+Consequently, the public G.O.D. repository update documents the boundary only. CRYPTIC no longer requires that browser application or a separate GOD decision endpoint to admit GCF proposals: an eligible proposer must be a member of the configured network/epoch validator set and must present the exact public key registered for that validator. The existing GCF weighted PREVOTE/PRECOMMIT quorums remain the finality authority. This local proposal policy does not authorize sequence-anchor transitions; Gate 2 still requires a separately verified transition proof until its validator-quorum certificate path is implemented.
 
 
-## Gate 1 — GOD-authorized Ed25519 trust root
+## Gate 1 — HCCGN proof trust root and validator-set proposal policy
 
-**Software delivered:** load_independently_pinned_root() validates a public root-pin record against a fingerprint supplied through a separate trusted channel. GODHTTPSGate accepts only a short-lived, request-bound Ed25519 decision from a separately pinned signer. GODNetworkAuthorizer remains the final GCF adapter and fails closed if GOD does not explicitly allow gcf.consensus.propose.
+**Software delivered:** load_independently_pinned_root() validates the HCCGN proof-policy root-pin record against a fingerprint supplied through a separate trusted channel. GCF proposal admission uses ValidatorSetProposalAuthorizer: the proposer ID and public key must match the active network/epoch ValidatorSet. A separate GOD network round-trip is not required for proposal admission. Admission is not finality; the existing GCF PREVOTE and PRECOMMIT rules still require strictly more than two-thirds of configured voting weight.
 
 **Deployment requirements:**
-1. GOD governance creates/authorizes the root and the exact capability gcf.consensus.propose; this is an upstream GOD policy change, not a CRYPTIC-local allowlist edit.
-2. Transfer the public key and SHA-256 fingerprint through two independent authenticated channels. Do not copy the fingerprint from the same file or repository as the key.
-3. Provision the pin record:
+1. Provision the active validator set for the exact network and epoch. Validator IDs, public keys, and weights must be approved through the network's genesis/epoch governance process.
+2. Ensure every proposer ID and public key exactly matches that active validator set. Unknown validators, wrong epochs, and key mismatches are denied.
+3. Separately transfer the HCCGN proof-policy public key and SHA-256 fingerprint through two independent authenticated channels. Do not copy the fingerprint from the same file or repository as the key.
+4. Provision the pin record:
    {"schema":"CRYPTIC-GOD-ROOT-PIN/1","signer_id":"<GOD signer id>","public_key_hex":"<64 lowercase hex chars>"}
-4. Provision the independently obtained fingerprint to the verifier as expected_fingerprint.
-5. Configure the actual GOD decision endpoint. Its signed response must implement CRYPTIC-REMOTE-DECISION/1, bind the canonical request hash and request nonce, and expire within 300 seconds.
-6. Verify a positive authorization and a negative authorization from GOD itself. A local test key is not production evidence.
+5. Provision the independently obtained fingerprint to the verifier as expected_fingerprint.
+6. Verify validator-set epoch activation, key matching, and weighted quorum behavior against the exact configured validator set.
 
-**Still external:** GOD root authorization, out-of-band fingerprint ceremony, root rotation/recovery approvals, and the actual GOD policy deployment. Never replace them with a generated test key.
+**Still external:** HCCGN root authorization, out-of-band fingerprint ceremony, validator-set governance, root rotation/recovery approvals, and live validator key custody. Never replace them with a generated test key.
 
 ## Gate 2 — Independent monotonic sequence anchor
 
