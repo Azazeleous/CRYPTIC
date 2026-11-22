@@ -40,7 +40,7 @@ A D1 receipt derived from the certificate digest rejects replay. The conditional
 
 **Trust boundary:** a valid GCF finality certificate establishes that the pinned validator set finalized that exact proposal. It does not independently prove that the HCCGN proof is valid or that GAIA-JUSTICE policy/evidence checks passed. Those remain separate gates. Validator-set governance, public-key distribution, and live key custody must be independently administered; the Worker does not become GOD authority.
 
-**Deployment requirements:** deploy the corrected Worker source and migrations; provision the validator-set configuration and independently obtained hash; create/provision the anchor signing key and write token through the approved secret manager; keep Workers.dev disabled and the route unpublished until independent review; then test certificate tampering, wrong network/epoch/set hash, duplicate signers, invalid signatures, insufficient PREVOTE/PRECOMMIT quorum, POLC mismatch, replay, concurrent CAS, stale writers, restore, and outage.
+**Deployment requirements:** deploy the corrected Worker source and apply all D1 migrations, including `0003_gcf_finality_certificate_receipts.sql`; provision the validator-set configuration and independently obtained hash; create/provision the anchor signing key and write token through the approved secret manager; keep Workers.dev disabled and the route unpublished until independent review; then test certificate tampering, wrong network/epoch/set hash, duplicate signers, invalid signatures, insufficient PREVOTE/PRECOMMIT quorum, POLC mismatch, replay, concurrent CAS, stale writers, restore, and outage.
 
 **Still external:** independently approved validator-set genesis/epoch governance and hash distribution; production anchor signing-key custody; secret provisioning; corrected Worker deployment; protected endpoint and independent administration; concurrent-writer, rollback/restore, and outage evidence; and proof that anchor state cannot be rolled back with the validator host.
 
@@ -93,7 +93,7 @@ Each provider signs a response bound to the exact request digest, signer identit
 
 ## Current evidence and activation rule
 
-CI contract tests verify the client cryptography, request binding, anchor compare-and-swap semantics, remote signer output, mutual-TLS loopback transport, and ADAM process-crash recovery. They do not certify external services or production hardware.
+CI contract tests verify GCF certificate signatures, pinned validator-set binding, POLC and weighted quorums, certificate replay rejection, anchor compare-and-swap semantics, remote signer output, mutual-TLS loopback transport, and ADAM process-crash recovery. They do not certify external services or production hardware.
 
 Production activation is permitted only when all five gates have signed, independently reviewable evidence. Until then, configure all missing providers as absent and keep proposal acceptance fail-closed.
 
