@@ -514,7 +514,10 @@ class RemoteProviderTests(unittest.TestCase):
                 network_id="test-net", epoch=1, height=22, round=round_number,
                 parent_hash="0" * 64, payload_hash=payload * 64,
                 proof_hash="2" * 64, justice_commitment={"justice_profile": "GAIA-JUSTICE/1"},
-                proposer_id="v1", proposer_private_key_hex=self.private.hex(),
+                proposer_id="v1", proposer_private_key_hex=self.private.private_bytes(
+                    serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                    serialization.NoEncryption(),
+                ).hex(),
                 nonce=nonce, issued_at=self.now, expires_at=self.now + 300,
                 round_change_certificate=certificate,
             )
