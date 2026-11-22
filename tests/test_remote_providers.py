@@ -605,7 +605,8 @@ class RemoteProviderTests(unittest.TestCase):
             )
             self.assertEqual(signed["round"], 2)
             self.assertEqual(len(signer_calls), 2)
-            with sqlite3.connect(db_path) as db:
+            db = sqlite3.connect(db_path)
+            try:
                 state = db.execute(
                     "SELECT round,value_digest FROM gcf_vote_signing_round_state "
                     "WHERE height=22 AND vote_type='PREVOTE' AND validator_id='v1'"
@@ -614,6 +615,8 @@ class RemoteProviderTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM gcf_vote_signing_history "
                     "WHERE height=22 AND vote_type='PREVOTE' AND validator_id='v1'"
                 ).fetchone()[0]
+            finally:
+                db.close()
             self.assertEqual(state[0], 2)
             self.assertEqual(history, 2)
 
