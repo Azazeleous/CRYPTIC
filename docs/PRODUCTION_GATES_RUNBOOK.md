@@ -35,6 +35,8 @@ Consequently, the public G.O.D. repository update documents the boundary only; i
 - The response is signed by a separately pinned anchor key. The service must reject sequence rollback and same-sequence hash replacement.
 - The anchor storage and signing authority must be outside the validator host and outside the HCCGN SQLite database backup/restore domain.
 
+**Write authentication:** the CRYPTIC client now refuses sequence advancement unless a write credential is configured. Supply a random secret of at least 32 non-whitespace characters through `CRYPTIC_SEQUENCE_ANCHOR_TOKEN` or the constructor's `write_token=` argument. It is sent only on PUT as `Authorization: Bearer <token>`; signed GET reads do not transmit it. The Worker must store the matching value as a Cloudflare secret named `ANCHOR_WRITE_TOKEN`, compare it in constant time before processing any write, and reject missing or invalid credentials with HTTP 401. Never commit the token, put it in a URL or command-line argument, log it, or store it in D1. Rotate it through an authenticated operator procedure. Response signatures do not replace caller authentication.
+
 **Deployment requirements:** provision the actual HTTPS service, signer key, independent public-key pin, access policy, backups, availability monitoring, and disaster-recovery process. Configure require_external_anchor=True. Test concurrent writers, stale clients, node restore from an old disk image, anchor outage, and service restore. Any ambiguity must deny policy resolution.
 
 **Still external:** a live separately administered anchor service and proof that its state cannot be rolled back with the validator host.
@@ -115,6 +117,7 @@ anchor = HTTPSSequenceAnchor(
     SEQUENCE_ANCHOR_URL,
     signer_id=ANCHOR_SIGNER_ID,
     trusted_public_key=ANCHOR_PUBLIC_KEY,
+    write_token=os.environ["CRYPTIC_SEQUENCE_ANCHOR_TOKEN"],
 )
 justice = HTTPSJusticeProviders(
     policy=SignedHTTPSDecisionClient(
