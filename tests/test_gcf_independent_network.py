@@ -459,10 +459,6 @@ class StrictHTTPJSONTests(unittest.TestCase):
         self.assertIn("ADAM_APEX_NOT_CONFIGURED", body)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class CrossRoundVoteLockTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -581,3 +577,6 @@ class CrossRoundVoteLockTests(unittest.TestCase):
                 hccgn_verifier=lambda *_: True, god_authorizer=lambda *_: True,
                 justice_verifier=lambda *_: True, clock=lambda: self.now,
             )
+
+if __name__ == "__main__":
+    unittest.main()
