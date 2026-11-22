@@ -30,7 +30,8 @@ and Windows. `GCFEngine.submit_round_change()` persists one message per validato
 and target round, rejects duplicate/equivocating submissions, constructs a
 canonical certificate, and caches only a certificate that independently
 passes the proof verifier. `get_round_change_certificate()` re-verifies cached
-evidence after restart. GCF-P2P/1 accepts the `ROUND_CHANGE` message type and
+evidence after restart. Each canonical signed message is capped at 1 MiB
+before persistence. GCF-P2P/1 accepts the `ROUND_CHANGE` message type and
 dispatches it through the authenticated peer identity boundary. The suite covers strict weighted quorum (including exact
 two-thirds rejection), duplicate signers, invalid signatures, conflicting
 POLCs, deterministic same-candidate tie-breaking, expired proposals, stale
