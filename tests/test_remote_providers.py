@@ -477,14 +477,16 @@ class RemoteProviderTests(unittest.TestCase):
             self.assertEqual(len(signer_calls), signed_count)
 
     def test_pre_sign_lock_is_atomic_across_signer_instances(self):
+        from src.consensus.gcf import VOTE_DOMAIN
         calls = []
         calls_lock = threading.Lock()
 
         def transport(method, url, headers, raw, timeout):
             request = json.loads(raw)
             message = base64.b64decode(request["message_b64"], validate=True)
-            with calls_lock:
-                calls.append(message)
+            if message.startswith(VOTE_DOMAIN):
+                with calls_lock:
+                    calls.append(message)
             return 200, {}, _canonical({
                 "schema": "CRYPTIC-ED25519-SIGN/1",
                 "key_id": "validator-key-1",
@@ -543,14 +545,16 @@ class RemoteProviderTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
 
     def test_ambiguous_hsm_failure_keeps_lock_and_allows_exact_retry(self):
+        from src.consensus.gcf import VOTE_DOMAIN
         attempts = []
 
         def transport(method, url, headers, raw, timeout):
             request = json.loads(raw)
             message = base64.b64decode(request["message_b64"], validate=True)
-            attempts.append(message)
-            if len(attempts) == 1:
-                return 503, {}, b""
+            if message.startswith(VOTE_DOMAIN):
+                attempts.append(message)
+                if len(attempts) == 1:
+                    return 503, {}, b""
             return 200, {}, _canonical({
                 "schema": "CRYPTIC-ED25519-SIGN/1",
                 "key_id": "validator-key-1",
