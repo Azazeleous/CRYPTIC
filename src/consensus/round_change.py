@@ -61,7 +61,11 @@ def verify_polc(polc: Mapping[str, Any], *, validator_set: ValidatorSet,
         proposal = polc["proposal"]
         if not isinstance(proposal, Mapping):
             return _fail("polc_proposal_invalid")
-        engine = _engine_for(validator_set, lambda: proposal["issued_at"])
+        # Unlike historical finality verification, a round-change POLC is
+        # live evidence used to authorize a future lock transition. Validate
+        # proposal expiry and vote freshness against the verifier's real clock;
+        # never reset the clock to attacker-controlled signed timestamps.
+        engine = _engine_for(validator_set, clock)
         digest, normalized = engine._validate_proposal(proposal)
         if digest != polc["candidate_digest"]:
             return _fail("polc_candidate_mismatch")
@@ -70,8 +74,6 @@ def verify_polc(polc: Mapping[str, Any], *, validator_set: ValidatorSet,
             return _fail("polc_votes_invalid")
         seen: set[str] = set()
         for vote in votes:
-            issued = vote.get("issued_at") if isinstance(vote, Mapping) else None
-            engine.clock = lambda issued=issued: issued
             parsed = engine._verify_vote(vote, normalized)
             validator_id = parsed["validator_id"]
             if validator_id in seen:
