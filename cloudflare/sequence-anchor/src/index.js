@@ -163,7 +163,11 @@ async function advanceAnchor(request, networkId, env) {
     // first initialization and subsequent compare-and-swap advancement.
     const result = await env.ANCHOR_DB.prepare(`
       INSERT INTO anchors(network_id, sequence, policy_hash, updated_at)
-      SELECT ?, ?, ?, ? WHERE ? = 0 AND ? = ?
+      SELECT ?, ?, ?, ?
+      WHERE (? = 0 AND ? = ?) OR EXISTS (
+        SELECT 1 FROM anchors
+        WHERE network_id = ? AND sequence = ? AND policy_hash = ?
+      )
       ON CONFLICT(network_id) DO UPDATE SET
         sequence = excluded.sequence,
         policy_hash = excluded.policy_hash,
@@ -174,6 +178,7 @@ async function advanceAnchor(request, networkId, env) {
     `).bind(
       networkId, body.sequence, body.policy_hash, now,
       body.expected_sequence, body.expected_policy_hash, ZERO_HASH,
+      networkId, body.expected_sequence, body.expected_policy_hash,
       body.expected_sequence, body.expected_policy_hash
     ).run();
     if (!result?.success || result.meta?.changes !== 1) {
