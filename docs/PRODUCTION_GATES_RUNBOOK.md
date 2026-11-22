@@ -211,3 +211,16 @@ This closes the gap between the earlier fan-out test double and a real local TLS
 - [Production-gate contracts](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028122) passed on Ubuntu and Windows, including the mTLS peer interoperability contract.
 - [Mining-engine tests](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028107) passed 404 tests (2 skipped).
 - [GAIA local trophy](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043028140) passed.
+
+
+## Inbound peer resource bounds and stalled-client handling
+
+GCFPeerNode now bounds concurrent inbound handlers (default 128; configurable range 1–1024), sets the listener backlog to that bound, and applies a bounded I/O timeout (default 10 seconds; configurable range 0.1–60 seconds) to TLS handshakes, frame reads, response writes, and connection close. A client that sends only a partial frame receives a PEER_IO_TIMEOUT rejection; it cannot hold an active handler indefinitely. The outbound GCFPeerMesh retains its separate bounded fan-out concurrency and per-peer timeout.
+
+Corrected-head verification on code commit b143380bc6d2cc932a8b7fe79919798df0f0eea9:
+- [CRYPTIC CI](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043373731) passed 405 tests (2 skipped).
+- [Production-gate contracts](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043373733) passed on Ubuntu and Windows.
+- [Mining-engine tests](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043373684) passed 405 tests (2 skipped).
+- [GAIA local trophy](https://github.com/Azazeleous/CRYPTIC/actions/runs/45043373701) passed.
+
+This verifies resource bounds and timeout behavior in CI; it does not establish resistance to volumetric network denial-of-service or substitute for production ingress protections and host-level resource monitoring.
