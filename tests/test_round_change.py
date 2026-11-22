@@ -227,8 +227,7 @@ class RoundChangeProofTests(unittest.TestCase):
         forward = verify_round_change_certificate(
             cert, validator_set=self.vset, height=12, clock=lambda: self.now,
         )
-        reordered = dict(cert)
-        reordered["messages"] = list(reversed(cert["messages"]))
+        reordered = self.certificate(list(reversed(cert["messages"])))
         reverse = verify_round_change_certificate(
             reordered, validator_set=self.vset, height=12, clock=lambda: self.now,
         )
