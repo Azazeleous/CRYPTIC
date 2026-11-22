@@ -306,5 +306,28 @@ class RoundChangeProofTests(unittest.TestCase):
                 engine.submit_round_change(message)
 
 
+    def test_engine_does_not_cache_certificate_with_conflicting_highest_polcs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                clock=lambda: self.now,
+            )
+            polc_a = self.polc(self.proposal("c"))
+            polc_b = self.polc(self.proposal("d"))
+            engine.submit_round_change(self.message("v1", polc=polc_a))
+            engine.submit_round_change(self.message("v2", polc=polc_b))
+            final = engine.submit_round_change(self.message("v3"))
+            self.assertTrue(final["accepted"])
+            self.assertFalse(final["quorum_reached"])
+            self.assertEqual(final["certificate_status"], "rejected")
+            self.assertEqual(
+                final["certificate_reason"],
+                "round_change_conflicting_same_round_polcs",
+            )
+            self.assertIsNone(engine.get_round_change_certificate(
+                height=12, target_round=1,
+            ))
+
+
 if __name__ == "__main__":
     unittest.main()
