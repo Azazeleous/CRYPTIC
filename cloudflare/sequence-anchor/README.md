@@ -112,7 +112,7 @@ and CAS writes; the Worker independently performs certificate verification.
 4. Create the anchor response-signing key in an approved operator-controlled
    environment or HSM. Provision its private key and the write token directly
    to Cloudflare using the approved secret-management procedure.
-5. Apply migrations with
+5. Apply migrations (including `0003_gcf_finality_certificate_receipts.sql`) with
    `wrangler d1 migrations apply cryptic-production-sequence-anchor --remote`.
 6. Deploy with `wrangler deploy`. Keep `workers_dev = false` and do not add
    a route until independent ownership, access controls, validator-set
