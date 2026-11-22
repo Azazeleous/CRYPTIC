@@ -69,11 +69,16 @@ class ConsensusRuntime:
     work_provider: HCCGNWorkProofProvider
     hccgn_gate: HCCGNVerifierAdapter
     justice_gate: JusticeEvidenceVerifier
-    god_gate: ValidatorSetProposalAuthorizer
+    proposal_authorizer: ValidatorSetProposalAuthorizer
     engine: GCFEngine
     adam_store: AdamCommitStore
     apex: APEXValidator
     http: GCFWSGI
+
+    @property
+    def god_gate(self) -> ValidatorSetProposalAuthorizer:
+        """Backward-compatible alias; proposal admission is validator-set policy."""
+        return self.proposal_authorizer
 
 
 def build_consensus_runtime(
@@ -86,7 +91,7 @@ def build_consensus_runtime(
     god_signer_id: str,
     god_trust_root_fingerprint: str | None = None,
     sequence_anchor: HCCGNSequenceAnchor | None,
-    god_gate: Any | None,
+    god_gate: Any | None = None,
     policy_evidence_verifier: Callable | None,
     justice_evidence_verifier: Callable | None,
     consensus_endpoint: str | None = None,
@@ -95,8 +100,9 @@ def build_consensus_runtime(
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
-    This is a composition layer, not a substitute for the actual GOD gate,
-    hardware/remote monotonic anchor, validator key custody, or evidence engines.
+    Proposal admission is local to the active validator set. The independent
+    sequence anchor, HCCGN trust root, validator key custody, and justice
+    evidence providers remain separate deployment trust boundaries.
     """
     if not isinstance(network_id, str) or not network_id:
         raise RuntimeConfigurationError("network_id_invalid")
