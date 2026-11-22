@@ -19,8 +19,11 @@ verification for:
   quorum, canonical digest, highest-POLC selection, and rejection of
   same-round conflicting POLCs.
 
-The production-gate workflow now invokes `tests/test_round_change.py` on
-Ubuntu and Windows. These tests have **not yet been observed passing in CI**.
+The production-gate workflow invokes `tests/test_round_change.py` on Ubuntu
+and Windows. Both jobs passed on PR head `2e55a5c1cfb2caf029ad2318f5d60a897e825c06`
+(run 45046476561). The full CRYPTIC CI (45046476482), mining-engine tests
+(45046476538), and GAIA local trophy workflow (45046476524) also passed on
+that same head.
 
 This slice deliberately does **not** mutate consensus locks, release signing
 intents, add round-change to peer dispatch, alter proposal/finality schemas,
