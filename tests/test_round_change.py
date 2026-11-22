@@ -35,21 +35,23 @@ class RoundChangeProofTests(unittest.TestCase):
             target_round=target,
         )
 
-    def proposal(self, payload):
+    def proposal(self, payload, *, issued_at=None, expires_at=None):
+        issued_at = self.now if issued_at is None else issued_at
+        expires_at = self.now + 600 if expires_at is None else expires_at
         return make_proposal(
             network_id="test-net", epoch=7, height=12, round=0,
             parent_hash="0" * 64, payload_hash=payload * 64,
             proof_hash="2" * 64, justice_commitment={"justice_profile": "GAIA-JUSTICE/1"},
             proposer_id="v1", proposer_private_key_hex=self.private["v1"],
-            nonce=payload * 16, issued_at=self.now, expires_at=self.now + 600,
+            nonce=payload * 16, issued_at=issued_at, expires_at=expires_at,
         )
 
-    def polc(self, proposal, signers=("v1", "v2", "v3")):
+    def polc(self, proposal, signers=("v1", "v2", "v3"), *, vote_issued_at=None):
         votes = [
             make_vote(
                 validator_id=validator, validator_private_key_hex=self.private[validator],
                 proposal=proposal, vote_type="PREVOTE", approve=True,
-                issued_at=self.now + 1,
+                issued_at=(proposal["issued_at"] + 1 if vote_issued_at is None else vote_issued_at),
             )
             for validator in signers
         ]
@@ -120,6 +122,26 @@ class RoundChangeProofTests(unittest.TestCase):
         self.assertTrue(result["valid"], result)
         self.assertEqual(result["highest_polc"]["digest"], polc["digest"])
         self.assertEqual(result["highest_polc_round"], 0)
+
+    def test_expired_proposal_cannot_be_reused_as_live_polc(self):
+        proposal = self.proposal("f")
+        polc = self.polc(proposal)
+        result = verify_polc(
+            polc, validator_set=self.vset, clock=lambda: self.now + 601,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("CANDIDATE_EXPIRED", result["reason"])
+
+    def test_stale_prevote_cannot_be_reused_as_live_polc(self):
+        proposal = self.proposal(
+            "g", issued_at=self.now - 600, expires_at=self.now + 600,
+        )
+        polc = self.polc(proposal, vote_issued_at=self.now - 400)
+        result = verify_polc(
+            polc, validator_set=self.vset, clock=lambda: self.now,
+        )
+        self.assertFalse(result["valid"])
+        self.assertIn("VOTE_TIME_INVALID", result["reason"])
 
     def test_invalid_polc_signature_fails_closed(self):
         polc = self.polc(self.proposal("b"))
