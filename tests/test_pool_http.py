@@ -1,14 +1,17 @@
+import datetime
 import io
 import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.x509.oid import NameOID
 
 from src.consensus.pool_ledger import PoolShareLedger
-from src.mining.pool_http import PoolWSGI
+from src.mining.pool_http import MTLSWorkerAuthenticator, PoolWSGI
 from src.mining.pool_service import PoolCoordinator
 from src.mining.pool_worker import execute_pool_job
 
@@ -96,6 +99,28 @@ class PoolWSGITests(unittest.TestCase):
         body = b"".join(app(environ, lambda status, _headers: captured.update(status=status)))
         self.assertEqual(captured["status"], "401 Unauthorized")
         self.assertIn(b"WORKER_AUTHENTICATION_FAILED", body)
+
+    def test_mtls_authenticator_maps_only_verified_pinned_certificate(self):
+        worker_key = Ed25519PrivateKey.generate()
+        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "worker-a")])
+        now = datetime.datetime.utcnow()
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(name).issuer_name(name)
+            .public_key(worker_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(minutes=1))
+            .not_valid_after(now + datetime.timedelta(days=1))
+            .sign(worker_key, algorithm=None)
+        )
+        pem = certificate.public_bytes(serialization.Encoding.PEM).decode("ascii")
+        fingerprint = certificate.fingerprint(hashes.SHA256()).hex()
+        authenticator = MTLSWorkerAuthenticator({fingerprint: "worker-a"})
+        self.assertEqual(authenticator({
+            "SSL_CLIENT_VERIFY": "SUCCESS", "SSL_CLIENT_CERT": pem,
+        }), "worker-a")
+        with self.assertRaisesRegex(ValueError, "not_verified"):
+            authenticator({"SSL_CLIENT_VERIFY": "NONE", "SSL_CLIENT_CERT": pem})
 
     def test_duplicate_json_keys_are_rejected(self):
         status, payload = self.request(
