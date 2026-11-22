@@ -36,12 +36,17 @@ class HCCGNRegistryTests(unittest.TestCase):
         self.temp.cleanup()
 
     class MemoryAnchor:
-        def __init__(self): self.values = {}
+        def __init__(self):
+            self.values = {}
+            self.certificates = {}
         def read_sequence(self, network_id): return self.values.get(network_id)
-        def advance_sequence(self, network_id, sequence, policy_hash):
+        def advance_sequence(self, network_id, sequence, policy_hash, *, certificate=None):
+            if not isinstance(certificate, dict):
+                return False
             current = self.values.get(network_id)
             if current is not None and sequence <= current[0]: return False
             self.values[network_id] = (sequence, policy_hash)
+            self.certificates[network_id] = certificate
             return True
 
     def signed_policy(self, **overrides):
@@ -87,7 +92,12 @@ class HCCGNRegistryTests(unittest.TestCase):
             clock=lambda: self.now, sequence_anchor=anchor,
             require_external_anchor=True,
         )
-        anchored.install(self.signed_policy())
+        snapshot = self.signed_policy()
+        certificate = {"schema": "GCF/1", "candidate_digest": "c" * 64}
+        with self.assertRaisesRegex(HCCGNRegistryError, "gcf_finality_certificate_required"):
+            anchored.install(snapshot)
+        anchored.install(snapshot, finality_certificate=certificate)
+        self.assertEqual(anchor.certificates["gaia-testnet"], certificate)
         self.assertEqual(anchored.resolve({
             "network_id": "gaia-testnet", "height": 1, "epoch": 1,
             "issued_at": self.now,
