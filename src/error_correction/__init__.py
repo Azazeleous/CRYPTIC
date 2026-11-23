@@ -4,11 +4,12 @@ from .gf256 import PRIMITIVE_POLYNOMIAL
 from .pipeline import CorrectionReceipt, CorrectionStack, CorrectionStackError
 from .qc_ldpc import DEFAULT_BASE_MATRIX, QCParityCheck, QCLDPCDecode, QCLDPCError
 from .reed_solomon import ReedSolomonCode, ReedSolomonDecode, ReedSolomonError
+from .storage import ChunkStore, ChunkStoreError, StoredManifest
 
 __all__ = [
     "BerlekampWelchError", "CorrectionReceipt", "CorrectionStack",
     "CorrectionStackError", "DEFAULT_BASE_MATRIX", "PRIMITIVE_POLYNOMIAL",
     "PolynomialDecode", "QCParityCheck", "QCLDPCDecode", "QCLDPCError",
     "ReedSolomonCode", "ReedSolomonDecode", "ReedSolomonError",
-    "decode_evaluations",
+    "ChunkStore", "ChunkStoreError", "StoredManifest", "decode_evaluations",
 ]
