@@ -146,8 +146,10 @@ class PoolWSGI:
             return self._response(start_response, "404 Not Found", {"error": "NOT_FOUND"})
         except PoolServiceError as exc:
             message = str(exc)
-            status = "404 Not Found" if message in ("job_not_found", "job_unknown") else (
-                "403 Forbidden" if ("worker_identity" in message or "not_assigned_to_worker" in message) else "409 Conflict"
+            status = "429 Too Many Requests" if message == "worker_rate_limit_exceeded" else (
+                "404 Not Found" if message in ("job_not_found", "job_unknown") else (
+                    "403 Forbidden" if ("worker_identity" in message or "not_assigned_to_worker" in message) else "409 Conflict"
+                )
             )
             return self._response(start_response, status, {"error": message[:180]})
         except Exception:
