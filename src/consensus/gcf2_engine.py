@@ -369,6 +369,7 @@ class GCF2VoteStore:
             "round": proposal["round"], "parent_hash": proposal["parent_hash"],
             "candidate_digest": candidate_digest,
             "validator_set_hash": self.validator_set.digest,
+            "proposal": dict(proposal),
             "finalized_at": finalized_at, "polc": polc,
             "precommits": precommits,
         }
