@@ -58,10 +58,17 @@ class PoolSettlementLedgerTests(unittest.TestCase):
             "nonce": 9, "accepted_at": self.now - 5,
         }
         self.share_ledger.record_accepted_share(self.share)
+        self.job = {
+            "job_id": self.share["job_id"], "network_id": "hccgn-test",
+            "pool_id": "gaia-pool", "epoch": 4, "height": 27,
+            "parent_hash": self.proposal["parent_hash"],
+            "payload_hash": self.proposal["payload_hash"],
+        }
         self.settlement = PoolSettlementLedger(
             database=self.root / "settlements.sqlite3",
             share_ledger=self.share_ledger,
             trusted_reward_policy_public_key_hex=self.policy_public_hex,
+            resolve_issued_job=lambda _job_id: self.job,
             verify_finality_certificate=self.verify_certificate,
             clock=lambda: self.now,
         )
@@ -81,7 +88,7 @@ class PoolSettlementLedgerTests(unittest.TestCase):
     def reward_policy(self, *, reward_units=25, max_total_credits=100):
         body = {
             "schema": POLICY_SCHEMA, "policy_id": "internal-reward-v1",
-            "network_id": "hccgn-test", "epoch": 4,
+            "network_id": "hccgn-test", "pool_id": "gaia-pool", "epoch": 4,
             "effective_height_start": 20, "effective_height_end": 40,
             "reward_units": reward_units, "max_total_credits": max_total_credits,
             "asset": INTERNAL_ASSET, "issuer_id": "governance-reward-root",
@@ -164,6 +171,7 @@ class PoolSettlementLedgerTests(unittest.TestCase):
         self.share_ledger.record_accepted_share(second_share)
         self.proposal["height"] = 28
         self.proposal["proof_hash"] = "99" * 32
+        self.job["height"] = 28
         self.certificate["height"] = 28
         self.certificate["candidate_digest"] = hashlib.sha256(
             _canonical(self.proposal)
