@@ -118,3 +118,6 @@ The ledger asset is fixed to `INTERNAL_NONREDEEMABLE_CREDIT`. It has no transfer
 Construct the settlement ledger with the persistent share ledger, `PoolCoordinator.resolve_issued_job`, an independently configured finality-verifier callback, and the pinned reward-policy public key. Call `settle_finalized_block(finality=..., reward_policy=..., pool_id=...)` only after the certificate and policy are available. Monitor `verify_chain()`, `list_settlements()`, and `worker_balances()`. Protect the settlement database and its backups with the same operational controls as the share ledger.
 
 Unit tests and CI do not prove independent policy-key custody, HSM deployment, host integrity, backup recovery, or production reward governance. Settlement is not a public payout service.
+
+
+The coordinator also exposes `configure_settlement_ledger(...)`, which binds the settlement ledger to its own issuer-verifying historical job resolver. This avoids a caller-supplied untrusted job lookup when wiring settlement.
