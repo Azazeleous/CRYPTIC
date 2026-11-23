@@ -1,0 +1,25 @@
+{
+  "schema": "CRYPTIC-GCF2-KNOWN-ANSWER/1",
+  "network_id": "gaia-vector-net",
+  "epoch": 3,
+  "height": 41,
+  "round": 0,
+  "issued_at": 1800000000,
+  "expires_at": 1800000300,
+  "vote_issued_at": 1800000001,
+  "vote_expires_at": 1800000200,
+  "finalized_at": 1800000002,
+  "anchor_sequence": 7,
+  "parent_hash": "1111111111111111111111111111111111111111111111111111111111111111",
+  "payload_hash": "2222222222222222222222222222222222222222222222222222222222222222",
+  "proof_hash": "3333333333333333333333333333333333333333333333333333333333333333",
+  "justice_policy_hash": "4444444444444444444444444444444444444444444444444444444444444444",
+  "nonce": "0123456789abcdef0123456789abcdef",
+  "validator_seed_bytes": ["01", "02", "03", "04"],
+  "expected": {
+    "validator_set_hash": "94020d3594896fcfe2cbeea86cb21220640b57020cf074a519b62135603c6d73",
+    "candidate_digest": "a1c046c56e2f996d82653082aa1cdaa9945ef73ac3511ea3eedea9888ba05b1b",
+    "polc_digest": "18237ba2278ff96f1329fc7216beb7509feb905294dbeb64bbc728d23e86f9af",
+    "certificate_digest": "17062e8ada9b67cd07113f3babe040fb0b3f796c1f7d91fcf341d95ddf1d3d51"
+  }
+}
