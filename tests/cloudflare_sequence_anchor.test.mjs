@@ -162,6 +162,62 @@ async function makeCertificate(ctx, { sequence, height = sequence, oldHash, newH
   };
 }
 
+async function makeGcf2AnchorEnvelope(ctx, {
+  sequence, height = sequence, oldHash, newHash, signers = [0, 1, 2],
+}) {
+  const now = Math.floor(Date.now() / 1000);
+  const base = await makeCertificate(ctx, {
+    sequence, height, oldHash, newHash, signers: [0, 1, 2],
+  });
+  const proposal = base.proposal;
+  const candidateDigest = await sha256(new TextEncoder().encode(canonical(proposal)));
+  async function votes(phase, polcDigest = null) {
+    const output = [];
+    for (const index of signers) {
+      const body = {
+        schema: "GCF/2", network_id: proposal.network_id,
+        epoch: proposal.epoch, height: proposal.height, round: proposal.round,
+        parent_hash: proposal.parent_hash, vote_type: phase,
+        vote_kind: "CANDIDATE", candidate_digest: candidateDigest,
+        validator_id: "v" + (index + 1), approve: true,
+        polc_digest: polcDigest, issued_at: now + 1, expires_at: now + 200,
+      };
+      const domain = new TextEncoder().encode("GCF/2|VOTE|ED25519\0");
+      output.push({ ...body, signature: await sign(ctx.validatorPairs[index].privateKey, domain, body) });
+    }
+    return output.sort((a, b) => a.validator_id.localeCompare(b.validator_id));
+  }
+  const prevotes = await votes("PREVOTE");
+  const polcBody = {
+    schema: "GCF/2", network_id: proposal.network_id, epoch: proposal.epoch,
+    height: proposal.height, round: proposal.round, parent_hash: proposal.parent_hash,
+    candidate_digest: candidateDigest,
+    validator_set_hash: ctx.env.ANCHOR_VALIDATOR_SET_SHA256, prevotes,
+  };
+  const polcDomain = new TextEncoder().encode("GCF/2|POLC\0");
+  const polcDigest = await sha256(new Uint8Array([
+    ...polcDomain, ...new TextEncoder().encode(canonical(polcBody)),
+  ]));
+  const precommits = await votes("PRECOMMIT", polcDigest);
+  const certificateBody = {
+    schema: "GCF/2", network_id: proposal.network_id, epoch: proposal.epoch,
+    height: proposal.height, round: proposal.round, parent_hash: proposal.parent_hash,
+    candidate_digest: candidateDigest,
+    validator_set_hash: ctx.env.ANCHOR_VALIDATOR_SET_SHA256,
+    finalized_at: now + 2,
+    polc: { ...polcBody, polc_digest: polcDigest },
+    precommits,
+  };
+  const certDomain = new TextEncoder().encode("GCF/2|FINALITY-CERTIFICATE\0");
+  const certificateDigest = await sha256(new Uint8Array([
+    ...certDomain, ...new TextEncoder().encode(canonical(certificateBody)),
+  ]));
+  return {
+    schema: "GCF/2-ANCHOR-ENVELOPE/1", proposal,
+    certificate: { ...certificateBody, certificate_digest: certificateDigest },
+  };
+}
+
 async function makeRoundChangeMessage(ctx, index, {
   height, sourceRound, targetRound, highestPolc = null, issuedAt = Math.floor(Date.now() / 1000),
 }) {
@@ -220,6 +276,29 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
     headers: { "if-none-match": "*", "content-type": "application/json" }, body,
   });
   assert.equal(response.status, 401);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+test("pinned GCF/2 finality certificate authorizes sequence-anchor initialization", async () => {
+  const ctx = await setup();
+  const hash = "c".repeat(64);
+  const certificate = await makeGcf2AnchorEnvelope(ctx, {
+    sequence: 1, height: 44, oldHash: ZERO, newHash: hash,
+  });
+  const response = await put(ctx, writeBody(1, hash, 0, ZERO, certificate), true);
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").policy_hash, hash);
+});
+
+test("GCF/2 anchor verifier rejects a tampered finality digest", async () => {
+  const ctx = await setup();
+  const hash = "d".repeat(64);
+  const certificate = await makeGcf2AnchorEnvelope(ctx, {
+    sequence: 1, height: 45, oldHash: ZERO, newHash: hash,
+  });
+  certificate.certificate.certificate_digest = "0".repeat(64);
+  const response = await put(ctx, writeBody(1, hash, 0, ZERO, certificate), true);
+  assert.equal(response.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
 
