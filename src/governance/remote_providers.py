@@ -446,13 +446,6 @@ class HTTPSSequenceAnchor:
             raise RemoteProviderError("anchor_gcf_finality_certificate_required")
         if self.authorization_provider is None:
             raise RemoteProviderError("god_policy_transition_authorization_required")
-        transition = {
-            "network_id": network_id,
-            "sequence": sequence,
-            "policy_hash": policy_hash,
-            "expected_sequence": expected_sequence if False else 0,
-            "expected_policy_hash": "0" * 64,
-        }
         current = self.read_sequence(network_id)
         if current is None:
             expected_sequence, expected_hash = 0, "0" * 64
@@ -462,8 +455,13 @@ class HTTPSSequenceAnchor:
             if sequence <= expected_sequence:
                 return False
             condition = {"If-Match": f'"{expected_sequence}:{expected_hash}"'}
-        transition["expected_sequence"] = expected_sequence
-        transition["expected_policy_hash"] = expected_hash
+        transition = {
+            "network_id": network_id,
+            "sequence": sequence,
+            "policy_hash": policy_hash,
+            "expected_sequence": expected_sequence,
+            "expected_policy_hash": expected_hash,
+        }
         policy_authorization = self.authorization_provider.authorize_transition(transition)
         if not isinstance(policy_authorization, Mapping):
             raise RemoteProviderError("god_policy_transition_authorization_invalid")
