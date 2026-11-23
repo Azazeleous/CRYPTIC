@@ -74,11 +74,13 @@ remain operator responsibilities.
 
 ## Reward boundary
 
-The share ledger records accepted work only. It does not mint a token, create a
-redeemable balance, transfer assets, or issue payouts. Settlement remains
-disabled until the network reward schedule, finalized reward certificate,
-accounting rules, and independent settlement authority are specified and
-reviewed. A share alone must never trigger a network reward.
+The share ledger records accepted work only. A separate finalized-block
+settlement ledger is now available. It requires an independently verified GCF
+finality certificate, a pinned-key signed reward policy scoped to the pool and
+block, a verified historical job, and an exact accepted proof match. It records
+only INTERNAL_NONREDEEMABLE_CREDIT units under a policy cap and append-only hash
+chain. It does not create a redeemable balance, transfer assets, or issue
+payouts. A share alone must never trigger a reward.
 
 ## Verification
 
