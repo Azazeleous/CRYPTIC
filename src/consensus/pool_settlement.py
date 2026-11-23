@@ -36,8 +36,8 @@ def _canonical(value: Any) -> bytes:
     try:
         return json.dumps(
             value, sort_keys=True, separators=(",", ":"),
-            ensure_ascii=True, allow_nan=False,
-        ).encode("ascii")
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
     except (TypeError, ValueError, UnicodeEncodeError) as exc:
         raise PoolSettlementError("canonical_encoding_invalid") from exc
 
@@ -328,7 +328,7 @@ class PoolSettlementLedger:
             rows = conn.execute(
                 """SELECT network_id,epoch,height,certificate_digest,policy_id,policy_digest,
                           pool_id,worker_id,share_id,proof_hash,asset,credit_units,settled_at,event_hash
-                   FROM pool_settlements ORDER BY settled_at,network_id,epoch,height"""
+                   FROM pool_settlements"""
             ).fetchall()
         if len(events) != len(rows):
             return False
@@ -339,7 +339,7 @@ class PoolSettlementLedger:
             if stored_previous != previous or hashlib.sha256(bytes.fromhex(previous) + raw).hexdigest() != stored_hash:
                 return False
             try:
-                event = json.loads(raw.decode("ascii"))
+                event = json.loads(raw.decode("utf-8"))
                 if _canonical(event) != raw or set(event) != {
                     "event_type", "network_id", "epoch", "height", "certificate_digest",
                     "policy_id", "policy_digest", "pool_id", "worker_id", "share_id",
