@@ -65,8 +65,8 @@ class GCF2NilVoteTests(unittest.TestCase):
 
     def test_gcf2_has_distinct_signature_domain_and_schema(self):
         self.assertEqual(SCHEMA, "GCF/2")
-        self.assertEqual(VOTE_DOMAIN, b"GCF/2|VOTE|ED25519\\x00")
-        self.assertNotEqual(VOTE_DOMAIN, b"GCF/1|VOTE|ED25519\\x00")
+        self.assertEqual(VOTE_DOMAIN, b"GCF/2|VOTE|ED25519\x00")
+        self.assertNotEqual(VOTE_DOMAIN, b"GCF/1|VOTE|ED25519\x00")
 
     def test_nil_vote_has_no_candidate_or_approval_or_polc(self):
         vote = self.nil_vote("v0")
