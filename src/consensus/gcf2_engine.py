@@ -40,6 +40,8 @@ class GCF2VoteStore:
         if not callable(resolve_active_parent) or not callable(clock):
             raise GCFError("GCF2_TRUSTED_PARENT_RESOLVER_AND_CLOCK_REQUIRED")
         self.database = str(database)
+        if Path(self.database).expanduser().resolve() != Path(gcf1_engine.db_path).expanduser().resolve():
+            raise GCFError("GCF2_AND_GCF1_MUST_SHARE_DURABLE_VOTE_DATABASE")
         Path(self.database).expanduser().parent.mkdir(parents=True, exist_ok=True)
         self.validator_set = validator_set
         self.gcf1_engine = gcf1_engine
