@@ -97,8 +97,8 @@ class PoolCoordinator:
                     height INTEGER NOT NULL,
                     parent_hash TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
-                    nonce_start INTEGER NOT NULL,
-                    nonce_end INTEGER NOT NULL,
+                    nonce_start TEXT NOT NULL CHECK(length(nonce_start)=20),
+                    nonce_end TEXT NOT NULL CHECK(length(nonce_end)=20),
                     CHECK(nonce_end > nonce_start)
                 );
             CREATE INDEX IF NOT EXISTS pool_nonce_ranges_context
@@ -110,6 +110,39 @@ class PoolCoordinator:
                 # Legacy jobs have no worker assignment and are intentionally
                 # inaccessible until reissued with an authenticated worker binding.
                 conn.execute("ALTER TABLE pool_jobs ADD COLUMN assigned_worker_id TEXT NOT NULL DEFAULT ''")
+            range_columns = {
+                row[1]: row[2].upper()
+                for row in conn.execute("PRAGMA table_info(pool_nonce_ranges)")
+            }
+            if (range_columns.get("nonce_start") != "TEXT"
+                    or range_columns.get("nonce_end") != "TEXT"):
+                legacy_ranges = conn.execute(
+                    "SELECT job_id,network_id,epoch,height,parent_hash,payload_hash,nonce_start,nonce_end FROM pool_nonce_ranges"
+                ).fetchall()
+                conn.execute("DROP INDEX IF EXISTS pool_nonce_ranges_context")
+                conn.execute("DROP TABLE pool_nonce_ranges")
+                conn.execute("""
+                    CREATE TABLE pool_nonce_ranges (
+                        job_id TEXT PRIMARY KEY,
+                        network_id TEXT NOT NULL,
+                        epoch INTEGER NOT NULL,
+                        height INTEGER NOT NULL,
+                        parent_hash TEXT NOT NULL,
+                        payload_hash TEXT NOT NULL,
+                        nonce_start TEXT NOT NULL CHECK(length(nonce_start)=20),
+                        nonce_end TEXT NOT NULL CHECK(length(nonce_end)=20),
+                        CHECK(nonce_end > nonce_start)
+                    )
+                """)
+                conn.execute("""
+                    CREATE INDEX pool_nonce_ranges_context
+                    ON pool_nonce_ranges(network_id,epoch,height,parent_hash,payload_hash,nonce_start,nonce_end)
+                """)
+                for item in legacy_ranges:
+                    conn.execute(
+                        "INSERT INTO pool_nonce_ranges VALUES(?,?,?,?,?,?,?,?)",
+                        (*item[:6], f"{int(item[6]):020d}", f"{int(item[7]):020d}"),
+                    )
             # Reconstruct nonce ownership for jobs created before range tracking.
             for job_id, raw_job in conn.execute(
                 "SELECT job_id,job_json FROM pool_jobs ORDER BY created_at,job_id"
@@ -124,14 +157,14 @@ class PoolCoordinator:
                       AND nonce_start < ? AND nonce_end > ?
                     LIMIT 1
                 """, (job["network_id"], job["epoch"], job["height"],
-                      job["parent_hash"], job["payload_hash"], end, start)).fetchone()
+                      job["parent_hash"], job["payload_hash"], f"{end:020d}", f"{start:020d}")).fetchone()
                 if overlap is not None and overlap[0] != job_id:
                     raise PoolServiceError("persisted_nonce_range_overlap")
                 conn.execute("""
                     INSERT OR IGNORE INTO pool_nonce_ranges
                     VALUES(?,?,?,?,?,?,?,?)
                 """, (job_id, job["network_id"], job["epoch"], job["height"],
-                      job["parent_hash"], job["payload_hash"], start, end))
+                      job["parent_hash"], job["payload_hash"], f"{start:020d}", f"{end:020d}"))
         try:
             os.chmod(self.database, 0o600)
         except OSError as exc:
@@ -191,7 +224,7 @@ class PoolCoordinator:
                         LIMIT 1
                     """, (job["network_id"], job["epoch"], job["height"],
                           job["parent_hash"], job["payload_hash"],
-                          nonce_end, nonce_start)).fetchone()
+                          f"{nonce_end:020d}", f"{nonce_start:020d}")).fetchone()
                     if overlap is not None:
                         raise PoolServiceError("nonce_range_overlap:" + overlap[0])
                     conn.execute(
@@ -203,7 +236,7 @@ class PoolCoordinator:
                         VALUES(?,?,?,?,?,?,?,?)
                     """, (job_id, job["network_id"], job["epoch"], job["height"],
                           job["parent_hash"], job["payload_hash"],
-                          nonce_start, nonce_end))
+                          f"{nonce_start:020d}", f"{nonce_end:020d}"))
                     conn.execute("COMMIT")
                 except Exception:
                     if conn.in_transaction:
