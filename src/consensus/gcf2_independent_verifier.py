@@ -7,6 +7,7 @@ signature independently. It does not authorize finality.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from typing import Any, Mapping
 
@@ -133,3 +134,157 @@ def verify_vote(vote: Any, *, network_id: str, epoch: int,
     except (ValueError, TypeError, KeyError, InvalidSignature) as exc:
         raise GCF2IndependentVerificationError("SIGNATURE_INVALID") from exc
     return dict(vote)
+
+
+POLC_DOMAIN = b"GCF/2|POLC\x00"
+CERT_DOMAIN = b"GCF/2|FINALITY-CERTIFICATE\x00"
+
+
+def _validator_set_digest(network_id: str, epoch: int,
+                          validators: Mapping[str, Mapping[str, Any]]) -> str:
+    entries = []
+    for validator_id, item in sorted(validators.items()):
+        weight = item.get("weight")
+        public_key = item.get("public_key_hex")
+        if (not isinstance(validator_id, str) or not validator_id
+                or isinstance(weight, bool) or not isinstance(weight, int) or weight < 1
+                or not isinstance(public_key, str) or not _valid_hash(public_key)):
+            raise GCF2IndependentVerificationError("VALIDATOR_SET_INVALID")
+        entries.append({
+            "validator_id": validator_id,
+            "public_key_hex": public_key.lower(),
+            "weight": weight,
+        })
+    if not entries:
+        raise GCF2IndependentVerificationError("VALIDATOR_SET_EMPTY")
+    return hashlib.sha256(canonical_bytes({
+        "network_id": network_id, "epoch": epoch, "validators": entries,
+    })).hexdigest()
+
+
+def verify_finality_certificate(
+    certificate: Any, *, network_id: str, epoch: int,
+    validators: Mapping[str, Mapping[str, Any]], proposal: Mapping[str, Any],
+) -> dict:
+    """Independently verify a GCF/2 POLC and affirmative PRECOMMIT certificate."""
+    certificate_fields = {
+        "schema", "network_id", "epoch", "height", "round", "parent_hash",
+        "candidate_digest", "validator_set_hash", "finalized_at", "polc",
+        "precommits", "certificate_digest",
+    }
+    polc_fields = {
+        "schema", "network_id", "epoch", "height", "round", "parent_hash",
+        "candidate_digest", "validator_set_hash", "prevotes", "polc_digest",
+    }
+
+    def fail(reason: str):
+        raise GCF2IndependentVerificationError(reason)
+
+    if not isinstance(certificate, Mapping) or set(certificate) != certificate_fields:
+        fail("FINALITY_CERTIFICATE_FIELDS_INVALID")
+    if certificate["schema"] != SCHEMA or certificate["network_id"] != network_id:
+        fail("FINALITY_CERTIFICATE_NETWORK_OR_SCHEMA_INVALID")
+    if certificate["epoch"] != epoch:
+        fail("FINALITY_CERTIFICATE_EPOCH_INVALID")
+    for field, minimum in (("height", 1), ("round", 0), ("finalized_at", 0)):
+        value = certificate[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            fail("FINALITY_CERTIFICATE_" + field.upper() + "_INVALID")
+    candidate_digest = hashlib.sha256(canonical_bytes(dict(proposal))).hexdigest()
+    if (
+        proposal.get("network_id") != network_id
+        or proposal.get("epoch") != epoch
+        or proposal.get("height") != certificate["height"]
+        or proposal.get("round") != certificate["round"]
+        or proposal.get("parent_hash") != certificate["parent_hash"]
+        or candidate_digest != certificate["candidate_digest"]
+        or not _valid_hash(certificate["parent_hash"])
+    ):
+        fail("FINALITY_CERTIFICATE_CANDIDATE_CONTEXT_MISMATCH")
+
+    set_digest = _validator_set_digest(network_id, epoch, validators)
+    if certificate["validator_set_hash"] != set_digest:
+        fail("FINALITY_CERTIFICATE_VALIDATOR_SET_MISMATCH")
+
+    polc = certificate["polc"]
+    if not isinstance(polc, Mapping) or set(polc) != polc_fields:
+        fail("POLC_FIELDS_INVALID")
+    for field in ("schema", "network_id", "epoch", "height", "round",
+                  "parent_hash", "candidate_digest", "validator_set_hash"):
+        if polc[field] != certificate[field if field != "validator_set_hash" else field]:
+            fail("POLC_CONTEXT_MISMATCH")
+    polc_body = {key: value for key, value in polc.items() if key != "polc_digest"}
+    expected_polc_digest = hashlib.sha256(
+        POLC_DOMAIN + canonical_bytes(polc_body)
+    ).hexdigest()
+    if polc["polc_digest"] != expected_polc_digest:
+        fail("POLC_DIGEST_INVALID")
+    prevotes = polc["prevotes"]
+    if not isinstance(prevotes, list) or not prevotes:
+        fail("POLC_PREVOTES_INVALID")
+    prevote_ids = []
+    prevote_weight = 0
+    for vote in prevotes:
+        checked = verify_vote(
+            vote, network_id=network_id, epoch=epoch,
+            validators=validators, now=certificate["finalized_at"],
+            proposal=proposal,
+        )
+        if (checked["vote_type"] != "PREVOTE"
+                or checked["vote_kind"] != "CANDIDATE"
+                or checked["approve"] is not True
+                or checked["candidate_digest"] != candidate_digest
+                or checked["polc_digest"] is not None):
+            fail("POLC_CONTAINS_NON_AFFIRMATIVE_OR_MISMATCHED_PREVOTE")
+        prevote_ids.append(checked["validator_id"])
+        prevote_weight += validators[checked["validator_id"]]["weight"]
+    if prevote_ids != sorted(set(prevote_ids)):
+        fail("POLC_PREVOTE_ORDER_OR_DUPLICATE_INVALID")
+
+    precommits = certificate["precommits"]
+    if not isinstance(precommits, list) or not precommits:
+        fail("FINALITY_PRECOMMITS_INVALID")
+    precommit_ids = []
+    precommit_weight = 0
+    for vote in precommits:
+        checked = verify_vote(
+            vote, network_id=network_id, epoch=epoch,
+            validators=validators, now=certificate["finalized_at"],
+            proposal=proposal,
+        )
+        if (checked["vote_type"] != "PRECOMMIT"
+                or checked["vote_kind"] != "CANDIDATE"
+                or checked["approve"] is not True
+                or checked["candidate_digest"] != candidate_digest
+                or checked["polc_digest"] != polc["polc_digest"]):
+            fail("FINALITY_CONTAINS_NON_AFFIRMATIVE_OR_MISMATCHED_PRECOMMIT")
+        precommit_ids.append(checked["validator_id"])
+        precommit_weight += validators[checked["validator_id"]]["weight"]
+    if precommit_ids != sorted(set(precommit_ids)):
+        fail("FINALITY_PRECOMMIT_ORDER_OR_DUPLICATE_INVALID")
+
+    total_weight = sum(item["weight"] for item in validators.values())
+    quorum_weight = (2 * total_weight) // 3 + 1
+    if prevote_weight < quorum_weight:
+        fail("POLC_QUORUM_NOT_REACHED")
+    if precommit_weight < quorum_weight:
+        fail("FINALITY_PRECOMMIT_QUORUM_NOT_REACHED")
+
+    body = {key: value for key, value in certificate.items()
+            if key != "certificate_digest"}
+    expected_certificate_digest = hashlib.sha256(
+        CERT_DOMAIN + canonical_bytes(body)
+    ).hexdigest()
+    if certificate["certificate_digest"] != expected_certificate_digest:
+        fail("FINALITY_CERTIFICATE_DIGEST_INVALID")
+    return {
+        "valid": True,
+        "reason": "gcf2_finality_certificate_valid",
+        "candidate_digest": candidate_digest,
+        "height": certificate["height"],
+        "prevote_weight": prevote_weight,
+        "precommit_weight": precommit_weight,
+        "quorum_weight": quorum_weight,
+        "validator_set_hash": set_digest,
+        "certificate_digest": expected_certificate_digest,
+    }
