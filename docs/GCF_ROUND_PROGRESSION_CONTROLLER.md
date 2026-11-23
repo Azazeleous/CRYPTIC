@@ -6,9 +6,23 @@
 pacemaker timeout calculation and durable round-state coordination. It is
 composed into `ConsensusRuntime.round_progression`.
 
-It is a deterministic controller invoked by a host scheduler. It does not
-create background threads, sign validator messages, select proposals, alter
-vote locks, or establish finality.
+It is a deterministic controller invoked by a host scheduler. The optional
+`RoundChangeOrchestrator` composes it with an injected persistent signer and
+peer broadcaster. Neither component creates background threads, selects
+proposals, alters vote locks, or establishes finality.
+
+## Runtime wiring
+
+`build_consensus_runtime()` can receive the optional
+`local_validator_id`, `round_change_signer`, and
+`round_change_broadcaster` arguments as one required group. If any
+one is supplied without the others, runtime construction fails closed.
+`ConsensusRuntime.round_orchestrator` is otherwise `None`.
+The signer callback must enforce the validator's durable lock and HSM/KMS
+policy and return a complete signed `GCF-ROUND-CHANGE/1` message.
+The broadcaster must return literal `True` only after its configured
+peer-delivery contract succeeds. A false result leaves the durable timeout
+intent pending so the same persisted signed message can be retried.
 
 ## Scheduler contract
 
