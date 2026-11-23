@@ -7,6 +7,7 @@ module does not authorize block finality or advance chain height.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 import sqlite3
 import threading
 from pathlib import Path
@@ -39,8 +40,8 @@ class GCF2VoteStore:
     ):
         if not callable(resolve_active_parent) or not callable(clock):
             raise GCFError("GCF2_TRUSTED_PARENT_RESOLVER_AND_CLOCK_REQUIRED")
-        self.database = str(database)
-        if Path(self.database).expanduser().resolve() != Path(gcf1_engine.db_path).expanduser().resolve():
+        self.database = str(Path(database).expanduser().resolve())
+        if Path(self.database).resolve() != Path(gcf1_engine.db_path).expanduser().resolve():
             raise GCFError("GCF2_AND_GCF1_MUST_SHARE_DURABLE_VOTE_DATABASE")
         Path(self.database).expanduser().parent.mkdir(parents=True, exist_ok=True)
         self.validator_set = validator_set
@@ -48,7 +49,7 @@ class GCF2VoteStore:
         self.resolve_active_parent = resolve_active_parent
         self.clock = clock
         self._lock = threading.RLock()
-        with self._connect() as db:
+        with self._db() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS gcf2_vote_slots (
                   network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
@@ -85,6 +86,14 @@ class GCF2VoteStore:
         db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA synchronous=FULL")
         return db
+
+    @contextmanager
+    def _db(self):
+        db = self._connect()
+        try:
+            yield db
+        finally:
+            db.close()
 
     def _trusted_parent(self, height: int) -> str:
         try:
@@ -263,7 +272,7 @@ class GCF2VoteStore:
                 "quorum_weight": self.validator_set.quorum_weight()}
 
     def get_polc(self, candidate_digest: str) -> dict | None:
-        with self._connect() as db:
+        with self._db() as db:
             row = db.execute(
                 "SELECT polc_json FROM gcf2_polcs WHERE candidate_digest=?",
                 (candidate_digest,),
