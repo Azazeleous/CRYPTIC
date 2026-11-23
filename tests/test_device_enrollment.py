@@ -120,8 +120,8 @@ class DeviceEnrollmentTests(unittest.TestCase):
                 self.request,
                 operator_private_key=self.operator_private,
                 signer_id="operator-root",
-                capabilities=["home.read"],
-                scopes=["network:lan"],
+                capabilities=["network.read"],
+                scopes=["home:other"],
                 issued_at=self.now,
                 expires_at=self.now + 300,
             )
