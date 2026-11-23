@@ -140,6 +140,26 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
         self.assertTrue(checked["valid"])
         self.assertEqual(checked["precommit_weight"], 3)
 
+    def test_finalized_height_rejects_late_votes_without_changing_certificate(self):
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(self.vote(validator))
+        polc = self.store.get_polc(self.digest)
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(
+                self.vote(validator, phase="PRECOMMIT",
+                          polc_digest=polc["polc_digest"])
+            )
+        original = self.store.get_finality_certificate(height=9)
+        with self.assertRaisesRegex(GCFError, "GCF2_HEIGHT_ALREADY_FINALIZED"):
+            self.store.submit_vote(
+                self.vote("v3", phase="PRECOMMIT",
+                          polc_digest=polc["polc_digest"])
+            )
+        self.assertEqual(
+            self.store.get_finality_certificate(height=9)["certificate_digest"],
+            original["certificate_digest"],
+        )
+
     def test_independent_finality_verifier_rejects_certificate_tampering(self):
         for validator in ("v0", "v1", "v2"):
             self.store.submit_vote(self.vote(validator))
