@@ -133,3 +133,19 @@ PR #33 head `1708a6d57d87e64e4da51b749427a53ed3c75704` passed CRYPTIC CI (451591
 ## Verification update — 2026-11-23
 
 PR #33 head `61149ffb1b1936d99d81b377b6887e83f096abe2` passed CRYPTIC CI (45159423674), mining-engine tests (45159423603), production-gate contracts (45159423608), and GAIA local trophy mining (45159423842). GCF/2 remains opt-in; these tests do not establish production HSM custody or multi-host deployment.
+
+
+## GCF/2 finality activation and HTTP composition
+
+GCF/2 finality activation is now an explicit operation, separate from vote submission. The durable vote store re-verifies the self-contained certificate and current trusted parent before invoking the configured anchor activator. The activation adapter checks the currently observed anchor tuple, requires the proposal's sequence to be exactly next and its parent hash to equal the current anchor hash, sends the `GCF/2-ANCHOR-ENVELOPE/1` to the sequence-anchor adapter, and confirms the exact post-advance tuple. A durable activation receipt is stored by network/epoch/height/certificate digest. If the process crashes after the external anchor commit but before local receipt persistence, retry is safe only because the adapter recognizes the already-advanced exact sequence/hash as idempotent.
+
+The opt-in WSGI API exposes:
+
+- `POST /v2/consensus/votes` — submit a GCF/2 vote after the existing GCF/1 proposal has been admitted.
+- `GET /v2/consensus/finality/{height}` — retrieve the independently verified durable certificate.
+- `POST /v2/consensus/activate/{height}` — explicitly commit the certificate through the configured sequence-anchor adapter.
+- `GET /v2/consensus/activation/{height}` — retrieve the durable activation receipt.
+
+GCF/2 routes are absent unless the runtime is explicitly composed with an enabled GCF/2 vote store. The WSGI adapter still requires the authenticated TLS reverse proxy described above; it does not implement user authentication itself.
+
+The local signer guard now uses per-round signature slots plus persistent protocol-version and candidate-lock records. NIL votes reserve the protocol version but do not create candidate locks. Same-value round continuation is permitted; a different value requires a verified round-change certificate and a highest POLC above the prior lock that commits to the new value. Existing signer databases are migrated from the prior height/phase-only slot layout. The guard verifies the injected hardware-signing provider's Ed25519 result and persists the exact signature. Actual HSM custody, vendor policy, and hardware anti-equivocation attestations remain external deployment gates.
