@@ -12,7 +12,6 @@ import ssl
 import time
 from typing import Any, Mapping
 
-from src.consensus.gcf import P2P_DOMAIN if False else GCFError
 from src.consensus.gcf import sign_object, verify_object, canonical_bytes
 from src.consensus.peer_transport import (
     GCFPeerNode, GCFPeerMesh, PeerTransportError, MAX_FRAME_BYTES,
