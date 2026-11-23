@@ -206,6 +206,7 @@ async function makeGcf2AnchorEnvelope(ctx, {
     height: proposal.height, round: proposal.round, parent_hash: proposal.parent_hash,
     candidate_digest: candidateDigest,
     validator_set_hash: ctx.env.ANCHOR_VALIDATOR_SET_SHA256,
+    proposal,
     finalized_at: now + 2,
     polc: { ...polcBody, polc_digest: polcDigest },
     precommits,
