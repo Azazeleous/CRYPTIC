@@ -250,8 +250,13 @@ class PoolSettlementLedger:
             verification = self.verify_finality_certificate(certificate, normalized_proposal)
         except Exception as exc:
             raise PoolSettlementError("finality_certificate_verification_failed") from exc
-        if not isinstance(verification, Mapping) or verification.get("valid") is not True:
-            raise PoolSettlementError("finality_certificate_not_verified")
+        if (not isinstance(verification, Mapping)
+                or verification.get("valid") is not True
+                or verification.get("finalized") is not True):
+            raise PoolSettlementError("finality_certificate_not_canonically_finalized")
+        if ("anchor_sequence" in normalized_proposal
+                and verification.get("anchor_sequence") != normalized_proposal["anchor_sequence"]):
+            raise PoolSettlementError("finality_anchor_sequence_not_confirmed")
         network_id = normalized_proposal["network_id"]
         epoch = _uint(normalized_proposal["epoch"], "finality_epoch", 1)
         height = _uint(normalized_proposal["height"], "finality_height", 1)
