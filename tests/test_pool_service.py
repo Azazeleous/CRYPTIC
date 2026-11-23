@@ -38,13 +38,15 @@ class PoolCoordinatorTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def issue(self):
-        return self.pool.issue_job(
-            worker_id="worker-a", height=1, epoch=1, lifetime_seconds=120,
-            parent_hash="00" * 32, payload_hash="11" * 32,
-            primary_stride=3037, compact_stride=5,
-            nonce_start=0, max_attempts=8,
-        )
+    def issue(self, **overrides):
+        params = {
+            "worker_id": "worker-a", "height": 1, "epoch": 1,
+            "lifetime_seconds": 120, "parent_hash": "00" * 32,
+            "payload_hash": "11" * 32, "primary_stride": 3037,
+            "compact_stride": 5, "nonce_start": 0, "max_attempts": 8,
+        }
+        params.update(overrides)
+        return self.pool.issue_job(**params)
 
     def test_issue_submit_and_measure_durable_state(self):
         job = self.issue()
@@ -97,6 +99,19 @@ class PoolCoordinatorTests(unittest.TestCase):
         self.pool.resolve_active_target = lambda boundary: None
         with self.assertRaisesRegex(PoolServiceError, "active_target_unavailable"):
             self.issue()
+
+    def test_overlapping_nonce_ranges_are_rejected_across_workers(self):
+        self.issue(worker_id="worker-a", nonce_start=0, max_attempts=8)
+        with self.assertRaisesRegex(PoolServiceError, "nonce_range_overlap"):
+            self.issue(worker_id="worker-b", nonce_start=4, max_attempts=8)
+        disjoint = self.issue(worker_id="worker-b", nonce_start=8, max_attempts=8)
+        self.assertEqual(disjoint["nonce_start"], 8)
+
+    def test_revoked_job_does_not_release_its_nonce_range(self):
+        first = self.issue()
+        self.pool.revoke_job(first["job_id"])
+        with self.assertRaisesRegex(PoolServiceError, "nonce_range_overlap"):
+            self.issue(worker_id="worker-b", nonce_start=0, max_attempts=8)
 
 
 if __name__ == "__main__":
