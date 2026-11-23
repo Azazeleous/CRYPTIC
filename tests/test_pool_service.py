@@ -195,6 +195,31 @@ class PoolCoordinatorTests(unittest.TestCase):
         self.assertIn("assigned_worker_id", columns)
         self.assertEqual(migrated.status()["jobs_total"], 0)
 
+    def test_worker_submission_rate_limit_is_durable_and_measured(self):
+        self.pool.max_submissions_per_minute = 1
+        first_job = self.issue(worker_id="worker-a", nonce_start=0)
+        first_submission = execute_pool_job(
+            first_job, trusted_issuer_public_key_hex=self.public_hex,
+            expected_issuer_id="issuer", expected_pool_id="gaia-internal",
+            expected_network_id="hccgn-test", worker_id="worker-a", now=self.now,
+        )
+        self.pool.submit_share(
+            first_submission, authenticated_worker_id="worker-a"
+        )
+        second_job = self.issue(worker_id="worker-a", nonce_start=8)
+        second_submission = execute_pool_job(
+            second_job, trusted_issuer_public_key_hex=self.public_hex,
+            expected_issuer_id="issuer", expected_pool_id="gaia-internal",
+            expected_network_id="hccgn-test", worker_id="worker-a", now=self.now,
+        )
+        with self.assertRaisesRegex(PoolServiceError, "worker_rate_limit_exceeded"):
+            self.pool.submit_share(
+                second_submission, authenticated_worker_id="worker-a"
+            )
+        stats = self.pool.status()
+        self.assertEqual(stats["workers_seen"], 1)
+        self.assertEqual(stats["worker_share_totals"][0]["accepted_shares"], 1)
+
     def test_nonce_reservations_support_full_uint64_boundary(self):
         start = (1 << 64) - 8
         job = self.issue(nonce_start=start, max_attempts=8)
