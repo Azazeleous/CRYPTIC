@@ -599,27 +599,42 @@ class DeviceRegistry:
     def authorize(
         self, session_id: str, capability: str, resource: str | None = None,
     ) -> bool:
-        if not isinstance(session_id, str) or not HEX_32.fullmatch(session_id):
-            return False
-        if capability not in SUPPORTED_CAPABILITIES:
+        if (not isinstance(session_id, str) or not HEX_32.fullmatch(session_id)
+                or not isinstance(capability, str)
+                or capability not in SUPPORTED_CAPABILITIES
+                or (resource is not None and
+                    (not isinstance(resource, str) or not SCOPE.fullmatch(resource)))):
             return False
         now = int(self.clock())
         with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT s.device_id,s.capabilities_json,s.scopes_json,s.expires_at,"
                 "s.revoked,d.revoked,d.expires_at FROM active_sessions s "
                 "JOIN devices d ON d.device_id=s.device_id WHERE s.session_id=?",
                 (session_id,),
             ).fetchone()
-        if row is None or row[4] or row[5] or row[3] < now or row[6] < now:
-            return False
-        if capability not in json.loads(row[1]):
-            return False
-        if resource is not None and resource not in json.loads(row[2]):
-            return False
-        if resource is None and capability != "device.status":
-            return False
-        return True
+            allowed = bool(
+                row is not None
+                and not row[4] and not row[5]
+                and row[3] >= now and row[6] >= now
+                and capability in json.loads(row[1])
+                and (
+                    (resource is not None and resource in json.loads(row[2]))
+                    or (resource is None and capability == "device.status")
+                )
+            )
+            self._audit(
+                connection,
+                actor="unknown" if row is None else row[0],
+                action="device.authorize",
+                resource=capability if resource is None else resource,
+                outcome="allowed" if allowed else "denied",
+                details={"session_id": session_id, "capability": capability},
+                timestamp=now,
+            )
+            connection.execute("COMMIT")
+        return allowed
 
     def revoke_device(self, device_id: str, *, actor: str) -> bool:
         identifier = _device_id(device_id)
