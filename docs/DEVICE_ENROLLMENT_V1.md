@@ -39,4 +39,10 @@ The protocol does not itself provide a network transport, BLE GATT client, Andro
 
 tests/test_device_enrollment.py covers explicit consent, device proof-of-possession, operator certificate binding, capability/scope subset enforcement, host challenge verification, response replay rejection, scoped authorization, expiry, device revocation, duplicate enrollment, and audit tampering.
 
-CI evidence is recorded after the current branch head passes. No live device, network, BLE, or home-automation action is claimed.
+CI evidence on source commit 6817c310cc892afb14de2ce21cb5ce6003c02bbb:
+
+- CRYPTIC CI run 45217416194 — 379 tests passed (2 skipped).
+- Mining-engine run 45217417851 — 379 tests passed (2 skipped).
+- GAIA local trophy run 45217416327 — passed.
+
+No live device, network, BLE, or home-automation action is claimed.
