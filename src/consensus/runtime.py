@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping
 from src.adam.commit_store import AdamCommitStore, APEXValidator
 from src.consensus.gcf import GCFEngine, ValidatorSet
 from src.consensus.gcf2_engine import GCF2VoteStore
+from src.consensus.signer_guard import ConsensusSigningGuard
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
 from src.consensus.hccgn_registry import (
     HCCGNActiveTargetPolicy, HCCGNProofStore, HCCGNSequenceAnchor,
@@ -116,6 +117,7 @@ def build_consensus_runtime(
     round_change_broadcaster: Callable | None = None,
     enable_gcf2_vote_store: bool = False,
     gcf2_active_parent_resolver: Callable[[int], str | None] | None = None,
+    consensus_signing_provider: Callable[[bytes], bytes] | None = None,
     consensus_sign_bytes: Callable[[bytes], bytes] | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
@@ -140,6 +142,10 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("gcf2_requires_trusted_active_parent_resolver")
     if consensus_sign_bytes is not None and (not callable(consensus_sign_bytes) or local_validator_id is None):
         raise RuntimeConfigurationError("consensus_signer_requires_local_validator_and_provider")
+    if consensus_signing_provider is not None and (
+        not callable(consensus_signing_provider) or local_validator_id is None
+    ):
+        raise RuntimeConfigurationError("consensus_signing_provider_requires_local_validator")
     if policy_update_peer_mesh is not None and policy_update_signer is None:
         raise RuntimeConfigurationError("policy_update_peer_mesh_requires_coordinator")
     round_orchestrator_args = (local_validator_id, round_change_signer, round_change_broadcaster)
@@ -228,6 +234,17 @@ def build_consensus_runtime(
             gcf1_engine=engine,
             resolve_active_parent=gcf2_active_parent_resolver,
             clock=clock or time.time,
+        )
+    signing_guard = None
+    if consensus_signing_provider is not None:
+        validator = validator_set.validators.get(local_validator_id)
+        if validator is None:
+            raise RuntimeConfigurationError("local_signer_not_in_validator_set")
+        signing_guard = ConsensusSigningGuard(
+            database=root / "gcf.sqlite3", network_id=network_id,
+            epoch=epoch, validator_id=local_validator_id,
+            public_key_hex=validator.public_key_hex,
+            sign_bytes=consensus_signing_provider,
         )
     adam_store = AdamCommitStore(root / "adam.sqlite3")
     apex = APEXValidator(
