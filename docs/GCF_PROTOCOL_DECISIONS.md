@@ -103,3 +103,10 @@ The opt-in GCF/2 path now includes durable vote-slot admission and deterministic
 - The runtime exposes an explicit enable_gcf2_vote_store option. It is disabled by default and requires an injected trusted active-parent resolver. It is not exposed through the GCF/1 HTTP API.
 
 **Activation boundary:** GCF/2 finality certificates are durable protocol evidence, but they do not yet advance chain height or commit the external sequence anchor. GCF/2 is not production-enabled. Local signing/HSM anti-equivocation integration, peer version negotiation and transport, Cloudflare Worker verification, cross-language known-answer vectors, and proof-bound cross-round lock transitions remain required. HCCGN proof and justice-evidence gates remain separate trust checks; the independent certificate verifier does not replace those external gates.
+
+
+## Pool boundary — work acceptance versus reward settlement
+
+The current pool slice durably issues signed short-lived jobs from an injected active-target policy, authenticates workers through a trusted transport adapter (including pinned mTLS certificate mapping), independently verifies HCCGN submissions, reserves non-overlapping nonce intervals, and records accepted shares in a hash-chained append-only ledger. Jobs have durable active/revoked/expired lifecycle states; worker submission rate limits and measured worker share totals are persisted. An exact retry of previously committed work is acknowledged only when the share ledger chain verifies.
+
+This is not yet a complete reward-distributing public pool. The present job target is the active network target, so this profile does not yet implement a separate pool share target or difficulty-weighted partial shares. There is no finalized-block reward settlement, transferable balance, payout rail, operator/admin network API, or multi-coordinator failover protocol. Any future settlement must be driven by an independently verified finalized block certificate and an authorized reward policy; accepted shares alone must never mint reward credits. Until a reward schedule/asset policy is approved, accounting remains accepted-work measurement only.
