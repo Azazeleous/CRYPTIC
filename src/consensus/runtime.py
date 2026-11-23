@@ -35,6 +35,57 @@ class RuntimeConfigurationError(ValueError):
     """The composition root cannot safely construct the requested runtime."""
 
 
+def build_consensus_lock_transition_verifier(
+    *, engine: GCFEngine, validator_set: ValidatorSet, clock: Callable[[], float],
+) -> Callable[[str, int, Mapping[str, Any], Mapping[str, Any]], bool]:
+    """Verify a signer lock transition against persisted proposals and a POLC."""
+    from src.consensus.round_change import value_digest, verify_round_change_certificate
+
+    def verify(prior_digest, prior_round, next_vote, evidence):
+        if not isinstance(evidence, Mapping) or not isinstance(next_vote, Mapping):
+            return False
+        try:
+            prior_proposal = engine._proposal(
+                engine._db_context_for_read(), prior_digest
+            )
+        except Exception:
+            # Use the engine's read helper without relying on an open transaction.
+            try:
+                with engine._db() as db:
+                    prior_proposal = engine._proposal(db, prior_digest)
+            except Exception:
+                return False
+        try:
+            with engine._db() as db:
+                next_proposal = engine._proposal(db, next_vote["candidate_digest"])
+            if (next_proposal.get("round") != next_vote.get("round")
+                    or next_proposal.get("height") != next_vote.get("height")
+                    or next_proposal.get("network_id") != next_vote.get("network_id")
+                    or next_proposal.get("epoch") != next_vote.get("epoch")
+                    or next_proposal.get("round_change_certificate") != dict(evidence)):
+                return False
+            checked = verify_round_change_certificate(
+                evidence, validator_set=validator_set,
+                height=next_proposal["height"], clock=clock,
+            )
+            if (not checked.get("valid")
+                    or checked.get("target_round") != next_proposal["round"]):
+                return False
+            if value_digest(prior_proposal) == value_digest(next_proposal):
+                return True
+            highest = checked.get("highest_polc")
+            return (
+                highest is not None
+                and checked.get("highest_polc_round") is not None
+                and checked["highest_polc_round"] > prior_round
+                and value_digest(highest["proposal"]) == value_digest(next_proposal)
+            )
+        except Exception:
+            return False
+
+    return verify
+
+
 def build_gcf2_sequence_anchor_activator(
     *, sequence_anchor: HCCGNSequenceAnchor, network_id: str,
 ) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
@@ -267,17 +318,6 @@ def build_consensus_runtime(
         evidence_verifier=justice_evidence_verifier,
     )
     validator_set = ValidatorSet(network_id, epoch, validators)
-    signer_guard = None
-    if consensus_sign_bytes is not None:
-        local_validator = validator_set.validators.get(local_validator_id)
-        if local_validator is None:
-            raise RuntimeConfigurationError("consensus_signer_local_validator_unknown")
-        signer_guard = ConsensusSigningGuard(
-            database=root / "gcf.sqlite3", network_id=network_id,
-            epoch=epoch, validator_id=local_validator_id,
-            public_key_hex=local_validator.public_key_hex,
-            sign_bytes=consensus_sign_bytes,
-        )
     # Proposal admission is governed by the configured validator set. The
     # independent GCF PREVOTE/PRECOMMIT weighted quorum still controls finality.
     # god_gate is retained as a compatibility argument but is not consulted.
@@ -290,6 +330,21 @@ def build_consensus_runtime(
     if clock is not None:
         engine_kwargs["clock"] = clock
     engine = GCFEngine(root / "gcf.sqlite3", validator_set, **engine_kwargs)
+    signer_guard = None
+    if consensus_sign_bytes is not None:
+        local_validator = validator_set.validators.get(local_validator_id)
+        if local_validator is None:
+            raise RuntimeConfigurationError("consensus_signer_local_validator_unknown")
+        signer_guard = ConsensusSigningGuard(
+            database=root / "gcf.sqlite3", network_id=network_id,
+            epoch=epoch, validator_id=local_validator_id,
+            public_key_hex=local_validator.public_key_hex,
+            sign_bytes=consensus_sign_bytes,
+            verify_lock_transition=build_consensus_lock_transition_verifier(
+                engine=engine, validator_set=validator_set,
+                clock=clock or time.time,
+            ),
+        )
     if gcf2_finality_activator is not None and not callable(gcf2_finality_activator):
         raise RuntimeConfigurationError("gcf2_finality_activator_invalid")
     if not enable_gcf2_vote_store and gcf2_finality_activator is not None:
