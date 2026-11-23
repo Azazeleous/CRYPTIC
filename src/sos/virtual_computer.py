@@ -245,6 +245,8 @@ class VirtualComputer:
         for sequence, event_json, recorded_previous, recorded_hash in rows:
             try:
                 event = json.loads(event_json)
+                if not isinstance(event, dict):
+                    return False
                 encoded = canonical_json(event)
                 digest = hashlib.sha256(
                     AUDIT_DOMAIN + bytes.fromhex(previous_hash) + encoded
