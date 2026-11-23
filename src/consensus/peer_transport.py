@@ -410,6 +410,8 @@ class GCFPeerMesh:
         """Fan out one signed proposal, validator vote, or round-change message."""
         if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE", "GCF2_VOTE"} or not isinstance(payload, Mapping):
             raise PeerTransportError("BROADCAST_MESSAGE_INVALID")
+        if message_type == "GCF2_VOTE" and self.node.gcf2_vote_store is None:
+            raise PeerTransportError("GCF2_NOT_ENABLED_ON_LOCAL_NODE")
         message_id = secrets.token_hex(16)
         semaphore = asyncio.Semaphore(self.max_parallel)
 
