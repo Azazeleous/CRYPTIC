@@ -36,16 +36,20 @@ For a newly active height/round:
    and returns `REQUEST_SIGNED_ROUND_CHANGE`, including source and target
    rounds. The response explicitly states that signing is not authorized and
    no lock has been released.
-5. The configured validator signer must independently enforce its own
-   persistent signing-intent and POLC policy before signing a round-change
-   message. The scheduler forwards the signed message through authenticated
-   peer transport.
-6. After the node receives a complete certificate, call
-   `activate_certificate(certificate, height=H)`. The controller independently
-   verifies every message, the active validator set, strict weighted quorum,
-   and the exact next-round/source-round relationship before persisting the
-   certificate and advancing its local round record.
-7. Arm the new round. Proposal admission and vote signing still pass through
+5. When configured, call `RoundChangeOrchestrator.tick(height=H)`. It
+   invokes the signer only after the timeout intent exists, verifies the
+   returned signed message, persists it, and broadcasts it through the
+   injected authenticated peer transport.
+6. If broadcast is ambiguous or unsuccessful, the orchestrator retries the
+   exact persisted message; it does not create a second signing intent.
+   Remote peer messages continue to enter through authenticated GCF-P2P/1
+   dispatch and `GCFEngine.submit_round_change()`.
+7. When a complete certificate exists, the orchestrator independently checks
+   it and calls `activate_certificate(certificate, height=H)`. The controller
+   verifies the active validator set, strict weighted quorum, and exact
+   next-round/source-round relationship before persisting the certificate
+   and advancing its local round record.
+8. Arm the new round. Proposal admission and vote signing still pass through
    the GCF engine and signer safety checks.
 
 A timeout event is a request to initiate the protocol, not proof of a round
