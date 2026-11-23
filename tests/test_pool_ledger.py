@@ -13,10 +13,19 @@ class PoolLedgerTests(unittest.TestCase):
         self.assertTrue(result["recorded"])
         self.assertTrue(self.ledger.verify_chain())
         self.assertEqual(len(self.ledger.list_shares("worker-a")),1)
-    def test_duplicate_proof_is_rejected(self):
-        self.ledger.record_accepted_share(self.share)
-        with self.assertRaisesRegex(PoolLedgerError,"replay"):
-            self.ledger.record_accepted_share(self.share)
+    def test_exact_share_retry_is_idempotent_but_conflicting_proof_is_rejected(self):
+        first = self.ledger.record_accepted_share(self.share)
+        retry = dict(self.share)
+        retry["accepted_at"] = 1003
+        second = self.ledger.record_accepted_share(retry)
+        self.assertTrue(second["recorded"])
+        self.assertTrue(second["replayed"])
+        self.assertEqual(first["event_hash"], second["event_hash"])
+        conflicting = dict(self.share)
+        conflicting["share_id"] = "e" * 64
+        with self.assertRaisesRegex(PoolLedgerError, "replay"):
+            self.ledger.record_accepted_share(conflicting)
+        self.assertEqual(len(self.ledger.list_shares()), 1)
     def test_unverified_share_cannot_be_recorded(self):
         changed=dict(self.share); changed["accepted"]=False
         with self.assertRaisesRegex(PoolLedgerError,"verified"):
