@@ -41,6 +41,7 @@ class GCF2VoteStore:
         gcf1_engine: GCFEngine,
         resolve_active_parent: Callable[[int], str | None],
         clock: Callable[[], float],
+        finality_activator: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     ):
         if not callable(resolve_active_parent) or not callable(clock):
             raise GCFError("GCF2_TRUSTED_PARENT_RESOLVER_AND_CLOCK_REQUIRED")
@@ -52,6 +53,9 @@ class GCF2VoteStore:
         self.gcf1_engine = gcf1_engine
         self.resolve_active_parent = resolve_active_parent
         self.clock = clock
+        if finality_activator is not None and not callable(finality_activator):
+            raise GCFError("GCF2_FINALITY_ACTIVATOR_INVALID")
+        self.finality_activator = finality_activator
         self._lock = threading.RLock()
         with self._db() as db:
             db.executescript("""
@@ -78,6 +82,13 @@ class GCF2VoteStore:
                   validator_id TEXT NOT NULL, candidate_digest TEXT NOT NULL,
                   first_round INTEGER NOT NULL,
                   PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
+                );
+                CREATE TABLE IF NOT EXISTS gcf2_finality_activations (
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, certificate_digest TEXT NOT NULL UNIQUE,
+                  anchor_sequence INTEGER NOT NULL, receipt_json TEXT NOT NULL,
+                  activated_at INTEGER NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height)
                 );
                 CREATE TABLE IF NOT EXISTS gcf2_finality_certificates (
                   network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
@@ -458,6 +469,110 @@ class GCF2VoteStore:
         )
         return {"certificate_digest": certificate_digest,
                 "precommit_weight": weight, "replayed": False}
+
+    def activate_finality_certificate(self, *, height: int) -> dict:
+        """Explicitly commit a verified certificate to the injected sequence anchor.
+
+        This operation is deliberately separate from vote admission. The
+        activator must confirm canonical external state and return an exact
+        anchor sequence. Retries are idempotent at both the adapter and ledger.
+        """
+        if self.finality_activator is None:
+            raise GCFError("GCF2_FINALITY_ACTIVATOR_NOT_CONFIGURED")
+        certificate = self.get_finality_certificate(height=height)
+        if certificate is None:
+            raise GCFError("GCF2_FINALITY_CERTIFICATE_NOT_FOUND")
+        proposal = certificate.get("proposal")
+        if not isinstance(proposal, Mapping):
+            raise GCFError("GCF2_FINALITY_PROPOSAL_MISSING")
+        anchor_sequence = proposal.get("anchor_sequence")
+        if (isinstance(anchor_sequence, bool) or not isinstance(anchor_sequence, int)
+                or anchor_sequence < 1):
+            raise GCFError("GCF2_FINALITY_ANCHOR_SEQUENCE_REQUIRED")
+        with self._db() as db:
+            existing = db.execute(
+                """SELECT certificate_digest,receipt_json,anchor_sequence
+                   FROM gcf2_finality_activations
+                   WHERE network_id=? AND epoch=? AND height=?""",
+                (self.validator_set.network_id, self.validator_set.epoch, height),
+            ).fetchone()
+        if existing is not None:
+            if existing["certificate_digest"] != certificate["certificate_digest"]:
+                raise GCFError("GCF2_FINALITY_ACTIVATION_CONFLICT")
+            return {
+                "activated": True, "replayed": True,
+                "anchor_sequence": existing["anchor_sequence"],
+                "certificate_digest": existing["certificate_digest"],
+                "receipt": json.loads(existing["receipt_json"]),
+            }
+        try:
+            receipt = self.finality_activator(certificate)
+        except Exception as exc:
+            raise GCFError("GCF2_FINALITY_ANCHOR_ACTIVATION_FAILED") from exc
+        if (not isinstance(receipt, Mapping)
+                or receipt.get("accepted") is not True
+                or receipt.get("finalized") is not True
+                or receipt.get("anchor_sequence") != anchor_sequence):
+            raise GCFError("GCF2_FINALITY_ANCHOR_RECEIPT_INVALID")
+        if receipt.get("certificate_digest") not in (None, certificate["certificate_digest"]):
+            raise GCFError("GCF2_FINALITY_ANCHOR_CERTIFICATE_MISMATCH")
+        normalized_receipt = dict(receipt)
+        normalized_receipt["certificate_digest"] = certificate["certificate_digest"]
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = db.execute(
+                    """SELECT certificate_digest,receipt_json,anchor_sequence
+                       FROM gcf2_finality_activations
+                       WHERE network_id=? AND epoch=? AND height=?""",
+                    (self.validator_set.network_id, self.validator_set.epoch, height),
+                ).fetchone()
+                if existing is not None:
+                    if existing["certificate_digest"] != certificate["certificate_digest"]:
+                        raise GCFError("GCF2_FINALITY_ACTIVATION_CONFLICT")
+                    db.execute("COMMIT")
+                    return {
+                        "activated": True, "replayed": True,
+                        "anchor_sequence": existing["anchor_sequence"],
+                        "certificate_digest": existing["certificate_digest"],
+                        "receipt": json.loads(existing["receipt_json"]),
+                    }
+                db.execute(
+                    """INSERT INTO gcf2_finality_activations
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (self.validator_set.network_id, self.validator_set.epoch,
+                     height, certificate["certificate_digest"], anchor_sequence,
+                     canonical_bytes(normalized_receipt).decode("utf-8"),
+                     int(self.clock())),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        return {
+            "activated": True, "replayed": False,
+            "anchor_sequence": anchor_sequence,
+            "certificate_digest": certificate["certificate_digest"],
+            "receipt": normalized_receipt,
+        }
+
+    def get_finality_activation(self, *, height: int) -> dict | None:
+        with self._db() as db:
+            row = db.execute(
+                """SELECT certificate_digest,anchor_sequence,receipt_json,activated_at
+                   FROM gcf2_finality_activations
+                   WHERE network_id=? AND epoch=? AND height=?""",
+                (self.validator_set.network_id, self.validator_set.epoch, height),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "certificate_digest": row["certificate_digest"],
+            "anchor_sequence": row["anchor_sequence"],
+            "receipt": json.loads(row["receipt_json"]),
+            "activated_at": row["activated_at"],
+        }
 
     def get_finality_certificate(self, *, height: int) -> dict | None:
         with self._db() as db:
