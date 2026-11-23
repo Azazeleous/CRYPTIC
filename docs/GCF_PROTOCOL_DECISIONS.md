@@ -85,7 +85,7 @@ The opt-in `GCF2VoteStore` now adds:
 - Durable SQLite vote slots keyed by network, epoch, height, round, phase, and validator. Candidate and NIL votes compete for the same slot; a second or conflicting vote is rejected after restart as well as within one process.
 - A trusted active-parent resolver is mandatory for both NIL and CANDIDATE votes. Candidate proposals must also resolve to the active parent at admission time; the parent hash carried by a signed vote is not trusted by itself.
 - NIL votes consume the durable slot but do not create a candidate lock, erase an existing candidate lock, or contribute to candidate POLC weight.
-- Candidate locks are deliberately conservative in this iteration: a validator cannot change candidate digest for the same height and phase. The proof-bound cross-round lock-transition path is not yet implemented for GCF/2.
+- Candidate locks are durable per height and phase. A candidate change in a later round is allowed only when the new proposal carries a verified round-change certificate for exactly that target round and a highest POLC strictly above the prior lock whose stable value digest matches the new proposal. Same-round equivocation and round regression remain rejected.
 - GCF/1 and GCF/2 vote stores must share the same SQLite database. Both submission paths reject a height/phase/validator slot already used by the other protocol version, preventing cross-version double-signing.
 - An affirmative candidate PREVOTE quorum produces a deterministic GCF/2 POLC using the separate `GCF/2|POLC` domain and validator-ID-sorted signed PREVOTEs. An affirmative candidate PRECOMMIT is admitted only when it carries the exact persisted POLC digest.
 
@@ -102,7 +102,7 @@ The opt-in GCF/2 path now includes durable vote-slot admission and deterministic
 - GCF/1 and GCF/2 finality paths reject a conflicting certificate for the same network/epoch/height when they share the same database.
 - The runtime exposes an explicit enable_gcf2_vote_store option. It is disabled by default and requires an injected trusted active-parent resolver. It is not exposed through the GCF/1 HTTP API.
 
-**Activation boundary:** GCF/2 finality certificates are durable protocol evidence. The signed peer HELLO, persistent cross-version signer guard, Cloudflare Worker anchor verifier, and shared Python/JavaScript known-answer vector are implemented and CI-verified. The vote store remains disabled by default; the signer guard is only an injected Ed25519 provider boundary, not evidence of a deployed HSM or HSM-side anti-equivocation. GCF/2 still lacks proof-bound cross-round lock transitions and autonomous integration into the GCF policy-update coordinator. External validator/justice trust checks remain separate and mandatory.
+**Activation boundary:** GCF/2 finality certificates, proof-bound cross-round candidate-lock transitions, signed peer HELLO negotiation, the persistent cross-version signer guard, Cloudflare Worker anchor verification, and the shared Python/JavaScript known-answer vector are implemented and CI-verified. The vote store remains disabled by default. The signer guard is an injected Ed25519 provider boundary, not evidence of deployed HSM custody or HSM-side anti-equivocation. GCF/2 is not yet wired into the autonomous GCF policy-update coordinator; finality/anchor operations require an explicitly configured caller. External validator and justice trust checks remain separate and mandatory.
 
 
 ## Pool boundary — work acceptance versus reward settlement
@@ -128,3 +128,8 @@ A shared deterministic GCF/2 known-answer vector now exercises proposal signatur
 ## Verification update — 2026-11-23
 
 PR #33 head `1708a6d57d87e64e4da51b749427a53ed3c75704` passed CRYPTIC CI (45159184507), mining-engine tests (45159184530), production-gate contracts (45159184429), and GAIA local trophy mining (45159184527). GCF/2 remains opt-in; passing conformance tests do not establish production deployment or independent key custody.
+
+
+## Verification update — 2026-11-23
+
+PR #33 head `61149ffb1b1936d99d81b377b6887e83f096abe2` passed CRYPTIC CI (45159423674), mining-engine tests (45159423603), production-gate contracts (45159423608), and GAIA local trophy mining (45159423842). GCF/2 remains opt-in; these tests do not establish production HSM custody or multi-host deployment.
