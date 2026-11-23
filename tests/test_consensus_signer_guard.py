@@ -63,11 +63,21 @@ class ConsensusSigningGuardTests(unittest.TestCase):
                 self.vote(schema="GCF/2"), created_at=101,
             )
 
-    def test_cross_round_vote_signing_is_conservatively_blocked(self):
+    def test_same_candidate_can_be_signed_again_in_a_higher_round(self):
         self.guard.sign_vote(self.vote(round_number=0), created_at=100)
-        with self.assertRaisesRegex(ConsensusSigningError, "consensus_signing_slot_conflict"):
+        second = self.guard.sign_vote(
+            self.vote(round_number=1), created_at=101,
+        )
+        self.assertEqual(second["round"], 1)
+        self.assertEqual(len(self.guard.slot_status()), 2)
+
+    def test_different_candidate_still_requires_proof_bound_transition(self):
+        self.guard.sign_vote(self.vote(round_number=0), created_at=100)
+        with self.assertRaisesRegex(
+            ConsensusSigningError, "consensus_candidate_lock_transition_unauthorized"
+        ):
             self.guard.sign_vote(
-                self.vote(round_number=1), created_at=101,
+                self.vote(round_number=1, candidate="33" * 32), created_at=101,
             )
 
     def test_failed_hsm_attempt_reserves_exact_payload_and_blocks_equivocation(self):
