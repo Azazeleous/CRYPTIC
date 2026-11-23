@@ -23,6 +23,7 @@ from src.consensus.hccgn_work import HCCGNWorkProofProvider, PROFILE_ID
 from src.consensus.http_api import GCFWSGI
 from src.consensus.policy_update import GCFPolicyUpdateCoordinator
 from src.consensus.round_progression import RoundProgressionController
+from src.consensus.round_orchestrator import RoundChangeOrchestrator
 from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
 from src.governance.remote_providers import load_independently_pinned_root
@@ -78,6 +79,7 @@ class ConsensusRuntime:
     apex: APEXValidator
     policy_update: GCFPolicyUpdateCoordinator | None
     round_progression: RoundProgressionController
+    round_orchestrator: RoundChangeOrchestrator | None
     http: GCFWSGI
 
     @property
@@ -105,6 +107,9 @@ def build_consensus_runtime(
     policy_update_proposer_id: str | None = None,
     policy_update_signer: Any | None = None,
     policy_update_peer_mesh: Any | None = None,
+    local_validator_id: str | None = None,
+    round_change_signer: Callable | None = None,
+    round_change_broadcaster: Callable | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
@@ -124,6 +129,11 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("policy_update_requires_sequence_anchor")
     if policy_update_peer_mesh is not None and policy_update_signer is None:
         raise RuntimeConfigurationError("policy_update_peer_mesh_requires_coordinator")
+    round_orchestrator_args = (local_validator_id, round_change_signer, round_change_broadcaster)
+    if any(item is not None for item in round_orchestrator_args) and not all(
+        item is not None for item in round_orchestrator_args
+    ):
+        raise RuntimeConfigurationError("round_orchestrator_requires_validator_signer_and_broadcaster")
     root = Path(data_dir).expanduser()
     root.mkdir(mode=0o700, parents=True, exist_ok=True)
     root_info = root.lstat()
@@ -207,6 +217,15 @@ def build_consensus_runtime(
         engine=engine, database=root / "round-progression.sqlite3",
         monotonic=time.monotonic,
     )
+    round_orchestrator = None
+    if local_validator_id is not None:
+        round_orchestrator = RoundChangeOrchestrator(
+            engine=engine, controller=round_progression,
+            validator_id=local_validator_id,
+            sign_round_change=round_change_signer,
+            broadcast_round_change=round_change_broadcaster,
+            clock=clock or time.time,
+        )
     http = GCFWSGI(engine, apex_validator=apex)
     for database_path in (
         root / "hccgn-proofs.sqlite3", root / "hccgn-target-policy.sqlite3",
@@ -220,5 +239,5 @@ def build_consensus_runtime(
     return ConsensusRuntime(
         proof_store, target_policy, work_provider, hccgn_gate, justice_gate,
         god_authorizer, engine, adam_store, apex, policy_update,
-        round_progression, http,
+        round_progression, round_orchestrator, http,
     )
