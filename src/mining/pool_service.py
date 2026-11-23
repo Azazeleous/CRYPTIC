@@ -59,6 +59,7 @@ class PoolCoordinator:
         resolve_active_target: Callable[[Mapping[str, Any]], bytes | None],
         clock: Callable[[], int],
         max_submissions_per_minute: int = 120,
+        settlement_ledger: Any | None = None,
     ):
         path = Path(database).expanduser()
         if str(path) == ":memory:":
@@ -74,6 +75,7 @@ class PoolCoordinator:
                 raise PoolServiceError(name + "_invalid")
         self.database = str(path)
         self.share_ledger = share_ledger
+        self.settlement_ledger = settlement_ledger
         self.issuer_private_key_hex = issuer_private_key_hex
         self.issuer_id = issuer_id
         self.pool_id = pool_id
@@ -477,6 +479,22 @@ class PoolCoordinator:
             return {"accepted": True, "share_id": accepted["share_id"],
                     "worker_id": accepted["worker_id"], **persisted}
 
+    def settle_finalized_block(
+        self, *, finality: Mapping[str, Any],
+        reward_policy: Mapping[str, Any],
+        proposal: Mapping[str, Any] | None = None,
+    ) -> dict:
+        """Settle only a verified finalized block matching one accepted pool proof."""
+        if self.settlement_ledger is None:
+            raise PoolServiceError("pool_settlement_ledger_not_configured")
+        try:
+            return self.settlement_ledger.settle_finalized_block(
+                finality=finality, reward_policy=reward_policy,
+                pool_id=self.pool_id, proposal=proposal,
+            )
+        except Exception as exc:
+            raise PoolServiceError("pool_settlement_rejected:" + str(exc)) from exc
+
     def status(self) -> dict:
         """Return measured durable state; chain integrity failure is explicit."""
         self.expire_jobs()
@@ -488,6 +506,14 @@ class PoolCoordinator:
         shares = self.share_ledger.list_shares()
         worker_stats = self.share_ledger.worker_stats()
         chain_ok = self.share_ledger.verify_chain()
+        settlement_chain_ok = (
+            self.settlement_ledger.verify_chain()
+            if self.settlement_ledger is not None else None
+        )
+        settlement_count = (
+            len(self.settlement_ledger.list_settlements(network_id=self.network_id))
+            if self.settlement_ledger is not None else 0
+        )
         return {
             "pool_id": self.pool_id, "network_id": self.network_id,
             "jobs_total": total, "jobs_active": active or 0,
@@ -496,5 +522,7 @@ class PoolCoordinator:
             "workers_seen": len(worker_stats),
             "worker_share_totals": worker_stats,
             "share_ledger_chain_valid": chain_ok,
-            "healthy": bool(chain_ok),
+            "settlements_recorded": settlement_count,
+            "settlement_ledger_chain_valid": settlement_chain_ok,
+            "healthy": bool(chain_ok and settlement_chain_ok is not False),
         }
