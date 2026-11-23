@@ -25,6 +25,7 @@ from src.consensus.http_api import GCFWSGI
 from src.consensus.policy_update import GCFPolicyUpdateCoordinator
 from src.consensus.round_progression import RoundProgressionController
 from src.consensus.round_orchestrator import RoundChangeOrchestrator
+from src.consensus.signer_guard import ConsensusSigningGuard
 from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
 from src.governance.remote_providers import load_independently_pinned_root
@@ -82,6 +83,7 @@ class ConsensusRuntime:
     round_progression: RoundProgressionController
     round_orchestrator: RoundChangeOrchestrator | None
     gcf2_vote_store: GCF2VoteStore | None
+    signer_guard: ConsensusSigningGuard | None
     http: GCFWSGI
 
     @property
@@ -114,6 +116,7 @@ def build_consensus_runtime(
     round_change_broadcaster: Callable | None = None,
     enable_gcf2_vote_store: bool = False,
     gcf2_active_parent_resolver: Callable[[int], str | None] | None = None,
+    consensus_sign_bytes: Callable[[bytes], bytes] | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
@@ -135,6 +138,8 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("gcf2_enable_flag_invalid")
     if enable_gcf2_vote_store and not callable(gcf2_active_parent_resolver):
         raise RuntimeConfigurationError("gcf2_requires_trusted_active_parent_resolver")
+    if consensus_sign_bytes is not None and (not callable(consensus_sign_bytes) or local_validator_id is None):
+        raise RuntimeConfigurationError("consensus_signer_requires_local_validator_and_provider")
     if policy_update_peer_mesh is not None and policy_update_signer is None:
         raise RuntimeConfigurationError("policy_update_peer_mesh_requires_coordinator")
     round_orchestrator_args = (local_validator_id, round_change_signer, round_change_broadcaster)
@@ -193,6 +198,17 @@ def build_consensus_runtime(
         evidence_verifier=justice_evidence_verifier,
     )
     validator_set = ValidatorSet(network_id, epoch, validators)
+    signer_guard = None
+    if consensus_sign_bytes is not None:
+        local_validator = validator_set.validators.get(local_validator_id)
+        if local_validator is None:
+            raise RuntimeConfigurationError("consensus_signer_local_validator_unknown")
+        signer_guard = ConsensusSigningGuard(
+            database=root / "gcf.sqlite3", network_id=network_id,
+            epoch=epoch, validator_id=local_validator_id,
+            public_key_hex=local_validator.public_key_hex,
+            sign_bytes=consensus_sign_bytes,
+        )
     # Proposal admission is governed by the configured validator set. The
     # independent GCF PREVOTE/PRECOMMIT weighted quorum still controls finality.
     # god_gate is retained as a compatibility argument but is not consulted.
@@ -255,5 +271,5 @@ def build_consensus_runtime(
     return ConsensusRuntime(
         proof_store, target_policy, work_provider, hccgn_gate, justice_gate,
         god_authorizer, engine, adam_store, apex, policy_update,
-        round_progression, round_orchestrator, gcf2_vote_store, http,
+        round_progression, round_orchestrator, gcf2_vote_store, signer_guard, http,
     )
