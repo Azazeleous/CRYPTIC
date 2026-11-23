@@ -23,7 +23,7 @@ No network write, BLE write, lock/actuator, or home-control capability is define
 
 The host issues a signed, short-lived challenge bound to device ID, session ID, and a random challenge value. The device verifies the host signature against its pinned host public key before signing a response. The host verifies the response with the enrolled device key, checks the pending challenge and expiry, then consumes the challenge exactly once.
 
-Authentication produces a server-side session with a bounded lifetime. Authorization checks the session, device enrollment, revocation state, capability, and exact resource scope on every request. Device revocation invalidates all active sessions.
+Authentication produces a server-side session with a bounded lifetime. Authorization checks the session, device enrollment, revocation state, capability, and exact resource scope on every request. Each authorization decision is appended to the audit chain. Authentication and revocation database checks are serialized with their writes to prevent a concurrent revoke from racing session creation. Device revocation requires a separate operator-signed, short-lived revocation record with a one-use nonce. Revocation invalidates all active sessions; unsigned, untrusted, expired, and replayed revocations are rejected.
 
 ## Persistence and audit
 
