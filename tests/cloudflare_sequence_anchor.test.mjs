@@ -10,7 +10,7 @@ import worker from "../cloudflare/sequence-anchor/src/index.js";
 const ZERO = "0".repeat(64);
 const TOKEN = "anchor-test-token-".padEnd(40, "x");
 const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
-const GOD_POLICY_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-POLICY-TRANSITION/1\\0");
+const GOD_POLICY_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-POLICY-TRANSITION/1\0");
 const PROPOSAL_DOMAIN = new TextEncoder().encode("GCF/1|PROPOSAL|ED25519\0");
 const VOTE_DOMAIN = new TextEncoder().encode("GCF/1|VOTE|ED25519\0");
 const CERT_DOMAIN = new TextEncoder().encode("GCF/1|FINALITY-CERTIFICATE\0");
