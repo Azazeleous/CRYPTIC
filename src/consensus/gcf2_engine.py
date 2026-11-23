@@ -19,6 +19,9 @@ from src.consensus.gcf import (
 from src.consensus.gcf2 import (
     SCHEMA, VOTE_DOMAIN, verify_vote,
 )
+from src.consensus.round_change import (
+    value_digest, verify_round_change_certificate,
+)
 
 POLC_DOMAIN = b"GCF/2|POLC\x00"
 CERT_DOMAIN = b"GCF/2|FINALITY-CERTIFICATE\x00"
@@ -27,10 +30,10 @@ CERT_DOMAIN = b"GCF/2|FINALITY-CERTIFICATE\x00"
 class GCF2VoteStore:
     """Persistent one-vote-per-slot admission with trusted-parent binding.
 
-    Candidate locks are conservative: a validator cannot change candidate
-    digest within a height/phase. NIL votes consume the durable vote slot but
-    never create, erase, or override a candidate lock. A later, separately
-    specified proof-bound lock-transition implementation may relax this rule.
+    Candidate locks follow the GCF round-change rule. A validator may move
+    to a different value only when a verified higher-round POLC in the signed
+    round-change certificate proves that exact value. NIL votes consume the
+    durable vote slot but never create, erase, or override a candidate lock.
     """
 
     def __init__(
@@ -222,16 +225,46 @@ class GCF2VoteStore:
 
                 if normalized["vote_kind"] == "CANDIDATE":
                     lock = db.execute(
-                        """SELECT candidate_digest FROM gcf2_candidate_locks
+                        """SELECT candidate_digest,first_round FROM gcf2_candidate_locks
                            WHERE network_id=? AND epoch=? AND height=?
                              AND vote_type=? AND validator_id=?""",
                         (normalized["network_id"], normalized["epoch"],
                          normalized["height"], normalized["vote_type"],
                          normalized["validator_id"]),
                     ).fetchone()
-                    if lock is not None and lock["candidate_digest"] != candidate_digest:
-                        raise GCFError("GCF2_CANDIDATE_LOCK_CONFLICT")
-                    if lock is None:
+                    if lock is not None:
+                        if normalized["round"] < lock["first_round"]:
+                            raise GCFError("GCF2_CANDIDATE_LOCK_ROUND_REGRESSION")
+                        if (normalized["round"] == lock["first_round"]
+                                and lock["candidate_digest"] != candidate_digest):
+                            raise GCFError("GCF2_CANDIDATE_LOCK_SAME_ROUND_EQUIVOCATION")
+                        if lock["candidate_digest"] != candidate_digest:
+                            prior_proposal = self._proposal(lock["candidate_digest"])
+                            if value_digest(prior_proposal) != value_digest(proposal):
+                                certificate = proposal.get("round_change_certificate")
+                                transition = verify_round_change_certificate(
+                                    certificate, validator_set=self.validator_set,
+                                    height=proposal["height"], clock=self.clock,
+                                ) if isinstance(certificate, Mapping) else {"valid": False}
+                                highest = transition.get("highest_polc")
+                                if (not transition.get("valid")
+                                        or transition.get("target_round") != proposal["round"]
+                                        or transition.get("highest_polc_round") is None
+                                        or transition["highest_polc_round"] <= lock["first_round"]
+                                        or highest is None
+                                        or value_digest(highest["proposal"]) != value_digest(proposal)):
+                                    raise GCFError("GCF2_CANDIDATE_LOCK_TRANSITION_NOT_AUTHORIZED")
+                        db.execute(
+                            """UPDATE gcf2_candidate_locks
+                               SET candidate_digest=?,first_round=?
+                               WHERE network_id=? AND epoch=? AND height=?
+                                 AND vote_type=? AND validator_id=?""",
+                            (candidate_digest, normalized["round"],
+                             normalized["network_id"], normalized["epoch"],
+                             normalized["height"], normalized["vote_type"],
+                             normalized["validator_id"]),
+                        )
+                    else:
                         db.execute(
                             """INSERT INTO gcf2_candidate_locks
                                VALUES(?,?,?,?,?,?,?)""",
