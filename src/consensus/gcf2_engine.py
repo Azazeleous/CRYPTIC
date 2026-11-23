@@ -75,6 +75,13 @@ class GCF2VoteStore:
                   first_round INTEGER NOT NULL,
                   PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
                 );
+                CREATE TABLE IF NOT EXISTS gcf2_finality_certificates (
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, candidate_digest TEXT NOT NULL,
+                  certificate_json TEXT NOT NULL, certificate_digest TEXT NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height),
+                  UNIQUE(candidate_digest), UNIQUE(certificate_digest)
+                );
                 CREATE TABLE IF NOT EXISTS gcf2_polcs (
                   candidate_digest TEXT PRIMARY KEY,
                   network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
@@ -243,6 +250,11 @@ class GCF2VoteStore:
                         and normalized["vote_type"] == "PREVOTE"
                         and normalized["approve"] is True):
                     polc_result = self._maybe_build_polc(db, proposal)
+                finality_result = None
+                if (normalized["vote_kind"] == "CANDIDATE"
+                        and normalized["vote_type"] == "PRECOMMIT"
+                        and normalized["approve"] is True):
+                    finality_result = self._maybe_build_finality(db, proposal)
                 db.execute("COMMIT")
             except Exception:
                 if db.in_transaction:
@@ -253,7 +265,7 @@ class GCF2VoteStore:
             "vote_kind": normalized["vote_kind"],
             "vote_type": normalized["vote_type"],
             "vote_digest": vote_digest,
-            "polc": polc_result,
+            "polc": polc_result, "finality": finality_result,
         }
 
     def _maybe_build_polc(self, db, proposal: Mapping[str, Any]) -> dict | None:
@@ -307,3 +319,101 @@ class GCF2VoteStore:
                 (candidate_digest,),
             ).fetchone()
         return json.loads(row["polc_json"]) if row else None
+
+
+    def _maybe_build_finality(self, db, proposal: Mapping[str, Any]) -> dict | None:
+        candidate_digest = sha256_hex(canonical_bytes(proposal))
+        rows = db.execute(
+            """SELECT vote_json FROM gcf2_vote_slots
+               WHERE network_id=? AND epoch=? AND height=? AND round=?
+                 AND vote_type='PRECOMMIT' AND vote_kind='CANDIDATE'
+                 AND candidate_digest=?""",
+            (proposal["network_id"], proposal["epoch"], proposal["height"],
+             proposal["round"], candidate_digest),
+        ).fetchall()
+        precommits = [json.loads(row["vote_json"]) for row in rows]
+        precommits = [vote for vote in precommits if vote["approve"] is True]
+        weight = self.validator_set.weight_of({v["validator_id"] for v in precommits})
+        if weight < self.validator_set.quorum_weight():
+            return None
+        precommits.sort(key=lambda item: item["validator_id"])
+        polc_row = db.execute(
+            "SELECT polc_json FROM gcf2_polcs WHERE candidate_digest=?",
+            (candidate_digest,),
+        ).fetchone()
+        if polc_row is None:
+            raise GCFError("GCF2_FINALITY_POLC_MISSING")
+        polc = json.loads(polc_row["polc_json"])
+        finalized_at = int(self.clock())
+        if self._trusted_parent(proposal["height"]) != proposal["parent_hash"]:
+            raise GCFError("GCF2_FINALITY_PARENT_NOT_ACTIVE")
+        body = {
+            "schema": SCHEMA, "network_id": proposal["network_id"],
+            "epoch": proposal["epoch"], "height": proposal["height"],
+            "round": proposal["round"], "parent_hash": proposal["parent_hash"],
+            "candidate_digest": candidate_digest,
+            "validator_set_hash": self.validator_set.digest,
+            "finalized_at": finalized_at, "polc": polc,
+            "precommits": precommits,
+        }
+        certificate_digest = sha256_hex(CERT_DOMAIN + canonical_bytes(body))
+        certificate = {**body, "certificate_digest": certificate_digest}
+
+        validators = {
+            validator_id: {
+                "public_key_hex": validator.public_key_hex,
+                "weight": validator.weight,
+            }
+            for validator_id, validator in self.validator_set.validators.items()
+        }
+        from src.consensus.gcf2_independent_verifier import verify_finality_certificate
+        checked = verify_finality_certificate(
+            certificate, network_id=self.validator_set.network_id,
+            epoch=self.validator_set.epoch, validators=validators,
+            proposal=proposal,
+        )
+        if not checked.get("valid"):
+            raise GCFError("GCF2_INDEPENDENT_FINALITY_VERIFICATION_FAILED")
+
+        gcf1_exists = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='certificates'"
+        ).fetchone()
+        if gcf1_exists:
+            conflict = db.execute(
+                """SELECT 1 FROM certificates c JOIN proposals p
+                   ON p.candidate_digest=c.candidate_digest
+                   WHERE p.network_id=? AND p.epoch=? AND p.height=? LIMIT 1""",
+                (proposal["network_id"], proposal["epoch"], proposal["height"]),
+            ).fetchone()
+            if conflict is not None:
+                raise GCFError("GCF2_GCF1_FINALITY_CONFLICT")
+        existing = db.execute(
+            """SELECT candidate_digest,certificate_digest
+               FROM gcf2_finality_certificates
+               WHERE network_id=? AND epoch=? AND height=?""",
+            (proposal["network_id"], proposal["epoch"], proposal["height"]),
+        ).fetchone()
+        if existing is not None:
+            if (existing["candidate_digest"] != candidate_digest
+                    or existing["certificate_digest"] != certificate_digest):
+                raise GCFError("GCF2_FINALITY_CONFLICT")
+            return {"certificate_digest": certificate_digest,
+                    "precommit_weight": weight, "replayed": True}
+        db.execute(
+            """INSERT INTO gcf2_finality_certificates
+               VALUES(?,?,?,?,?,?)""",
+            (proposal["network_id"], proposal["epoch"], proposal["height"],
+             candidate_digest, canonical_bytes(certificate).decode("utf-8"),
+             certificate_digest),
+        )
+        return {"certificate_digest": certificate_digest,
+                "precommit_weight": weight, "replayed": False}
+
+    def get_finality_certificate(self, *, height: int) -> dict | None:
+        with self._db() as db:
+            row = db.execute(
+                """SELECT certificate_json FROM gcf2_finality_certificates
+                   WHERE network_id=? AND epoch=? AND height=?""",
+                (self.validator_set.network_id, self.validator_set.epoch, height),
+            ).fetchone()
+        return json.loads(row["certificate_json"]) if row else None
