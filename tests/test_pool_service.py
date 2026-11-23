@@ -183,7 +183,7 @@ class PoolCoordinatorTests(unittest.TestCase):
             issuer_private_key_hex=self.private_hex, issuer_id="issuer",
             pool_id="gaia-internal", network_id="hccgn-test",
             trusted_issuer_public_key_hex=self.public_hex,
-            resolve_active_target=lambda boundary: b"\\xff" * 32,
+            resolve_active_target=lambda boundary: b"\xff" * 32,
             clock=lambda: self.now,
         )
         with sqlite3.connect(legacy_db) as conn:
