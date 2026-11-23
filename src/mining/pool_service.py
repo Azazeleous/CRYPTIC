@@ -479,6 +479,28 @@ class PoolCoordinator:
             return {"accepted": True, "share_id": accepted["share_id"],
                     "worker_id": accepted["worker_id"], **persisted}
 
+    def configure_settlement_ledger(
+        self, *, database: str | os.PathLike[str],
+        trusted_reward_policy_public_key_hex: str,
+        verify_finality_certificate: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]],
+    ):
+        """Bind the pool's historical job resolver to its settlement ledger."""
+        if self.settlement_ledger is not None:
+            raise PoolServiceError("pool_settlement_ledger_already_configured")
+        try:
+            from src.consensus.pool_settlement import PoolSettlementLedger
+            ledger = PoolSettlementLedger(
+                database=database, share_ledger=self.share_ledger,
+                trusted_reward_policy_public_key_hex=trusted_reward_policy_public_key_hex,
+                resolve_issued_job=self.resolve_issued_job,
+                verify_finality_certificate=verify_finality_certificate,
+                clock=self.clock,
+            )
+        except Exception as exc:
+            raise PoolServiceError("pool_settlement_configuration_failed:" + str(exc)) from exc
+        self.settlement_ledger = ledger
+        return ledger
+
     def settle_finalized_block(
         self, *, finality: Mapping[str, Any],
         reward_policy: Mapping[str, Any],
