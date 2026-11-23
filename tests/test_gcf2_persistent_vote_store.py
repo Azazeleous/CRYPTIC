@@ -112,6 +112,15 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(GCFError, "GCF2_ACTIVE_PARENT_MISMATCH"):
             self.store.submit_vote(self.vote("v3", kind="NIL"))
 
+    def test_validator_round_state_rejects_round_regression_across_phases(self):
+        with self.store._db() as db:
+            db.execute(
+                "INSERT INTO gcf2_validator_rounds VALUES(?,?,?,?,?)",
+                ("gaia-testnet", 1, 9, "v3", 2),
+            )
+        with self.assertRaisesRegex(GCFError, "GCF2_VOTE_ROUND_REGRESSION"):
+            self.store.submit_vote(self.vote("v3", kind="NIL"))
+
     def test_gcf1_existing_lock_blocks_gcf2_vote_for_same_height_phase(self):
         with self.gcf1._db() as db:
             db.execute(
