@@ -101,7 +101,7 @@ The pool now has a separate `PoolSettlementLedger` in `src/consensus/pool_settle
 
 ### Settlement prerequisites
 
-1. Verify the complete GCF finality certificate with an independent verifier configured with the active validator set and the required HCCGN, governance, and justice evidence gates. The ledger requires the verifier to return `valid: true`; an unconfigured verifier denies settlement.
+1. Verify the complete GCF finality certificate with an independent verifier configured with the active validator set and the required HCCGN, governance, and justice evidence gates, and confirm that the certificate has actually been committed as canonical finalized state (including the matching external anchor sequence when present). The callback must return both `valid: true` and `finalized: true`; cryptographic quorum verification alone is insufficient.
 2. Supply a signed `CRYPTIC-POOL-REWARD-POLICY/1` policy. The policy fields are exactly: `schema`, `policy_id`, `network_id`, `pool_id`, `epoch`, `effective_height_start`, `effective_height_end`, `reward_units`, `max_total_credits`, `asset`, `issuer_id`, `issued_at`, `expires_at`, and `signature`. The signature uses the `CRYPTIC-POOL-REWARD-POLICY/1\\0` Ed25519 domain and a public key pinned by the settlement service.
 3. Verify the share ledger hash chain and resolve the share's historical job through `PoolCoordinator.resolve_issued_job`. This re-verifies the original issuer signature at the job's issue time without making an expired or revoked job eligible for new submissions.
 4. Require exactly one accepted share whose proof hash matches the finalized proposal proof hash, and require its signed job to match the finalized network, pool, epoch, height, parent hash, and payload hash.
