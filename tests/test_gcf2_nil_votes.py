@@ -134,7 +134,7 @@ class GCF2NilVoteTests(unittest.TestCase):
 
     def test_nil_vote_expiry_is_enforced(self):
         vote = self.nil_vote("v0")
-        self.now += 61
+        self.now += 91  # expiry plus the allowed 30-second clock-skew grace
         with self.assertRaisesRegex(GCFError, "GCF2_VOTE_EXPIRED_OR_FUTURE"):
             verify_vote(vote, validator_set=self.vset, clock=self.clock)
 
