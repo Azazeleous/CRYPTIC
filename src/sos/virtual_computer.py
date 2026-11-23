@@ -5,12 +5,14 @@ and stored as data; this module never imports, evals, execs, or launches them.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
 import secrets
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -116,11 +118,12 @@ def verify_capability_grant(
         raise VirtualComputerError("capability_grant_signer_invalid")
     capabilities = grant["capabilities"]
     if (not isinstance(capabilities, list)
+            or any(not isinstance(value, str) for value in capabilities)
             or capabilities != sorted(set(capabilities))
             or any(value not in manifest.requested_capabilities for value in capabilities)):
         raise VirtualComputerError("capability_grant_exceeds_manifest")
     resources = grant["resources"]
-    if not isinstance(resources, list) or not resources or len(resources) > 128:
+    if not isinstance(resources, list) or len(resources) > 128:
         raise VirtualComputerError("capability_grant_resources_invalid")
     try:
         normalized_scopes = [_path(value, scope=True) for value in resources]
@@ -147,7 +150,7 @@ def verify_capability_grant(
         raise VirtualComputerError("capability_grant_signer_untrusted") from exc
     try:
         key = key_value if isinstance(key_value, Ed25519PublicKey) else Ed25519PublicKey.from_public_bytes(key_value)
-        signature = __import__("base64").b64decode(grant["signature"], validate=True)
+        signature = base64.b64decode(grant["signature"], validate=True)
         if len(signature) != 64:
             raise ValueError("signature_length")
         unsigned = {key: value for key, value in grant.items() if key != "signature"}
@@ -192,7 +195,7 @@ class VirtualComputer:
         self.authority_trust = dict(authority_trust)
         self.clock = clock
         self.command_budget_seconds = float(command_budget_seconds)
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.executescript("""
                 CREATE TABLE IF NOT EXISTS extensions (
                     extension_id TEXT PRIMARY KEY,
@@ -233,6 +236,30 @@ class VirtualComputer:
         return connection
 
     @staticmethod
+    def _verify_audit_connection(connection: sqlite3.Connection) -> bool:
+        previous_hash = ZERO_HASH
+        expected_sequence = 1
+        rows = connection.execute(
+            "SELECT sequence,event_json,previous_hash,event_hash FROM audit_events ORDER BY sequence"
+        ).fetchall()
+        for sequence, event_json, recorded_previous, recorded_hash in rows:
+            try:
+                event = json.loads(event_json)
+                encoded = canonical_json(event)
+                digest = hashlib.sha256(
+                    AUDIT_DOMAIN + bytes.fromhex(previous_hash) + encoded
+                ).hexdigest()
+            except (ValueError, TypeError, json.JSONDecodeError):
+                return False
+            if (sequence != expected_sequence or event.get("sequence") != sequence
+                    or encoded.decode("utf-8") != event_json
+                    or recorded_previous != previous_hash or recorded_hash != digest):
+                return False
+            previous_hash = digest
+            expected_sequence += 1
+        return True
+
+    @staticmethod
     def _audit(
         connection: sqlite3.Connection,
         *,
@@ -243,6 +270,8 @@ class VirtualComputer:
         details: Mapping[str, Any] | None = None,
         timestamp: int,
     ) -> None:
+        if not VirtualComputer._verify_audit_connection(connection):
+            raise VirtualComputerError("audit_chain_integrity_failure")
         previous = connection.execute(
             "SELECT sequence,event_hash FROM audit_events ORDER BY sequence DESC LIMIT 1"
         ).fetchone()
@@ -272,7 +301,7 @@ class VirtualComputer:
         except ExtensionManifestError as exc:
             raise VirtualComputerError(str(exc)) from exc
         timestamp = int(self.clock())
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             existing = connection.execute(
                 "SELECT version,manifest_json,artifact FROM extensions WHERE extension_id=?",
@@ -308,7 +337,7 @@ class VirtualComputer:
         extension_id = grant.get("extension_id") if isinstance(grant, Mapping) else None
         if not isinstance(extension_id, str):
             raise VirtualComputerError("capability_grant_extension_invalid")
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT manifest_json,artifact FROM extensions WHERE extension_id=?",
                 (extension_id,),
@@ -355,7 +384,7 @@ class VirtualComputer:
             raise VirtualComputerError("capability_grant_id_invalid")
         if not isinstance(actor, str) or not actor or len(actor) > 128:
             raise VirtualComputerError("revocation_actor_invalid")
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT extension_id,revoked FROM capability_grants WHERE grant_id=?",
@@ -391,7 +420,7 @@ class VirtualComputer:
         args = tuple(argv)
         command = args[0]
         try:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 row = connection.execute(
                     "SELECT e.manifest_json,e.artifact,g.grant_json,g.revoked "
@@ -430,7 +459,7 @@ class VirtualComputer:
                 int((time.monotonic() - started) * 1000),
             )
         except (VirtualComputerError, ExtensionManifestError) as exc:
-            with self._connect() as connection:
+            with closing(self._connect()) as connection:
                 if connection.in_transaction:
                     connection.execute("ROLLBACK")
                 connection.execute("BEGIN IMMEDIATE")
@@ -479,7 +508,7 @@ class VirtualComputer:
             ).fetchall()
             visible = [
                 row[0] for row in rows
-                if _scope_allows(row[0], grant.resources)
+                if row[0].startswith(prefix) and _scope_allows(row[0], grant.resources)
             ]
             return "\n".join(visible)
         if command == "cat" or command == "sha256":
@@ -540,31 +569,11 @@ class VirtualComputer:
         raise VirtualComputerError("virtual_command_not_allowed")
 
     def verify_audit_chain(self) -> bool:
-        previous_hash = ZERO_HASH
-        expected_sequence = 1
-        with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT sequence,event_json,previous_hash,event_hash FROM audit_events ORDER BY sequence"
-            ).fetchall()
-        for sequence, event_json, recorded_previous, recorded_hash in rows:
-            try:
-                event = json.loads(event_json)
-                encoded = canonical_json(event)
-                digest = hashlib.sha256(
-                    AUDIT_DOMAIN + bytes.fromhex(previous_hash) + encoded
-                ).hexdigest()
-            except (ValueError, TypeError, json.JSONDecodeError):
-                return False
-            if (sequence != expected_sequence or event.get("sequence") != sequence
-                    or encoded.decode("utf-8") != event_json
-                    or recorded_previous != previous_hash or recorded_hash != digest):
-                return False
-            previous_hash = digest
-            expected_sequence += 1
-        return True
+        with closing(self._connect()) as connection:
+            return self._verify_audit_connection(connection)
 
     def audit_events(self) -> tuple[dict[str, Any], ...]:
-        with self._connect() as connection:
+        with closing(self._connect()) as connection:
             rows = connection.execute(
                 "SELECT event_json FROM audit_events ORDER BY sequence"
             ).fetchall()
