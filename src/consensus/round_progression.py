@@ -155,6 +155,23 @@ class RoundProgressionController:
         height = _integer(height, "height", 1)
         with self._lock:
             current = self.current_round(height)
+            # A timeout intent survives process restart. Surface it before
+            # consulting a newly armed process-local monotonic deadline.
+            with self._db() as db:
+                pending = db.execute(
+                    """SELECT target_round,timeout_seconds FROM timeout_intents
+                       WHERE network_id=? AND epoch=? AND height=?
+                         AND source_round=? AND status='PENDING'""",
+                    (self._network, self._epoch, height, current),
+                ).fetchone()
+            if pending is not None:
+                return {
+                    "timeout_due": True, "height": height,
+                    "source_round": current, "target_round": pending["target_round"],
+                    "timeout_seconds": pending["timeout_seconds"],
+                    "action": "REQUEST_SIGNED_ROUND_CHANGE",
+                    "signing_authorized": False, "lock_released": False,
+                }
             armed = self._armed.get(height)
             if armed is None or armed[0] != current:
                 raise RoundProgressionError("current_round_not_armed")
@@ -229,6 +246,11 @@ class RoundProgressionController:
                 current, _ = self._state(db, height)
                 if target != current + 1:
                     raise RoundProgressionError("certificate_must_advance_exactly_one_round")
+                if any(
+                    item.get("source_round") != current
+                    for item in certificate.get("messages", [])
+                ):
+                    raise RoundProgressionError("certificate_source_round_mismatch")
                 prior = db.execute(
                     """SELECT certificate_digest FROM progression_certificates
                        WHERE network_id=? AND epoch=? AND height=? AND target_round=?""",
