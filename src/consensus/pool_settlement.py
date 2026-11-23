@@ -50,7 +50,7 @@ def _uint(value: Any, field: str, minimum: int = 0) -> int:
 
 def _policy_body(policy: Mapping[str, Any]) -> dict:
     fields = {
-        "schema", "policy_id", "network_id", "epoch",
+        "schema", "policy_id", "network_id", "pool_id", "epoch",
         "effective_height_start", "effective_height_end",
         "reward_units", "max_total_credits", "asset",
         "issuer_id", "issued_at", "expires_at",
@@ -81,11 +81,11 @@ def _policy_body(policy: Mapping[str, Any]) -> dict:
 
 def verify_reward_policy(
     policy: Mapping[str, Any], *, trusted_public_key_hex: str,
-    network_id: str, epoch: int, height: int, now: int,
+    network_id: str, pool_id: str, epoch: int, height: int, now: int,
 ) -> dict:
     """Verify a reward schedule signed by the independently pinned policy key."""
     body = _policy_body(policy)
-    if body["network_id"] != network_id or body["epoch"] != epoch:
+    if (body["network_id"] != network_id or body["pool_id"] != pool_id or body["epoch"] != epoch):
         raise PoolSettlementError("reward_policy_scope_mismatch")
     if not body["effective_height_start"] <= height <= body["effective_height_end"]:
         raise PoolSettlementError("reward_policy_not_effective_at_height")
@@ -155,10 +155,11 @@ class PoolSettlementLedger:
     def __init__(
         self, *, database: str | os.PathLike[str], share_ledger: Any,
         trusted_reward_policy_public_key_hex: str,
+        resolve_issued_job: Callable[[str], Mapping[str, Any]],
         verify_finality_certificate: Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]],
         clock: Callable[[], int],
     ):
-        if not callable(verify_finality_certificate) or not callable(clock):
+        if not callable(verify_finality_certificate) or not callable(clock) or not callable(resolve_issued_job):
             raise PoolSettlementError("independent_finality_verifier_and_clock_required")
         if not callable(getattr(share_ledger, "verify_chain", None)) or \
            not callable(getattr(share_ledger, "list_shares", None)):
@@ -172,6 +173,7 @@ class PoolSettlementLedger:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.database = str(path)
         self.share_ledger = share_ledger
+        self.resolve_issued_job = resolve_issued_job
         self.trusted_reward_policy_public_key_hex = trusted_reward_policy_public_key_hex.lower()
         self.verify_finality_certificate = verify_finality_certificate
         self.clock = clock
@@ -243,7 +245,7 @@ class PoolSettlementLedger:
         policy = verify_reward_policy(
             reward_policy,
             trusted_public_key_hex=self.trusted_reward_policy_public_key_hex,
-            network_id=network_id, epoch=epoch, height=height, now=now,
+            network_id=network_id, pool_id=pool_id, epoch=epoch, height=height, now=now,
         )
         if not self.share_ledger.verify_chain():
             raise PoolSettlementError("share_ledger_integrity_failure")
@@ -256,6 +258,19 @@ class PoolSettlementLedger:
         if len(matches) != 1:
             raise PoolSettlementError("finalized_proof_has_no_unique_accepted_pool_share")
         share = matches[0]
+        try:
+            job = self.resolve_issued_job(share["job_id"])
+        except Exception as exc:
+            raise PoolSettlementError("issued_job_verification_failed") from exc
+        if (not isinstance(job, Mapping)
+                or job.get("job_id") != share["job_id"]
+                or job.get("network_id") != network_id
+                or job.get("pool_id") != pool_id
+                or job.get("epoch") != epoch
+                or job.get("height") != height
+                or job.get("parent_hash") != normalized_proposal.get("parent_hash")
+                or job.get("payload_hash") != normalized_proposal.get("payload_hash")):
+            raise PoolSettlementError("accepted_share_job_context_mismatch")
         event_body = {
             "event_type": "pool.block.settled",
             "network_id": network_id, "epoch": epoch, "height": height,
@@ -360,6 +375,28 @@ class PoolSettlementLedger:
                 return False
             previous = stored_hash
         return True
+
+    def worker_balances(self, *, pool_id: str | None = None) -> list[dict]:
+        """Report internal credits; these are not redeemable or transferable."""
+        with self._connect() as conn:
+            if pool_id is None:
+                rows = conn.execute(
+                    """SELECT worker_id,SUM(credit_units),COUNT(*)
+                       FROM pool_settlements GROUP BY worker_id ORDER BY worker_id"""
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT worker_id,SUM(credit_units),COUNT(*)
+                       FROM pool_settlements WHERE pool_id=?
+                       GROUP BY worker_id ORDER BY worker_id""",
+                    (pool_id,),
+                ).fetchall()
+        return [
+            {"worker_id": row[0], "credit_units": row[1],
+             "settled_blocks": row[2], "asset": INTERNAL_ASSET,
+             "redeemable": False, "transferable": False}
+            for row in rows
+        ]
 
     def list_settlements(self, *, network_id: str | None = None) -> list[dict]:
         with self._connect() as conn:
