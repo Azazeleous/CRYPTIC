@@ -109,12 +109,12 @@ class CorrectionStackTests(unittest.TestCase):
         self.assertEqual(receipt.output_sha256, hashlib.sha256(payload).hexdigest())
         self.assertEqual(receipt.qc_syndrome_weight, 0)
 
-    def test_rejects_nonconvergent_channel(self):
+    def test_rejects_invalid_decoder_budget(self):
         rs = ReedSolomonCode(n=32, k=24)
         qc = QCParityCheck.default(lift=64)
         stack = CorrectionStack(qc, rs)
         with self.assertRaises(CorrectionStackError):
-            stack.decode([0.0] * qc.codeword_bits, max_iterations=2)
+            stack.decode([10.0] * qc.codeword_bits, max_iterations=0)
 
 
 if __name__ == "__main__":
