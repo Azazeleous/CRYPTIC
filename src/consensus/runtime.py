@@ -337,7 +337,7 @@ def build_consensus_runtime(
             broadcast_round_change=round_change_broadcaster,
             clock=clock or time.time,
         )
-    http = GCFWSGI(engine, apex_validator=apex)
+    http = GCFWSGI(engine, apex_validator=apex, gcf2_vote_store=gcf2_vote_store)
     for database_path in (
         root / "hccgn-proofs.sqlite3", root / "hccgn-target-policy.sqlite3",
         root / "gcf.sqlite3", root / "adam.sqlite3",
