@@ -36,7 +36,7 @@ CRYPTIC is a source-grounded, extensible model and runtime. This repository is i
 
 ## Current status
 
-The four-lane reference miner, reversible barrel-roll framing, post-quantum suite architecture, supervised whole-request HTTP transport, and GCF/1–HCCGN-WORK/1 consensus reference stack are integrated with deterministic conformance tests. External trust-root, anti-rollback, live validator, and durability gates remain fail-closed. The miner is not a coin-specific consensus adapter or production pool client. PQ algorithms are selected, but a vetted provider, official vectors, protected key lifecycle, and runtime interoperability remain follow-on gates. Directory creation does not imply implementation. See the capability ledger, roadmap, mining architecture, and verification policy.
+The four-lane reference miner, reversible barrel-roll framing, post-quantum suite architecture, supervised whole-request HTTP transport, GCF/1–HCCGN-WORK/1 consensus reference stack, and Phase 6 consent-bound device identity foundation are integrated with deterministic tests. Device enrollment uses operator-approved keys, signed host/device challenge-response, scoped read-only sessions, and signed revocation; live network/BLE/home-automation adapters and hardware attestation remain open. External trust-root, anti-rollback, live validator, and durability gates remain fail-closed. The miner is not a coin-specific consensus adapter or production pool client. PQ algorithms are selected, but a vetted provider, official vectors, protected key lifecycle, and runtime interoperability remain follow-on gates. Directory creation does not imply implementation. See the capability ledger, roadmap, mining architecture, and verification policy.
 
 ## Security
 
