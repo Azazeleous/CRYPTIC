@@ -27,7 +27,7 @@ The parent deadline includes the worker lifecycle to the extent the parent can o
 Source commit bc973e013535d7fd952d37b4a3bfdc20eb25ee1b passed:
 
 - CRYPTIC CI run 45218707768 — 374 full-suite tests passed; six focused process-supervisor tests passed on Ubuntu and six on Windows.
-- Mining-engine run 45218707845 — full suite and independent HCCGN conformance/benchmark steps are recorded in PR #40.
+- Mining-engine run 45218707845 — 374 tests passed; independent Go HCCGN conformance and bounded HCCGN/SHA-256d benchmark steps passed.
 - GAIA local trophy run 45218708068 — passed.
 
 This worker is not yet wired to execute extension code; extension artifacts remain opaque data.
