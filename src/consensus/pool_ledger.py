@@ -82,7 +82,24 @@ class PoolShareLedger:
         conn=_connect(self.database)
         try:
             conn.execute("BEGIN IMMEDIATE")
-            if conn.execute("SELECT 1 FROM pool_shares WHERE proof_hash=?",(record["proof_hash"],)).fetchone():
+            existing = conn.execute(
+                """SELECT share_id,network_id,pool_id,job_id,worker_id,proof_hash,
+                          work_digest,nonce,event_hash
+                   FROM pool_shares WHERE proof_hash=?""",
+                (record["proof_hash"],),
+            ).fetchone()
+            if existing is not None:
+                expected = (
+                    record["share_id"], record["network_id"], record["pool_id"],
+                    record["job_id"], record["worker_id"], record["proof_hash"],
+                    record["work_digest"], nonce,
+                )
+                if tuple(existing[:8]) == expected:
+                    conn.execute("COMMIT")
+                    return {
+                        "recorded": True, "replayed": True,
+                        "event_hash": existing[8], "share_id": record["share_id"],
+                    }
                 raise PoolLedgerError("share_replay")
             row=conn.execute("SELECT event_hash FROM pool_events ORDER BY event_id DESC LIMIT 1").fetchone()
             previous=row[0] if row else ZERO_HASH
