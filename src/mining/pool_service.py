@@ -58,6 +58,7 @@ class PoolCoordinator:
         trusted_issuer_public_key_hex: str,
         resolve_active_target: Callable[[Mapping[str, Any]], bytes | None],
         clock: Callable[[], int],
+        max_submissions_per_minute: int = 120,
     ):
         path = Path(database).expanduser()
         if str(path) == ":memory:":
@@ -80,6 +81,11 @@ class PoolCoordinator:
         self.trusted_issuer_public_key_hex = trusted_issuer_public_key_hex
         self.resolve_active_target = resolve_active_target
         self.clock = clock
+        if (isinstance(max_submissions_per_minute, bool)
+                or not isinstance(max_submissions_per_minute, int)
+                or not 1 <= max_submissions_per_minute <= 100_000):
+            raise PoolServiceError("worker_rate_limit_invalid")
+        self.max_submissions_per_minute = max_submissions_per_minute
         self._lock = threading.RLock()
         with _connect(self.database) as conn:
             conn.executescript("""
@@ -90,6 +96,12 @@ class PoolCoordinator:
                     created_at INTEGER NOT NULL,
                     revoked_at INTEGER,
                     assigned_worker_id TEXT NOT NULL
+                );
+            CREATE TABLE IF NOT EXISTS pool_worker_rate_windows (
+                    worker_id TEXT NOT NULL,
+                    window_start INTEGER NOT NULL,
+                    request_count INTEGER NOT NULL CHECK(request_count>=0),
+                    PRIMARY KEY(worker_id,window_start)
                 );
             CREATE TABLE IF NOT EXISTS pool_nonce_ranges (
                     job_id TEXT PRIMARY KEY,
@@ -200,6 +212,41 @@ class PoolCoordinator:
         except OSError as exc:
             raise PoolServiceError("database_permissions_failed") from exc
         self.expire_jobs()
+
+    def _consume_worker_rate_limit(self, worker_id: str, *, now: int) -> None:
+        """Atomically enforce a durable fixed-window worker submission limit."""
+        window_start = (now // 60) * 60
+        with _connect(self.database) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    """SELECT request_count FROM pool_worker_rate_windows
+                       WHERE worker_id=? AND window_start=?""",
+                    (worker_id, window_start),
+                ).fetchone()
+                count = row[0] if row else 0
+                if count >= self.max_submissions_per_minute:
+                    raise PoolServiceError("worker_rate_limit_exceeded")
+                if row is None:
+                    conn.execute(
+                        "INSERT INTO pool_worker_rate_windows VALUES(?,?,1)",
+                        (worker_id, window_start),
+                    )
+                else:
+                    conn.execute(
+                        """UPDATE pool_worker_rate_windows SET request_count=request_count+1
+                           WHERE worker_id=? AND window_start=?""",
+                        (worker_id, window_start),
+                    )
+                conn.execute(
+                    "DELETE FROM pool_worker_rate_windows WHERE window_start < ?",
+                    (window_start - 7 * 24 * 60 * 60,),
+                )
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
 
     def expire_jobs(self, *, now: int | None = None) -> int:
         """Durably transition every elapsed active job to the expired state."""
@@ -412,6 +459,7 @@ class PoolCoordinator:
                 raise PoolServiceError("job_not_assigned_to_worker")
             if bytes(row[0]) != _canonical(job):
                 raise PoolServiceError("job_not_issued_by_this_pool")
+            self._consume_worker_rate_limit(authenticated_worker_id, now=now)
             try:
                 accepted = admit_pool_submission(
                     submission,
@@ -438,12 +486,15 @@ class PoolCoordinator:
             ).fetchone()
             total = conn.execute("SELECT COUNT(*) FROM pool_jobs").fetchone()[0]
         shares = self.share_ledger.list_shares()
+        worker_stats = self.share_ledger.worker_stats()
         chain_ok = self.share_ledger.verify_chain()
         return {
             "pool_id": self.pool_id, "network_id": self.network_id,
             "jobs_total": total, "jobs_active": active or 0,
             "jobs_revoked": revoked or 0, "jobs_expired": expired or 0,
             "shares_accepted": len(shares),
+            "workers_seen": len(worker_stats),
+            "worker_share_totals": worker_stats,
             "share_ledger_chain_valid": chain_ok,
             "healthy": bool(chain_ok),
         }
