@@ -326,6 +326,48 @@ test("bearer-token holder cannot advance an arbitrary tuple without valid GCF fi
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
 
+test("Worker requires a GOD signature bound to the exact policy transition", async () => {
+  const ctx = await setup();
+  const hash = "8".repeat(64);
+  const certificate = await makeCertificate(ctx, {
+    sequence: 1, oldHash: ZERO, newHash: hash,
+  });
+  const body = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  body.policy_authorization = {
+    ...body.policy_authorization,
+    policy_hash: "7".repeat(64),
+  };
+  const response = await put(ctx, body, true);
+  assert.equal(response.status, 403);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+test("Worker fails closed when the GOD policy trust root is not configured", async () => {
+  const ctx = await setup();
+  const hash = "8".repeat(64);
+  const certificate = await makeCertificate(ctx, {
+    sequence: 1, oldHash: ZERO, newHash: hash,
+  });
+  const body = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  delete ctx.env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX;
+  const response = await put(ctx, body, true);
+  assert.equal(response.status, 503);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+test("Worker rejects a forged GOD signature before any D1 mutation", async () => {
+  const ctx = await setup();
+  const hash = "8".repeat(64);
+  const certificate = await makeCertificate(ctx, {
+    sequence: 1, oldHash: ZERO, newHash: hash,
+  });
+  const body = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  body.policy_authorization.signature = b64(new Uint8Array(64));
+  const response = await put(ctx, body, true);
+  assert.equal(response.status, 403);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
 test("Python GCF/2 known-answer certificate verifies identically in the Worker", async () => {
   const vectorBytes = gunzipSync(Buffer.from(
     readFileSync(new URL("./vectors/gcf2_finality_known_answer.json.gz.b64", import.meta.url), "utf8"),
