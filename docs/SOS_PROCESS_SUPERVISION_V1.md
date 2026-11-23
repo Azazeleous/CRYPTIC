@@ -24,6 +24,10 @@ The parent deadline includes the worker lifecycle to the extent the parent can o
 
 ## Verification
 
-The platform matrix runs tests/test_sos_process_supervisor.py on Ubuntu and Windows. It covers known-answer SHA-256, text metrics, canonical JSON, duplicate-key rejection, operation allowlisting, payload bounds, expired-before-start behavior, and hard worker termination.
+Source commit bc973e013535d7fd952d37b4a3bfdc20eb25ee1b passed:
 
-CI evidence is recorded after the current branch head passes. This worker is not yet wired to execute extension code; extension artifacts remain opaque data.
+- CRYPTIC CI run 45218707768 — 374 full-suite tests passed; six focused process-supervisor tests passed on Ubuntu and six on Windows.
+- Mining-engine run 45218707845 — full suite and independent HCCGN conformance/benchmark steps are recorded in PR #40.
+- GAIA local trophy run 45218708068 — passed.
+
+This worker is not yet wired to execute extension code; extension artifacts remain opaque data.
