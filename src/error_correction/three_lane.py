@@ -85,6 +85,12 @@ class ThreeLaneCorrection:
         max_iterations: int = 30,
         normalization: float = 0.8,
     ) -> ThreeLaneReceipt:
+        if (isinstance(max_iterations, bool) or not isinstance(max_iterations, int)
+                or max_iterations < 1):
+            raise ThreeLaneCorrectionError("max_iterations_invalid")
+        if (isinstance(normalization, bool) or not isinstance(normalization, (int, float))
+                or not math.isfinite(normalization) or not 0 < normalization <= 1):
+            raise ThreeLaneCorrectionError("normalization_invalid")
         llr = self._normalize_llr(channel_llr)
         codec = self.stack.reed_solomon
         hard_word = self._hard_information_word(llr)
