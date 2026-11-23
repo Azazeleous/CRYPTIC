@@ -82,7 +82,8 @@ class PoolSettlementLedgerTests(unittest.TestCase):
                 certificate["schema"] == "GCF/1"
                 and certificate["candidate_digest"] ==
                     hashlib.sha256(_canonical(proposal)).hexdigest()
-            )
+            ),
+            "finalized": True,
         }
 
     def reward_policy(self, *, reward_units=25, max_total_credits=100):
@@ -122,9 +123,21 @@ class PoolSettlementLedgerTests(unittest.TestCase):
         self.assertTrue(second["replayed"])
         self.assertEqual(first["event_hash"], second["event_hash"])
 
+    def test_verified_certificate_without_canonical_finality_is_not_settleable(self):
+        self.settlement.verify_finality_certificate = lambda *_args: {
+            "valid": True, "finalized": False,
+        }
+        with self.assertRaisesRegex(
+            PoolSettlementError, "finality_certificate_not_canonically_finalized"
+        ):
+            self.settlement.settle_finalized_block(
+                finality=self.finality, reward_policy=self.reward_policy(),
+                pool_id="gaia-pool",
+            )
+
     def test_settlement_rejects_unverified_finality(self):
         self.settlement.verify_finality_certificate = lambda *_: {"valid": False}
-        with self.assertRaisesRegex(PoolSettlementError, "finality_certificate_not_verified"):
+        with self.assertRaisesRegex(PoolSettlementError, "finality_certificate_not_canonically_finalized"):
             self.settlement.settle_finalized_block(
                 finality=self.finality, reward_policy=self.reward_policy(),
                 pool_id="gaia-pool",
