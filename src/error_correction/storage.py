@@ -62,7 +62,10 @@ def _atomic_immutable_write(path: Path, payload: bytes) -> None:
     descriptor, temporary_name = tempfile.mkstemp(prefix=".cryptic-", dir=path.parent)
     temporary = Path(temporary_name)
     try:
-        os.fchmod(descriptor, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+        except (AttributeError, OSError):
+            pass
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(payload)
             stream.flush()
@@ -97,14 +100,15 @@ class ChunkStore:
             if directory.is_symlink() or not directory.is_dir():
                 raise ChunkStoreError("store_directory_invalid")
 
-    def _object_path(self, digest: str) -> Path:
+    def _object_path(self, digest: str, *, create: bool = True) -> Path:
         if not isinstance(digest, str) or not HEX_256.fullmatch(digest):
             raise ChunkStoreError("chunk_digest_invalid")
         directory = self.objects / digest[:2]
         if directory.exists() and directory.is_symlink():
             raise ChunkStoreError("object_directory_symlink_forbidden")
-        directory.mkdir(exist_ok=True)
-        if directory.is_symlink() or not directory.is_dir():
+        if create:
+            directory.mkdir(exist_ok=True)
+        if directory.is_symlink() or (directory.exists() and not directory.is_dir()):
             raise ChunkStoreError("object_directory_invalid")
         return directory / digest[2:]
 
@@ -185,7 +189,7 @@ class ChunkStore:
                     or not 1 <= entry["size"] <= chunk_size
                     or (index < len(entries) - 1 and entry["size"] != chunk_size)):
                 raise ChunkStoreError("manifest_chunk_entry_invalid")
-            object_path = self._object_path(entry["sha256"])
+            object_path = self._object_path(entry["sha256"], create=False)
             if object_path.is_symlink() or not object_path.is_file():
                 raise ChunkStoreError("chunk_missing_or_symlinked")
             chunk = object_path.read_bytes()
