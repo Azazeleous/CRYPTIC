@@ -62,6 +62,12 @@ class GCF2VoteStore:
                   PRIMARY KEY(network_id,epoch,height,round,vote_type,validator_id),
                   UNIQUE(network_id,epoch,height,round,vote_type,vote_digest)
                 );
+                CREATE TABLE IF NOT EXISTS gcf2_validator_rounds (
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, validator_id TEXT NOT NULL,
+                  highest_round INTEGER NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,validator_id)
+                );
                 CREATE TABLE IF NOT EXISTS gcf2_candidate_locks (
                   network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
                   height INTEGER NOT NULL, vote_type TEXT NOT NULL,
@@ -155,6 +161,29 @@ class GCF2VoteStore:
             db.execute("BEGIN IMMEDIATE")
             try:
                 self._reject_cross_version_slot(db, normalized)
+                round_state = db.execute(
+                    """SELECT highest_round FROM gcf2_validator_rounds
+                       WHERE network_id=? AND epoch=? AND height=? AND validator_id=?""",
+                    (normalized["network_id"], normalized["epoch"],
+                     normalized["height"], normalized["validator_id"]),
+                ).fetchone()
+                if round_state is not None and normalized["round"] < round_state["highest_round"]:
+                    raise GCFError("GCF2_VOTE_ROUND_REGRESSION")
+                if round_state is None:
+                    db.execute(
+                        "INSERT INTO gcf2_validator_rounds VALUES(?,?,?,?,?)",
+                        (normalized["network_id"], normalized["epoch"],
+                         normalized["height"], normalized["validator_id"],
+                         normalized["round"]),
+                    )
+                elif normalized["round"] > round_state["highest_round"]:
+                    db.execute(
+                        """UPDATE gcf2_validator_rounds SET highest_round=?
+                           WHERE network_id=? AND epoch=? AND height=? AND validator_id=?""",
+                        (normalized["round"], normalized["network_id"],
+                         normalized["epoch"], normalized["height"],
+                         normalized["validator_id"]),
+                    )
                 slot = db.execute(
                     """SELECT vote_digest FROM gcf2_vote_slots
                        WHERE network_id=? AND epoch=? AND height=? AND round=?
