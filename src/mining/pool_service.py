@@ -85,7 +85,7 @@ class PoolCoordinator:
                 CREATE TABLE IF NOT EXISTS pool_jobs (
                     job_id TEXT PRIMARY KEY,
                     job_json BLOB NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+                    status TEXT NOT NULL CHECK(status IN ('active','revoked','expired')),
                     created_at INTEGER NOT NULL,
                     revoked_at INTEGER,
                     assigned_worker_id TEXT NOT NULL
@@ -110,6 +110,35 @@ class PoolCoordinator:
                 # Legacy jobs have no worker assignment and are intentionally
                 # inaccessible until reissued with an authenticated worker binding.
                 conn.execute("ALTER TABLE pool_jobs ADD COLUMN assigned_worker_id TEXT NOT NULL DEFAULT ''")
+            schema_row = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='pool_jobs'"
+            ).fetchone()
+            if schema_row is not None and "'expired'" not in schema_row[0]:
+                # Upgrade the original two-state lifecycle without discarding jobs.
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    conn.execute("""
+                        CREATE TABLE pool_jobs_v2 (
+                            job_id TEXT PRIMARY KEY,
+                            job_json BLOB NOT NULL,
+                            status TEXT NOT NULL CHECK(status IN ('active','revoked','expired')),
+                            created_at INTEGER NOT NULL,
+                            revoked_at INTEGER,
+                            assigned_worker_id TEXT NOT NULL
+                        )
+                    """)
+                    conn.execute("""
+                        INSERT INTO pool_jobs_v2
+                        SELECT job_id,job_json,status,created_at,revoked_at,assigned_worker_id
+                        FROM pool_jobs
+                    """)
+                    conn.execute("DROP TABLE pool_jobs")
+                    conn.execute("ALTER TABLE pool_jobs_v2 RENAME TO pool_jobs")
+                    conn.execute("COMMIT")
+                except Exception:
+                    if conn.in_transaction:
+                        conn.execute("ROLLBACK")
+                    raise
             range_columns = {
                 row[1]: row[2].upper()
                 for row in conn.execute("PRAGMA table_info(pool_nonce_ranges)")
@@ -169,6 +198,38 @@ class PoolCoordinator:
             os.chmod(self.database, 0o600)
         except OSError as exc:
             raise PoolServiceError("database_permissions_failed") from exc
+        self.expire_jobs()
+
+    def expire_jobs(self, *, now: int | None = None) -> int:
+        """Durably transition every elapsed active job to the expired state."""
+        if now is None:
+            now = self.clock()
+        if isinstance(now, bool) or not isinstance(now, int) or now < 0:
+            raise PoolServiceError("clock_invalid")
+        expired = 0
+        with self._lock, _connect(self.database) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute(
+                    "SELECT job_id,job_json FROM pool_jobs WHERE status='active'"
+                ).fetchall()
+                for job_id, raw_job in rows:
+                    try:
+                        job = json.loads(bytes(raw_job).decode("ascii"))
+                    except (ValueError, TypeError, UnicodeDecodeError) as exc:
+                        raise PoolServiceError("persisted_job_corrupt") from exc
+                    if now > job.get("expires_at", -1):
+                        conn.execute(
+                            "UPDATE pool_jobs SET status='expired' WHERE job_id=? AND status='active'",
+                            (job_id,),
+                        )
+                        expired += conn.execute("SELECT changes()").fetchone()[0]
+                conn.execute("COMMIT")
+            except Exception:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        return expired
 
     def issue_job(
         self, *, worker_id: str, height: int, epoch: int, lifetime_seconds: int,
@@ -251,6 +312,7 @@ class PoolCoordinator:
         now = self.clock()
         if isinstance(now, bool) or not isinstance(now, int) or now < 0:
             raise PoolServiceError("clock_invalid")
+        self.expire_jobs(now=now)
         if not isinstance(authenticated_worker_id, str) or not authenticated_worker_id:
             raise PoolServiceError("worker_identity_invalid")
         with self._lock, _connect(self.database) as conn:
@@ -280,7 +342,7 @@ class PoolCoordinator:
             if row is None:
                 conn.execute("ROLLBACK")
                 raise PoolServiceError("job_not_found")
-            if row[0] == "revoked":
+            if row[0] in ("revoked", "expired"):
                 conn.execute("COMMIT")
                 return False
             now = self.clock()
@@ -294,7 +356,13 @@ class PoolCoordinator:
     def submit_share(self, submission: Mapping[str, Any], *,
                      authenticated_worker_id: str) -> dict:
         """Authenticate-by-injection, verify proof/policy, then durably record share."""
+        now = self.clock()
+        if isinstance(now, bool) or not isinstance(now, int) or now < 0:
+            raise PoolServiceError("clock_invalid")
+        self.expire_jobs(now=now)
         with self._lock:
+            if not isinstance(authenticated_worker_id, str) or not authenticated_worker_id:
+                raise PoolServiceError("worker_identity_invalid")
             if not isinstance(submission, Mapping):
                 raise PoolServiceError("submission_invalid")
             job = submission.get("job")
@@ -313,9 +381,6 @@ class PoolCoordinator:
                 raise PoolServiceError("job_not_assigned_to_worker")
             if bytes(row[0]) != _canonical(job):
                 raise PoolServiceError("job_not_issued_by_this_pool")
-            now = self.clock()
-            if isinstance(now, bool) or not isinstance(now, int) or now < 0:
-                raise PoolServiceError("clock_invalid")
             try:
                 accepted = admit_pool_submission(
                     submission,
@@ -335,9 +400,10 @@ class PoolCoordinator:
 
     def status(self) -> dict:
         """Return measured durable state; chain integrity failure is explicit."""
+        self.expire_jobs()
         with self._lock, _connect(self.database) as conn:
-            active, revoked = conn.execute(
-                "SELECT SUM(status='active'),SUM(status='revoked') FROM pool_jobs"
+            active, revoked, expired = conn.execute(
+                "SELECT SUM(status='active'),SUM(status='revoked'),SUM(status='expired') FROM pool_jobs"
             ).fetchone()
             total = conn.execute("SELECT COUNT(*) FROM pool_jobs").fetchone()[0]
         shares = self.share_ledger.list_shares()
@@ -345,7 +411,7 @@ class PoolCoordinator:
         return {
             "pool_id": self.pool_id, "network_id": self.network_id,
             "jobs_total": total, "jobs_active": active or 0,
-            "jobs_revoked": revoked or 0, "shares_accepted": len(shares),
+            "jobs_revoked": revoked or 0, "jobs_expired": expired or 0,\n            "shares_accepted": len(shares),
             "share_ledger_chain_valid": chain_ok,
             "healthy": bool(chain_ok),
         }
