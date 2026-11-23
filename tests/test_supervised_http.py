@@ -1,5 +1,6 @@
 """Integration tests for the supervised whole-request HTTP boundary."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from multiprocessing.shared_memory import SharedMemory
 import threading
 import time
 import unittest
@@ -25,6 +26,15 @@ class _Server:
 
 
 class SupervisedHttpTests(unittest.TestCase):
+    def test_close_reaps_worker_and_unlinks_shared_memory(self):
+        transport = SupervisedHttpTransport()
+        process = transport._process
+        shared_name = transport._shared.name
+        transport.close()
+        self.assertFalse(process.is_alive())
+        with self.assertRaises(FileNotFoundError):
+            SharedMemory(name=shared_name, create=False)
+
     def test_request_completes_in_worker_and_preserves_response(self):
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self):
