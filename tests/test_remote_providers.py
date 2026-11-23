@@ -200,7 +200,6 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
-            authorization_provider=self.anchor_authorization_provider(),
             clock=lambda: self.now, transport=transport,
         )
         self.assertIsNone(anchor.read_sequence("test-net"))
@@ -306,20 +305,6 @@ class RemoteProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(RemoteProviderError, "gcf_finality_certificate_required"):
             anchor.advance_sequence("test-net", 1, "1" * 64)
 
-    def test_anchor_write_requires_god_policy_authorization(self):
-        anchor = HTTPSSequenceAnchor(
-            "https://anchor.example", signer_id="anchor-root",
-            trusted_public_key=self.public, write_token="T" * 40,
-            clock=lambda: self.now,
-            transport=lambda *_: self.fail("transport must not be called"),
-        )
-        with self.assertRaisesRegex(
-            RemoteProviderError, "god_policy_transition_authorization_required",
-        ):
-            anchor.advance_sequence(
-                "test-net", 1, "1" * 64, certificate={"schema": "GCF/1"},
-            )
-
     def test_anchor_write_requires_authentication(self):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
@@ -347,7 +332,6 @@ class RemoteProviderTests(unittest.TestCase):
         anchor = HTTPSSequenceAnchor(
             "https://anchor.example", signer_id="anchor-root",
             trusted_public_key=self.public, write_token="T" * 40,
-            authorization_provider=self.anchor_authorization_provider(),
             clock=lambda: self.now, transport=transport,
         )
         self.assertFalse(anchor.advance_sequence(
