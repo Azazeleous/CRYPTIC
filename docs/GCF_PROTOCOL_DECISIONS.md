@@ -29,7 +29,7 @@ GCF/1 remains immutable and continues to use its candidate-specific `approve` bo
 - Candidate votes remain subject to the existing proof-bound cross-round lock transition rule. NIL votes do not release or override any prior candidate lock.
 - GCF/2 has a distinct signature domain; GCF/1 signatures are never reinterpreted as GCF/2.
 
-The initial GCF/2 vote primitive binds a candidate vote to the digest of the existing signed proposal format. This is an interoperability bridge only: GCF/1 finality certificates do not accept GCF/2 votes. A GCF/2 finality certificate, engine admission path, persistent vote-slot storage, independent Python verifier, peer transport negotiation, Cloudflare Worker verifier, signer policy, and cross-language known-answer vectors are required before GCF/2 can be enabled or used for finality.
+The initial GCF/2 vote primitive binds a candidate vote to the digest of the existing signed proposal format. This interoperability bridge has since been extended by the durable GCF2VoteStore, POLC/finality certificate, independent verifier, signed peer capability negotiation, persistent signer guard, Cloudflare Worker anchor verifier, cross-language known-answer vector, and proof-bound cross-round lock transition. GCF/2 remains opt-in and disabled by default.
 
 ## Decision 2 — Round-change is a pacemaker signal, not a lock-release proof
 
@@ -78,7 +78,7 @@ The pacemaker is not a consensus oracle. It does not automatically create propos
 These decisions do not claim that a pacemaker or nil-vote implementation has already passed conformance tests. The current implementation supports proof-bound explicit round changes; automatic scheduling remains disabled until a separately tested controller is integrated. The protocol remains GCF/1 and does not reinterpret prior signed data.
 
 
-## GCF/2 implementation status — durable vote slots and POLC (in progress)
+## GCF/2 implementation status — durable vote slots and POLC (historical milestone; superseded by integrated status below)
 
 The opt-in `GCF2VoteStore` now adds:
 
@@ -89,7 +89,7 @@ The opt-in `GCF2VoteStore` now adds:
 - GCF/1 and GCF/2 vote stores must share the same SQLite database. Both submission paths reject a height/phase/validator slot already used by the other protocol version, preventing cross-version double-signing.
 - An affirmative candidate PREVOTE quorum produces a deterministic GCF/2 POLC using the separate `GCF/2|POLC` domain and validator-ID-sorted signed PREVOTEs. An affirmative candidate PRECOMMIT is admitted only when it carries the exact persisted POLC digest.
 
-This is still not a GCF/2 finality implementation. The store is opt-in and is not composed into the production runtime. No GCF/2 finality certificate, height advancement, signer/HSM policy integration, peer negotiation, Worker verification, cross-language vectors, or proof-bound lock transition is claimed. GCF/1 remains the only active finality profile. CI for the latest implementation is pending.
+This initial durable-slot/POLC milestone was subsequently extended to include a durable GCF/2 finality certificate, independent verification, runtime gate, peer negotiation, signer guard, Worker anchor verification, shared known-answer vector, and proof-bound cross-round lock transition. The activation boundary remains: GCF/2 is opt-in, disabled by default, and not autonomously wired into policy-update orchestration.
 
 
 ## GCF/2 implementation status — POLC, finality certificate, and runtime gate
