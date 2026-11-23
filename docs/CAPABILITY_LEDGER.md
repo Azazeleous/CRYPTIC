@@ -31,7 +31,8 @@
 | Three-lane correction | proposed | fault injection and independent re-verification |
 | Chunked sparse storage | proposed | layout benchmark, crash recovery, integrity tests |
 | Virtual computer/SOS | proposed | isolation and escape-resistance tests |
-| Device assistant | proposed | enrollment, scope, revoke, audit tests |
+| Device enrollment and mutual authentication | implemented (E2 reference; PR #38 CI-verified) | Device-signed consent request, operator-signed subset certificate, host-signed challenge, device-signed one-use response, scoped sessions, signed one-use operator revocation, and per-request audit decisions. CRYPTIC CI run 45217416194 and mining-engine run 45217417851 each passed 379 tests. No live radio/network adapter or hardware attestation claim. |
+| Device assistant adapters | proposed | live network, BLE, and home-automation adapters; platform keystore integration; hardware attestation; key rotation; multi-host interoperability |
 | Local seed and Merkle ledger CLI | implemented (E2) | seven local unit tests pass; repository commit and runtime integration still require CI/integration evidence |
 | Crystalline admission lifecycle | proposed (E1) | schemas, deterministic ADAM policy evaluator, signed decisions, negative tests, independent verifier, external checkpoint |
 | Four-lane SHA-256 reference mining | implemented (E3 reference) | four disjoint lanes, deterministic affine traversal, independently verified SHA-256 candidates, bounded per-lane hit retention; chain-specific header adapter and production benchmark remain |
