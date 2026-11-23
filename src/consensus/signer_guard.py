@@ -73,6 +73,7 @@ class ConsensusSigningGuard:
                 CREATE TABLE IF NOT EXISTS consensus_signing_slots (
                   network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
                   height INTEGER NOT NULL, round INTEGER NOT NULL,
+                  signed_round INTEGER NOT NULL,
                   slot_type TEXT NOT NULL,
                   validator_id TEXT NOT NULL,
                   protocol_schema TEXT NOT NULL,
@@ -80,7 +81,7 @@ class ConsensusSigningGuard:
                   payload_json BLOB NOT NULL,
                   signature_b64 TEXT,
                   created_at INTEGER NOT NULL,
-                  PRIMARY KEY(network_id,epoch,height,round,slot_type,validator_id)
+                  PRIMARY KEY(network_id,epoch,height,slot_type,validator_id)
                 )
             """)
             db.execute("""
@@ -165,7 +166,10 @@ class ConsensusSigningGuard:
         payload = domain + _canonical(body)
         digest = hashlib.sha256(payload).hexdigest()
         encoded_body = _canonical(body)
-        key = (self.network_id, self.epoch, height, round_number,
+        # Vote signing is height/phase scoped across rounds until safe,
+        # proof-bound cross-round lock transitions are implemented.
+        slot_round = round_number if slot_type.startswith("ROUND_CHANGE:") else 0
+        key = (self.network_id, self.epoch, height, slot_round,
                slot_type, self.validator_id)
         with self._db() as db:
             db.execute("BEGIN IMMEDIATE")
@@ -179,10 +183,11 @@ class ConsensusSigningGuard:
                 if row is None:
                     db.execute(
                         """INSERT INTO consensus_signing_slots
-                           (network_id,epoch,height,round,slot_type,validator_id,
+                           (network_id,epoch,height,round,signed_round,slot_type,validator_id,
                             protocol_schema,payload_digest,payload_json,signature_b64,created_at)
                            VALUES(?,?,?,?,?,?,?,?,?,NULL,?)""",
-                        (*key, protocol_schema, digest, encoded_body, created_at),
+                        (key[0], key[1], key[2], key[3], round_number, key[4], key[5],
+                         protocol_schema, digest, encoded_body, created_at),
                     )
                     signature_b64 = None
                 else:
@@ -202,7 +207,7 @@ class ConsensusSigningGuard:
                 Ed25519PublicKey.from_public_bytes(
                     bytes.fromhex(self.public_key_hex)
                 ).verify(signature, payload)
-            except (ValueError, TypeError, InvalidSignature, Exception) as exc:
+            except Exception as exc:
                 raise ConsensusSigningError("hardware_signing_provider_failed") from exc
             signature_b64 = base64.b64encode(signature).decode("ascii")
             with self._db() as db:
@@ -235,7 +240,7 @@ class ConsensusSigningGuard:
     def slot_status(self) -> list[dict]:
         with self._db() as db:
             rows = db.execute(
-                """SELECT height,round,slot_type,protocol_schema,payload_digest,
+                """SELECT height,signed_round,slot_type,protocol_schema,payload_digest,
                           signature_b64,created_at
                    FROM consensus_signing_slots
                    WHERE network_id=? AND epoch=? AND validator_id=?
