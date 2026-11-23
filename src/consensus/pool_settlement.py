@@ -60,7 +60,7 @@ def _policy_body(policy: Mapping[str, Any]) -> dict:
     body = {key: policy[key] for key in fields}
     if body["schema"] != POLICY_SCHEMA or body["asset"] != INTERNAL_ASSET:
         raise PoolSettlementError("reward_policy_schema_or_asset_invalid")
-    for field in ("policy_id", "network_id", "issuer_id"):
+    for field in ("policy_id", "network_id", "pool_id", "issuer_id"):
         value = body[field]
         if not isinstance(value, str) or not value or len(value.encode("utf-8")) > 256:
             raise PoolSettlementError("reward_policy_" + field + "_invalid")
@@ -112,7 +112,18 @@ def normalize_finality(
     """Accept a GCF/1 finalize result or a GCF/2 certificate without guessing."""
     if not isinstance(finality, Mapping):
         raise PoolSettlementError("finality_certificate_required")
-    if "certificate" in finality:
+    if finality.get("schema") == "GCF/2-ANCHOR-ENVELOPE/1":
+        certificate = finality.get("certificate")
+        supplied_proposal = finality.get("proposal")
+        if proposal is not None and dict(proposal) != dict(supplied_proposal or {}):
+            raise PoolSettlementError("finality_proposal_mismatch")
+        proposal = supplied_proposal
+        if not isinstance(certificate, Mapping):
+            raise PoolSettlementError("gcf2_finality_envelope_invalid")
+        digest = certificate.get("certificate_digest")
+        if not isinstance(digest, str) or not HEX32.fullmatch(digest):
+            raise PoolSettlementError("gcf2_finality_digest_missing")
+    elif "certificate" in finality:
         certificate = finality.get("certificate")
         supplied_digest = finality.get("certificate_digest")
         if not isinstance(certificate, Mapping) or not isinstance(supplied_digest, str):
