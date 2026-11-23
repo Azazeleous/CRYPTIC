@@ -26,7 +26,6 @@ from src.consensus.http_api import GCFWSGI
 from src.consensus.policy_update import GCFPolicyUpdateCoordinator
 from src.consensus.round_progression import RoundProgressionController
 from src.consensus.round_orchestrator import RoundChangeOrchestrator
-from src.consensus.signer_guard import ConsensusSigningGuard
 from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
 from src.governance.remote_providers import load_independently_pinned_root
@@ -34,6 +33,74 @@ from src.governance.remote_providers import load_independently_pinned_root
 
 class RuntimeConfigurationError(ValueError):
     """The composition root cannot safely construct the requested runtime."""
+
+
+def build_gcf2_sequence_anchor_activator(
+    *, sequence_anchor: HCCGNSequenceAnchor, network_id: str,
+) -> Callable[[Mapping[str, Any]], Mapping[str, Any]]:
+    """Build an idempotent GCF/2-to-sequence-anchor activation adapter."""
+    if (not callable(getattr(sequence_anchor, "read_sequence", None))
+            or not callable(getattr(sequence_anchor, "advance_sequence", None))):
+        raise RuntimeConfigurationError("gcf2_sequence_anchor_adapter_invalid")
+    if not isinstance(network_id, str) or not network_id:
+        raise RuntimeConfigurationError("gcf2_sequence_anchor_network_invalid")
+
+    def activate(certificate: Mapping[str, Any]) -> Mapping[str, Any]:
+        proposal = certificate.get("proposal") if isinstance(certificate, Mapping) else None
+        if not isinstance(proposal, Mapping):
+            raise RuntimeConfigurationError("gcf2_anchor_proposal_missing")
+        sequence = proposal.get("anchor_sequence")
+        parent_hash = proposal.get("parent_hash")
+        policy_hash = proposal.get("payload_hash")
+        if (isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1
+                or not isinstance(parent_hash, str) or len(parent_hash) != 64
+                or not isinstance(policy_hash, str) or len(policy_hash) != 64):
+            raise RuntimeConfigurationError("gcf2_anchor_proposal_context_invalid")
+        try:
+            bytes.fromhex(parent_hash)
+            bytes.fromhex(policy_hash)
+            current = sequence_anchor.read_sequence(network_id)
+        except Exception as exc:
+            raise RuntimeConfigurationError("gcf2_anchor_state_unavailable") from exc
+        if current is None:
+            current_sequence, current_hash = 0, "0" * 64
+        else:
+            if (not isinstance(current, tuple) or len(current) != 2
+                    or isinstance(current[0], bool) or not isinstance(current[0], int)
+                    or current[0] < 0 or not isinstance(current[1], str)
+                    or len(current[1]) != 64):
+                raise RuntimeConfigurationError("gcf2_anchor_state_invalid")
+            current_sequence, current_hash = current[0], current[1].lower()
+        certificate_digest = certificate.get("certificate_digest")
+        if (current_sequence == sequence and current_hash == policy_hash.lower()):
+            return {
+                "accepted": True, "finalized": True, "replayed": True,
+                "anchor_sequence": sequence,
+                "certificate_digest": certificate_digest,
+            }
+        if sequence != current_sequence + 1:
+            raise RuntimeConfigurationError("gcf2_anchor_sequence_not_next")
+        if parent_hash.lower() != current_hash:
+            raise RuntimeConfigurationError("gcf2_anchor_parent_mismatch")
+        envelope = {
+            "schema": "GCF/2-ANCHOR-ENVELOPE/1",
+            "proposal": dict(proposal), "certificate": dict(certificate),
+        }
+        try:
+            accepted = sequence_anchor.advance_sequence(
+                network_id, sequence, policy_hash.lower(), certificate=envelope,
+            )
+            observed = sequence_anchor.read_sequence(network_id)
+        except Exception as exc:
+            raise RuntimeConfigurationError("gcf2_anchor_advance_failed") from exc
+        if accepted is not True or observed != (sequence, policy_hash.lower()):
+            raise RuntimeConfigurationError("gcf2_anchor_advance_not_confirmed")
+        return {
+            "accepted": True, "finalized": True, "replayed": False,
+            "anchor_sequence": sequence, "certificate_digest": certificate_digest,
+        }
+
+    return activate
 
 
 def load_pinned_ed25519_public_key(path: str | os.PathLike[str]) -> bytes:
@@ -117,8 +184,8 @@ def build_consensus_runtime(
     round_change_broadcaster: Callable | None = None,
     enable_gcf2_vote_store: bool = False,
     gcf2_active_parent_resolver: Callable[[int], str | None] | None = None,
-    consensus_signing_provider: Callable[[bytes], bytes] | None = None,
     consensus_sign_bytes: Callable[[bytes], bytes] | None = None,
+    gcf2_finality_activator: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
@@ -142,10 +209,6 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("gcf2_requires_trusted_active_parent_resolver")
     if consensus_sign_bytes is not None and (not callable(consensus_sign_bytes) or local_validator_id is None):
         raise RuntimeConfigurationError("consensus_signer_requires_local_validator_and_provider")
-    if consensus_signing_provider is not None and (
-        not callable(consensus_signing_provider) or local_validator_id is None
-    ):
-        raise RuntimeConfigurationError("consensus_signing_provider_requires_local_validator")
     if policy_update_peer_mesh is not None and policy_update_signer is None:
         raise RuntimeConfigurationError("policy_update_peer_mesh_requires_coordinator")
     round_orchestrator_args = (local_validator_id, round_change_signer, round_change_broadcaster)
@@ -227,6 +290,15 @@ def build_consensus_runtime(
     if clock is not None:
         engine_kwargs["clock"] = clock
     engine = GCFEngine(root / "gcf.sqlite3", validator_set, **engine_kwargs)
+    if gcf2_finality_activator is not None and not callable(gcf2_finality_activator):
+        raise RuntimeConfigurationError("gcf2_finality_activator_invalid")
+    if not enable_gcf2_vote_store and gcf2_finality_activator is not None:
+        raise RuntimeConfigurationError("gcf2_finality_activator_requires_gcf2")
+    finality_activator = gcf2_finality_activator
+    if enable_gcf2_vote_store and finality_activator is None and sequence_anchor is not None:
+        finality_activator = build_gcf2_sequence_anchor_activator(
+            sequence_anchor=sequence_anchor, network_id=network_id,
+        )
     gcf2_vote_store = None
     if enable_gcf2_vote_store:
         gcf2_vote_store = GCF2VoteStore(
@@ -234,17 +306,7 @@ def build_consensus_runtime(
             gcf1_engine=engine,
             resolve_active_parent=gcf2_active_parent_resolver,
             clock=clock or time.time,
-        )
-    signing_guard = None
-    if consensus_signing_provider is not None:
-        validator = validator_set.validators.get(local_validator_id)
-        if validator is None:
-            raise RuntimeConfigurationError("local_signer_not_in_validator_set")
-        signing_guard = ConsensusSigningGuard(
-            database=root / "gcf.sqlite3", network_id=network_id,
-            epoch=epoch, validator_id=local_validator_id,
-            public_key_hex=validator.public_key_hex,
-            sign_bytes=consensus_signing_provider,
+            finality_activator=finality_activator,
         )
     adam_store = AdamCommitStore(root / "adam.sqlite3")
     apex = APEXValidator(
