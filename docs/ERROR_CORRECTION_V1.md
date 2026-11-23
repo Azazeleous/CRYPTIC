@@ -10,6 +10,7 @@ This implementation adds a reproducible, testable correction stack:
 4. QC-LDPC parity checks generated from a circulant-shift base matrix.
 5. Normalized min-sum decoding and independent syndrome/re-encoding checks.
 6. A layered QC-LDPC then Reed-Solomon pipeline with a verification receipt.
+7. Immutable content-addressed chunks with canonical manifests, atomic writes, and read-time integrity verification.
 
 The QC-LDPC construction is quasi-cyclic: each nonnegative base-matrix entry denotes a circulant shift, and -1 denotes an all-zero block. The final parity blocks are required to form an identity matrix of zero-shift circulants. This gives a systematic encoder without constructing or inverting a dense random matrix. This is the selected QC-LDPC approach; it is not a random sparse LDPC matrix.
 
@@ -30,9 +31,12 @@ The QC-LDPC construction is quasi-cyclic: each nonnegative base-matrix entry den
 - src/error_correction/reed_solomon.py
 - src/error_correction/qc_ldpc.py
 - src/error_correction/pipeline.py
+- src/error_correction/storage.py
 
 ## Verification
 
-tests/test_error_correction.py covers field inverses and primitive-element cycling, polynomial evaluation, two-error Berlekamp-Welch recovery, Reed-Solomon correction at the configured bound, QC-LDPC systematic encoding, single-bit min-sum correction, layered round-trip, and fail-closed nonconvergence.
+tests/test_error_correction.py covers field inverses and primitive-element cycling, polynomial evaluation, two-error Berlekamp-Welch recovery, Reed-Solomon correction at the configured bound, QC-LDPC systematic encoding, single-bit syndrome correction, layered round-trip, and fail-closed decoder configuration. tests/test_chunk_store.py covers canonical manifests, deduplication, empty content, chunk tampering, manifest tampering, and invalid chunk sizes.
+
+The chunk store uses SHA-256 content addressing, immutable manifest IDs, same-directory atomic replacement, file fsync, and best-effort directory fsync. Reads are side-effect free and verify every chunk digest, declared size, total size, and whole-content digest. Platform-specific power-loss durability remains unverified.
 
 The code is a software reference implementation. It does not claim hardware acceleration, constant-time operation, formal proof, storage durability, or production deployment. Benchmarks and platform-specific performance claims require separate measurements.
