@@ -102,14 +102,14 @@ The opt-in GCF/2 path now includes durable vote-slot admission and deterministic
 - GCF/1 and GCF/2 finality paths reject a conflicting certificate for the same network/epoch/height when they share the same database.
 - The runtime exposes an explicit enable_gcf2_vote_store option. It is disabled by default and requires an injected trusted active-parent resolver. It is not exposed through the GCF/1 HTTP API.
 
-**Activation boundary:** GCF/2 finality certificates are durable protocol evidence, but they do not yet advance chain height or commit the external sequence anchor. GCF/2 is not production-enabled. Local signing/HSM anti-equivocation integration, peer version negotiation and transport, Cloudflare Worker verification, cross-language known-answer vectors, and proof-bound cross-round lock transitions remain required. HCCGN proof and justice-evidence gates remain separate trust checks; the independent certificate verifier does not replace those external gates.
+**Activation boundary:** GCF/2 finality certificates are durable protocol evidence. The signed peer HELLO, persistent cross-version signer guard, Cloudflare Worker anchor verifier, and shared Python/JavaScript known-answer vector are implemented and CI-verified. The vote store remains disabled by default; the signer guard is only an injected Ed25519 provider boundary, not evidence of a deployed HSM or HSM-side anti-equivocation. GCF/2 still lacks proof-bound cross-round lock transitions and autonomous integration into the GCF policy-update coordinator. External validator/justice trust checks remain separate and mandatory.
 
 
 ## Pool boundary — work acceptance versus reward settlement
 
 The current pool slice durably issues signed short-lived jobs from an injected active-target policy, authenticates workers through a trusted transport adapter (including pinned mTLS certificate mapping), independently verifies HCCGN submissions, reserves non-overlapping nonce intervals, and records accepted shares in a hash-chained append-only ledger. Jobs have durable active/revoked/expired lifecycle states; worker submission rate limits and measured worker share totals are persisted. An exact retry of previously committed work is acknowledged only when the share ledger chain verifies.
 
-This is not yet a complete reward-distributing public pool. The present job target is the active network target, so this profile does not yet implement a separate pool share target or difficulty-weighted partial shares. There is no finalized-block reward settlement, transferable balance, payout rail, operator/admin network API, or multi-coordinator failover protocol. Any future settlement must be driven by an independently verified finalized block certificate and an authorized reward policy; accepted shares alone must never mint reward credits. Until a reward schedule/asset policy is approved, accounting remains accepted-work measurement only.
+The finalized-block settlement ledger is now implemented. It requires an independently verified finality certificate, a pinned-key signed reward policy scoped to network/pool/epoch/height, a verified historical job, and one exact accepted proof matching the finalized proposal. It records only internal nonredeemable credits under an append-only hash chain and policy cap. The present job target remains the active network target; there is no separate pool share target or difficulty-weighted partial-share allocation. There is no transfer, withdrawal, redemption, payout rail, public operator API, or multi-coordinator failover. Accepted shares alone never mint credits.
 
 
 ## GCF/2 integration update — transport, signer guard, and certificate portability
@@ -123,3 +123,8 @@ A persistent `ConsensusSigningGuard` is available to the runtime through an inje
 A shared deterministic GCF/2 known-answer vector now exercises proposal signature, validator-set hash, candidate digest, vote signatures, POLC digest, and finality certificate digest in Python and JavaScript. CI evidence is required before marking the vector conformance gate complete.
 
 **Still not production-activated:** proof-bound cross-round lock transitions, HSM custody and hardware anti-equivocation evidence, multi-host peer deployment and partition/restart drills, independent justice authority evidence, independently administered validator hosts, and finality/anchor recovery drills. GCF/2 remains opt-in.
+
+
+## Verification update — 2026-11-23
+
+PR #33 head `1708a6d57d87e64e4da51b749427a53ed3c75704` passed CRYPTIC CI (45159184507), mining-engine tests (45159184530), production-gate contracts (45159184429), and GAIA local trophy mining (45159184527). GCF/2 remains opt-in; passing conformance tests do not establish production deployment or independent key custody.
