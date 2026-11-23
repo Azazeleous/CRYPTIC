@@ -279,6 +279,24 @@ class RoundChangeProofTests(unittest.TestCase):
             with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_EQUIVOCATION"):
                 engine.submit_round_change(conflicting)
 
+    def test_engine_allows_new_round_change_after_prior_message_expires(self):
+        with tempfile.TemporaryDirectory() as directory:
+            engine = GCFEngine(
+                Path(directory) / "gcf.sqlite3", self.vset,
+                clock=lambda: self.now,
+            )
+            first = self.message("v1", nonce="a" * 32)
+            engine.submit_round_change(first)
+            self.now += 61
+            renewed = self.message("v1", nonce="b" * 32)
+            result = engine.submit_round_change(renewed)
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["message_count"], 1)
+            persisted = engine.get_round_change_message(
+                height=12, target_round=1, validator_id="v1",
+            )
+            self.assertEqual(persisted["nonce"], "b" * 32)
+
     def test_persisted_round_change_certificate_digest_tampering_is_detected(self):
         with tempfile.TemporaryDirectory() as directory:
             db_path = Path(directory) / "gcf.sqlite3"
