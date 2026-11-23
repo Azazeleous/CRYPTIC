@@ -70,6 +70,21 @@ class QCParityCheck:
                 )
                 checks.append(neighbors)
         self.check_to_variables = tuple(checks)
+        # A syndrome matching one unique parity-check column identifies a
+        # single hard-decision bit error. Ambiguous columns are never corrected.
+        syndrome_lookup: dict[tuple[int, ...], int | None] = {}
+        for variable in range(self.codeword_bits):
+            signature = tuple(
+                check_index for check_index, neighbors in enumerate(self.check_to_variables)
+                if variable in neighbors
+            )
+            if not signature:
+                continue
+            if signature in syndrome_lookup:
+                syndrome_lookup[signature] = None
+            else:
+                syndrome_lookup[signature] = variable
+        self._single_error_lookup = syndrome_lookup
 
     @classmethod
     def default(cls, lift: int = 64) -> "QCParityCheck":
@@ -127,9 +142,18 @@ class QCParityCheck:
         check_messages = [[0.0] * len(neighbors) for neighbors in self.check_to_variables]
         posterior = list(channel)
         hard = tuple(0 if value >= 0 else 1 for value in posterior)
-        syndrome_weight = sum(self.syndrome(hard))
+        initial_syndrome = self.syndrome(hard)
+        syndrome_weight = sum(initial_syndrome)
         if syndrome_weight == 0:
             return QCLDPCDecode(hard, True, 0, 0)
+        syndrome_key = tuple(i for i, value in enumerate(initial_syndrome) if value)
+        single_error = self._single_error_lookup.get(syndrome_key)
+        if single_error is not None:
+            corrected = list(hard)
+            corrected[single_error] ^= 1
+            corrected_bits = tuple(corrected)
+            if not any(self.syndrome(corrected_bits)):
+                return QCLDPCDecode(corrected_bits, True, 1, 0)
 
         for iteration in range(1, max_iterations + 1):
             posterior = list(channel)
