@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .gf256 import poly_divmod, poly_eval, power, solve_linear_system
+from .gf256 import mul, poly_divmod, poly_eval, power, solve_linear_system
 
 
 class BerlekampWelchError(ValueError):
@@ -46,20 +46,15 @@ def decode_evaluations(
 
     for error_count in range(max_errors + 1):
         q_count = degree + error_count
-        unknowns = q_count + error_count
         matrix: list[list[int]] = []
         rhs: list[int] = []
         for x, y in zip(points, values):
-            powers = [power(x, exponent) for exponent in range(max(q_count, error_count + 1))]
+            powers = [power(x, exponent) for exponent in range(q_count + 1)]
             matrix.append(
                 powers[:q_count]
-                + [y * 0 ^ (0) for _ in ()]
-                + [__import__("builtins").int(0) for _ in ()]
+                + [mul(y, powers[j]) for j in range(error_count)]
             )
-            matrix[-1] = powers[:q_count] + [
-                _gf_mul(y, powers[j]) for j in range(error_count)
-            ]
-            rhs.append(_gf_mul(y, powers[error_count]))
+            rhs.append(mul(y, powers[error_count]))
         try:
             solution = solve_linear_system(matrix, rhs)
         except ValueError:
@@ -70,14 +65,11 @@ def decode_evaluations(
         if remainder != [0] or len(polynomial) > degree:
             continue
         corrected = tuple(poly_eval(polynomial, x) for x in points)
-        errors = tuple(i for i, (actual, expected) in enumerate(zip(values, corrected))
-                       if actual != expected)
+        errors = tuple(
+            i for i, (actual, expected) in enumerate(zip(values, corrected))
+            if actual != expected
+        )
         if len(errors) <= error_count:
             coefficients = tuple(polynomial + [0] * (degree - len(polynomial)))
             return PolynomialDecode(coefficients, corrected, errors)
     raise BerlekampWelchError("no_unique_polynomial_within_error_bound")
-
-
-def _gf_mul(a: int, b: int) -> int:
-    from .gf256 import mul
-    return mul(a, b)
