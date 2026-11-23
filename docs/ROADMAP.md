@@ -34,10 +34,11 @@
 - Chunk manifests, content addressing, integrity, recovery.
 
 ## Phase 5 — Extensions and SOS
-- Extension manifest and sandbox.
-- Virtual computer, terminal, filesystem and process boundaries.
-- Capability grants and audit.
-- Operator-visible virtual computer.
+- Signed declarative extension manifests, publisher trust, and artifact digest binding — implemented in PR #37; artifacts are stored as data and are not executed.
+- Short-lived signed capability grants, manifest capability-subset enforcement, explicit virtual-path scopes, and persisted revocation — implemented in PR #37.
+- SQLite-backed per-extension virtual filesystem with path-traversal rejection, quotas, content digests, and a hash-linked transactional audit ledger — implemented in PR #37.
+- Operator-visible virtual terminal with a fixed command allowlist and no shell parsing, subprocess, or host-filesystem access — implemented in PR #37.
+- True OS process isolation, hard process termination/resource enforcement, untrusted extension-code execution, independent/WORM audit storage, and physical power-loss review remain open.
 
 ## Phase 6 — Device assistant
 - Device enrollment and mutual authentication.
