@@ -23,14 +23,15 @@
 | Canonical asset identity | proposed | collision and alias test suite |
 | Model routing | proposed | provider contract and evaluation |
 | Local model inference | proposed | reproducible benchmark on target hardware |
-| Extension absorption | proposed | sandbox, manifest, conformance, permission tests |
+| Extension absorption | partial (E2; PR #37 CI-verified) | Signed declarative manifests, publisher-key verification, artifact SHA-256 binding, strict capability allowlist, and opaque artifact storage. Extension code is not executed. True OS isolation and untrusted-code sandboxing remain open. CRYPTIC CI run 45216310927 passed 380 tests. |
 | GF(256) | proposed | field axioms and known-answer tests |
 | Reed–Solomon | proposed | encode/decode vectors and error-bound tests |
 | Berlekamp–Welch | proposed | polynomial reconstruction tests |
 | QC-LDPC | proposed | parity-check, syndrome, decoder convergence tests |
 | Three-lane correction | proposed | fault injection and independent re-verification |
 | Chunked sparse storage | proposed | layout benchmark, crash recovery, integrity tests |
-| Virtual computer/SOS | proposed | isolation and escape-resistance tests |
+| Virtual computer/SOS | partial (E2; PR #37 CI-verified) | SQLite-backed per-extension virtual filesystem, path traversal rejection, file/count/byte quotas, fixed argument-vector command allowlist, and SHA-256-linked audit ledger. No host shell, subprocess, host filesystem, network, or BLE access. Hard OS process isolation, resource enforcement, WORM audit, and physical durability remain open. CRYPTIC CI run 45216310927 passed 380 tests. |
+| Signed capability grants | implemented (E2 reference; PR #37 CI-verified) | Ed25519-signed, short-lived grants bound to one extension, restricted to manifest-requested capabilities and explicit virtual-path scopes; persisted revocation checked on each command. PR #37 CRYPTIC CI run 45216310927 passed 380 tests. |
 | Device assistant | proposed | enrollment, scope, revoke, audit tests |
 | Local seed and Merkle ledger CLI | implemented (E2) | seven local unit tests pass; repository commit and runtime integration still require CI/integration evidence |
 | Crystalline admission lifecycle | proposed (E1) | schemas, deterministic ADAM policy evaluator, signed decisions, negative tests, independent verifier, external checkpoint |
