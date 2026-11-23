@@ -415,7 +415,8 @@ class PoolCoordinator:
         return {
             "pool_id": self.pool_id, "network_id": self.network_id,
             "jobs_total": total, "jobs_active": active or 0,
-            "jobs_revoked": revoked or 0, "jobs_expired": expired or 0,\n            "shares_accepted": len(shares),
+            "jobs_revoked": revoked or 0, "jobs_expired": expired or 0,
+            "shares_accepted": len(shares),
             "share_ledger_chain_valid": chain_ok,
             "healthy": bool(chain_ok),
         }
