@@ -113,6 +113,12 @@ class PoolCoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(PoolServiceError, "nonce_range_overlap"):
             self.issue(worker_id="worker-b", nonce_start=0, max_attempts=8)
 
+    def test_nonce_reservations_support_full_uint64_boundary(self):
+        start = (1 << 64) - 8
+        job = self.issue(nonce_start=start, max_attempts=8)
+        self.assertEqual(job["nonce_start"], start)
+        self.assertEqual(job["nonce_start"] + job["max_attempts"], 1 << 64)
+
 
 if __name__ == "__main__":
     unittest.main()
