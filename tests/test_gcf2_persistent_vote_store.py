@@ -5,7 +5,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from src.consensus.gcf import GCFEngine, GCFError, ValidatorSet, make_proposal, sha256_hex, canonical_bytes
+from src.consensus.gcf import GCFEngine, GCFError, ValidatorSet, make_proposal, make_vote as make_gcf1_vote, sha256_hex, canonical_bytes
 from src.consensus.gcf2 import make_vote
 from src.consensus.gcf2_engine import GCF2VoteStore
 
@@ -120,6 +120,22 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(GCFError, "GCF2_CROSS_VERSION_VOTE_SLOT_ALREADY_USED"):
             self.store.submit_vote(self.vote("v3", kind="NIL"))
+
+
+    def test_gcf2_existing_slot_blocks_gcf1_vote_for_same_height_phase(self):
+        with self.store._db() as db:
+            db.execute(
+                "INSERT INTO gcf2_vote_slots VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                ("gaia-testnet", 1, 9, 0, "PREVOTE", "v3", "NIL", None,
+                 "ab" * 32, "{}", "11" * 32),
+            )
+        legacy_vote = make_gcf1_vote(
+            validator_id="v3", validator_private_key_hex=self.keys["v3"][0],
+            proposal=self.proposal, vote_type="PREVOTE", approve=True,
+            issued_at=self.now,
+        )
+        with self.assertRaisesRegex(GCFError, "GCF1_CROSS_VERSION_VOTE_SLOT_ALREADY_USED"):
+            self.gcf1.submit_vote(legacy_vote)
 
     def test_gcf2_database_must_be_shared_with_gcf1_engine(self):
         with self.assertRaisesRegex(GCFError, "GCF2_AND_GCF1_MUST_SHARE_DURABLE_VOTE_DATABASE"):
