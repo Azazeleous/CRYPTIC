@@ -6,6 +6,7 @@ This module never trusts worker identity from an HTTP header or submission alone
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import secrets
 import sqlite3
@@ -370,6 +371,32 @@ class PoolCoordinator:
             job = submission.get("job")
             if not isinstance(job, Mapping) or not isinstance(job.get("job_id"), str):
                 raise PoolServiceError("submission_job_invalid")
+            # Recover an already committed share before checking job expiry or
+            # revocation. This is acknowledgement of prior verified work, not
+            # a new admission; the append-only journal must still verify.
+            submitted_worker = submission.get("worker_id")
+            proof_hash = submission.get("proof_hash")
+            if (submitted_worker == authenticated_worker_id
+                    and isinstance(proof_hash, str)):
+                identity = {
+                    "network_id": self.network_id, "pool_id": self.pool_id,
+                    "job_id": job["job_id"], "worker_id": authenticated_worker_id,
+                    "proof_hash": proof_hash,
+                }
+                recovered_id = hashlib.sha256(
+                    repr(sorted(identity.items())).encode("utf-8")
+                ).hexdigest()
+                recovered = self.share_ledger.get_share(
+                    share_id=recovered_id, proof_hash=proof_hash,
+                )
+                if recovered is not None:
+                    if not self.share_ledger.verify_chain():
+                        raise PoolServiceError("share_ledger_integrity_failure")
+                    return {
+                        "accepted": True, "share_id": recovered["share_id"],
+                        "worker_id": recovered["worker_id"], "recorded": True,
+                        "replayed": True, "event_hash": recovered["event_hash"],
+                    }
             with _connect(self.database) as conn:
                 row = conn.execute(
                     "SELECT job_json,status,assigned_worker_id FROM pool_jobs WHERE job_id=?",
