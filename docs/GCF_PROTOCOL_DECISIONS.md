@@ -16,6 +16,21 @@ A future nil-vote feature requires a new versioned schema/domain (GCF/2 or an ex
 
 Rationale: adding nil semantics by overloading a boolean would create wire ambiguity and could silently change quorum meaning for already signed messages.
 
+## Decision 1A — GCF/2 explicit nil-vote profile (implementation in progress)
+
+GCF/1 remains immutable and continues to use its candidate-specific `approve` boolean. GCF/2 introduces a separately versioned vote envelope and signature domain:
+
+- `schema = GCF/2` and signature domain `GCF/2|VOTE|ED25519\\x00`.
+- `vote_kind = CANDIDATE` carries a 32-byte `candidate_digest` and boolean `approve`.
+- `vote_kind = NIL` carries `candidate_digest = null`, `approve = null`, and `polc_digest = null`. It is bound to network, epoch, height, round, parent hash, phase, validator, and a bounded signed validity window.
+- Candidate PREVOTE must not carry a POLC. Affirmative candidate PRECOMMIT must carry a POLC digest. NIL PREVOTE and NIL PRECOMMIT never carry a POLC.
+- NIL votes are counted in a separate nil-weight bucket. They never add to a candidate's affirmative PREVOTE/PRECOMMIT quorum, never form a POLC, never appear as candidate finality signers, and never create a candidate lock.
+- A validator may cast only one vote per (network, epoch, height, round, phase) slot. A persistent anti-equivocation record is required even for NIL votes; "no candidate lock" does not mean "no signing history".
+- Candidate votes remain subject to the existing proof-bound cross-round lock transition rule. NIL votes do not release or override any prior candidate lock.
+- GCF/2 has a distinct signature domain; GCF/1 signatures are never reinterpreted as GCF/2.
+
+The initial GCF/2 vote primitive binds a candidate vote to the digest of the existing signed proposal format. This is an interoperability bridge only: GCF/1 finality certificates do not accept GCF/2 votes. A GCF/2 finality certificate, engine admission path, persistent vote-slot storage, independent Python verifier, peer transport negotiation, Cloudflare Worker verifier, signer policy, and cross-language known-answer vectors are required before GCF/2 can be enabled or used for finality.
+
 ## Decision 2 — Round-change is a pacemaker signal, not a lock-release proof
 
 A local timeout may cause a validator to construct and submit one signed ROUND_CHANGE message for a strictly higher target round. It does not:
