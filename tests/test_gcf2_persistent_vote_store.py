@@ -11,6 +11,10 @@ from src.consensus.gcf2_engine import GCF2VoteStore
 from src.consensus.gcf2_independent_verifier import (
     GCF2IndependentVerificationError, verify_finality_certificate,
 )
+from src.consensus.round_change import (
+    POLC_SCHEMA, make_round_change_certificate, make_round_change_message,
+    polc_digest as round_change_polc_digest,
+)
 
 
 def keypair():
@@ -74,6 +78,102 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
             polc_digest=polc_digest,
             issued_at=self.now, expires_at=self.now + 60,
         )
+
+    def _round_change_certificate(self, source_round, target_round, highest_polc=None):
+        messages = []
+        for index, validator in enumerate(("v0", "v1", "v2")):
+            messages.append(make_round_change_message(
+                validator_id=validator, private_key_hex=self.keys[validator][0],
+                network_id="gaia-testnet", epoch=1, height=9,
+                source_round=source_round, target_round=target_round,
+                issued_at=self.now, expires_at=self.now + 60,
+                nonce=f"{index + 1:02x}" * 16,
+                highest_polc=highest_polc,
+            ))
+        return make_round_change_certificate(
+            messages, network_id="gaia-testnet", epoch=1,
+            height=9, target_round=target_round,
+        )
+
+    def _next_round_proposal(self, round_number, payload_hash, certificate):
+        proposal = make_proposal(
+            network_id="gaia-testnet", epoch=1, height=9,
+            round=round_number, parent_hash="ab" * 32,
+            payload_hash=payload_hash, proof_hash="12" * 32,
+            justice_commitment={"justice_profile": "GAIA-JUSTICE/1"},
+            proposer_id="v0", proposer_private_key_hex=self.keys["v0"][0],
+            nonce=f"{round_number + 1:02x}" * 16,
+            issued_at=self.now, expires_at=self.now + 240,
+            round_change_certificate=certificate,
+        )
+        self.gcf1.submit_proposal(proposal)
+        return proposal
+
+    def _round_change_polc(self, proposal):
+        digest = sha256_hex(canonical_bytes(proposal))
+        votes = [
+            make_gcf1_vote(
+                validator_id=name, validator_private_key_hex=self.keys[name][0],
+                proposal=proposal, vote_type="PREVOTE", approve=True,
+                issued_at=self.now + 1,
+            )
+            for name in ("v1", "v2", "v3")
+        ]
+        polc = {
+            "schema": POLC_SCHEMA, "proposal": proposal,
+            "candidate_digest": digest, "validator_set_hash": self.vset.digest,
+            "prevotes": votes,
+        }
+        polc["digest"] = round_change_polc_digest(polc)
+        return polc
+
+    def _submit_gcf2_candidate(self, proposal, validator_id="v0"):
+        digest = sha256_hex(canonical_bytes(proposal))
+        return self.store.submit_vote(make_vote(
+            validator_id=validator_id,
+            validator_private_key_hex=self.keys[validator_id][0],
+            network_id="gaia-testnet", epoch=1, height=9,
+            round=proposal["round"], parent_hash=proposal["parent_hash"],
+            vote_type="PREVOTE", vote_kind="CANDIDATE",
+            candidate_digest=digest, approve=True, polc_digest=None,
+            issued_at=self.now, expires_at=self.now + 60,
+        ))
+
+    def test_cross_round_candidate_change_requires_higher_round_polc(self):
+        self.store.submit_vote(self.vote("v0"))
+        cert_round_one = self._round_change_certificate(0, 1)
+        proposal_round_one = self._next_round_proposal(
+            1, "10" * 32, cert_round_one,
+        )
+        with self.assertRaisesRegex(
+            GCFError, "GCF2_CANDIDATE_LOCK_TRANSITION_NOT_AUTHORIZED"
+        ):
+            self._submit_gcf2_candidate(proposal_round_one)
+
+    def test_cross_round_candidate_change_is_allowed_by_higher_round_polc(self):
+        self.store.submit_vote(self.vote("v0"))
+        cert_round_one = self._round_change_certificate(0, 1)
+        proposal_round_one = self._next_round_proposal(
+            1, "10" * 32, cert_round_one,
+        )
+        polc_round_one = self._round_change_polc(proposal_round_one)
+        cert_round_two = self._round_change_certificate(
+            1, 2, highest_polc=polc_round_one,
+        )
+        proposal_round_two = self._next_round_proposal(
+            2, "10" * 32, cert_round_two,
+        )
+        self._submit_gcf2_candidate(proposal_round_two)
+        digest = sha256_hex(canonical_bytes(proposal_round_two))
+        with self.store._connect() as db:
+            lock = db.execute(
+                """SELECT candidate_digest,first_round FROM gcf2_candidate_locks
+                   WHERE network_id=? AND epoch=? AND height=?
+                     AND vote_type='PREVOTE' AND validator_id='v0'""",
+                ("gaia-testnet", 1, 9),
+            ).fetchone()
+        self.assertEqual(lock["candidate_digest"], digest)
+        self.assertEqual(lock["first_round"], 2)
 
     def test_nil_vote_consumes_persistent_slot_but_creates_no_candidate_lock(self):
         nil = self.vote("v1", kind="NIL")
