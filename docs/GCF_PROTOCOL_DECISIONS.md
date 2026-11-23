@@ -122,7 +122,7 @@ A persistent `ConsensusSigningGuard` is available to the runtime through an inje
 
 A shared deterministic GCF/2 known-answer vector now exercises proposal signature, validator-set hash, candidate digest, vote signatures, POLC digest, and finality certificate digest in Python and JavaScript. CI evidence is required before marking the vector conformance gate complete.
 
-**Still not production-activated:** proof-bound cross-round lock transitions, HSM custody and hardware anti-equivocation evidence, multi-host peer deployment and partition/restart drills, independent justice authority evidence, independently administered validator hosts, and finality/anchor recovery drills. GCF/2 remains opt-in.
+**Still not production-activated:** HSM custody and hardware anti-equivocation evidence, multi-host peer deployment and partition/restart drills, independent justice authority evidence, independently administered validator hosts, and finality/anchor recovery drills. Proof-bound cross-round candidate-lock transitions are now implemented in the opt-in GCF/2 store: a conflicting value requires a verified round-change certificate whose highest POLC is from a round above the prior lock and commits to the new value. The Python independent verifier and Worker verify the proposal's round-change evidence; conformance tests are pending CI. GCF/2 remains opt-in.
 
 
 ## Verification update — 2026-11-23
