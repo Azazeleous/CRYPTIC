@@ -39,7 +39,7 @@ votes, bounded proof lists, and invalid verifier limits. CI evidence for the
 latest implementation head is recorded in the PR and capability ledger only
 after the corresponding workflow runs complete successfully.
 
-The implemented software path does not automatically schedule timeouts or round advancement. A later-round proposal must be explicitly constructed with a verified certificate; local engine and signer guards independently reject a conflicting value without a higher POLC. The Worker verifies the same certificate chain as part of finality. The remote HSM service itself is not modified by this repository: direct callers that can bypass `PersistentGCFVoteSigner` must be blocked by HSM/KMS policy before production activation. The local adapter now provides durable HSM-backed signing for both votes and round-change messages, but cannot enforce policy against callers that invoke the HSM endpoint directly.
+The branch now includes `src/consensus/round_progression.py`, composed as `ConsensusRuntime.round_progression`. A host scheduler arms the current round and polls the bounded monotonic pacemaker. When due, the controller durably records and returns a `REQUEST_SIGNED_ROUND_CHANGE` intent; it does not sign, advance, unlock, or select a value. The controller advances its local round record only after independently verifying a certificate for exactly the next round and requiring each message's source round to equal its current round. Pending timeout intents and verified certificates survive restart; monotonic timer origins are re-armed after restart. A later-round proposal must still carry its verified certificate, and local engine/signer guards independently reject a conflicting value without a higher POLC. The Worker verifies the same certificate chain as part of finality. The remote HSM service itself is not modified by this repository: direct callers that can bypass `PersistentGCFVoteSigner` must be blocked by HSM/KMS policy before production activation. The local adapter now provides durable HSM-backed signing for both votes and round-change messages, but cannot enforce policy against callers that invoke the HSM endpoint directly.
 The module's verifier result is evidence about a supplied proof only; it is
 not authorization to sign or unlock.
 
@@ -55,7 +55,7 @@ The remote `PersistentGCFVoteSigner` independently records proposal authorizatio
 
 The engine now distinguishes stable value identity from round-specific proposal identity. A later proposal may retain the same value across rounds; changing to a different value requires a verified POLC at a round strictly higher than the local recorded vote-lock round and below the new proposal round. The persistent signer applies the same rule using its own durable round-state table. Historical signed intents remain in the signing-history table and are never erased by a transition. Legacy signer lock rows without corresponding round-state metadata are fail-closed for transitions.
 
-This remains deliberately conservative rather than a full Tendermint-compatible state machine. The current GCF vote model still uses `approve: bool` and does not define explicit nil-vote semantics or a complete timeout/round-scheduling controller. Engine vote-admission locks are not claimed to be a formally acquired consensus lock under a separate lock-acquisition protocol. No timeout, missing peer, process restart, or higher round number releases a lock.
+This remains deliberately conservative rather than a full Tendermint-compatible state machine. The current GCF vote model still uses `approve: bool` and does not define explicit nil-vote semantics. The scheduler-driven round progression controller supplies durable local timeout intents and certificate-gated round records, but it is not an autonomous distributed scheduler or leader-election service. Engine vote-admission locks are not claimed to be a formally acquired consensus lock under a separate lock-acquisition protocol. No timeout, missing peer, process restart, or higher round number releases a lock.
 
 ## 2. Protocol objective and invariants
 
@@ -215,7 +215,7 @@ Tests must include weighted validator sets, not only equal-weight fixtures, and 
 4. **Implemented with remaining drill work:** integrate engine persistence and local signer enforcement; extend crash/restart and concurrent-transition tests.
 5. **Worker verification implemented; HSM-side enforcement remains external.**
 6. **Outstanding:** run multi-process and multi-host partition/recovery drills with independent operators.
-7. Keep the feature disabled until the complete integration and review evidence is recorded.
+7. The local controller and scheduler call contract are implemented; keep production activation disabled until the scheduler, signer, HSM/KMS, peer mesh, and multi-host drill evidence is independently reviewed.
 
 No step may mark the protocol production-ready based only on unit tests, loopback TLS, or CI.
 
@@ -232,4 +232,4 @@ This is a reference model, not a claim that GCF is Tendermint-compatible or that
 
 ---
 
-**Current operational rule:** proof-bound round changes are implemented in the Python engine, persistent local signer guard, peer ingress, and Cloudflare Worker verifier. Automated timeout scheduling remains disabled; direct HSM-side policy, independent four-host drills, external trust ceremonies, and hardware durability evidence remain mandatory before production activation.
+**Current operational rule:** proof-bound round changes are implemented in the Python engine, persistent local signer guard, peer ingress, Cloudflare Worker verifier, and scheduler-driven durable local round progression controller. No background scheduler is launched by the runtime; operators must supply and monitor the scheduler that calls the controller. Direct HSM-side policy, independent four-host drills, external trust ceremonies, and hardware durability evidence remain mandatory before production activation.
