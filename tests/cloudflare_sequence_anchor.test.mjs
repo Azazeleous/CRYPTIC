@@ -297,6 +297,10 @@ test("Python GCF/2 known-answer certificate verifies identically in the Worker",
   ctx.env.ANCHOR_VALIDATOR_SET_SHA256 = vector.validator_set_hash;
   ctx.env.ANCHOR_VALIDATOR_NETWORK_ID = vector.network_id;
   ctx.env.ANCHOR_VALIDATOR_EPOCH = String(vector.epoch);
+  ctx.env.ANCHOR_DB.rows.set(vector.network_id, {
+    sequence: vector.proposal.anchor_sequence - 1,
+    policy_hash: vector.proposal.parent_hash,
+  });
   const proposal = vector.proposal;
   const body = {
     schema: "CRYPTIC-SEQUENCE-ANCHOR/1",
