@@ -89,6 +89,24 @@ class ConsensusSigningGuard:
                 BEFORE DELETE ON consensus_signing_slots
                 BEGIN SELECT RAISE(ABORT,'consensus_signing_slot_immutable'); END
             """)
+            db.execute("""
+                CREATE TRIGGER IF NOT EXISTS consensus_signing_slots_guard_update
+                BEFORE UPDATE ON consensus_signing_slots
+                WHEN OLD.signature_b64 IS NOT NULL
+                  OR NEW.network_id IS NOT OLD.network_id
+                  OR NEW.epoch IS NOT OLD.epoch
+                  OR NEW.height IS NOT OLD.height
+                  OR NEW.round IS NOT OLD.round
+                  OR NEW.signed_round IS NOT OLD.signed_round
+                  OR NEW.slot_type IS NOT OLD.slot_type
+                  OR NEW.validator_id IS NOT OLD.validator_id
+                  OR NEW.protocol_schema IS NOT OLD.protocol_schema
+                  OR NEW.payload_digest IS NOT OLD.payload_digest
+                  OR NEW.payload_json IS NOT OLD.payload_json
+                  OR NEW.created_at IS NOT OLD.created_at
+                  OR NEW.signature_b64 IS NULL
+                BEGIN SELECT RAISE(ABORT,'consensus_signing_slot_immutable'); END
+            """)
 
     @contextmanager
     def _db(self):
@@ -235,6 +253,15 @@ class ConsensusSigningGuard:
                     if db.in_transaction:
                         db.execute("ROLLBACK")
                     raise
+        try:
+            persisted_signature = base64.b64decode(signature_b64, validate=True)
+            if len(persisted_signature) != 64:
+                raise ValueError("persisted_signature_length_invalid")
+            Ed25519PublicKey.from_public_bytes(
+                bytes.fromhex(self.public_key_hex)
+            ).verify(persisted_signature, payload)
+        except Exception as exc:
+            raise ConsensusSigningError("persisted_signer_signature_invalid") from exc
         return {**body, "signature": signature_b64}
 
     def slot_status(self) -> list[dict]:
