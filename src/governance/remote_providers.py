@@ -347,12 +347,14 @@ class HTTPSSequenceAnchor:
                    accepted, issued_at, nonce, signature}.
       HTTP 409/412 is a compare-and-swap conflict. The server MUST commit the
       tuple atomically in storage protected independently from the node's DB.
-    Writes carry a GCF finality certificate; the Worker verifies it against
-    an independently pinned validator set.
+    Writes carry both a GCF finality certificate and a GOD policy-transition
+    authorization. The Worker independently verifies both against separately
+    pinned validator and GOD policy public keys.
     """
 
     def __init__(self, endpoint: str, *, signer_id: str, trusted_public_key: bytes,
                  write_token: str | None = None,
+                 authorization_provider: Any | None = None,
                  timeout: float = 5.0, clock: Callable[[], float] = time.time,
                  transport: Callable | None = None):
         self.endpoint = _https_endpoint(endpoint)
@@ -368,6 +370,10 @@ class HTTPSSequenceAnchor:
                 or any(ch.isspace() for ch in write_token)):
             raise RemoteProviderError("anchor_write_token_invalid")
         self.write_token = write_token
+        if authorization_provider is not None and not callable(
+                getattr(authorization_provider, "authorize_transition", None)):
+            raise RemoteProviderError("god_policy_transition_provider_invalid")
+        self.authorization_provider = authorization_provider
         self.key = _public_key(trusted_public_key)
         self.timeout = float(timeout)
         self.clock = clock
@@ -441,6 +447,8 @@ class HTTPSSequenceAnchor:
             raise RemoteProviderError("anchor_policy_hash_invalid") from exc
         if not isinstance(certificate, Mapping):
             raise RemoteProviderError("anchor_gcf_finality_certificate_required")
+        if self.authorization_provider is None:
+            raise RemoteProviderError("god_policy_transition_authorization_required")
         current = self.read_sequence(network_id)
         if current is None:
             expected_sequence, expected_hash = 0, "0" * 64
@@ -457,6 +465,21 @@ class HTTPSSequenceAnchor:
             "expected_sequence": expected_sequence,
             "expected_policy_hash": expected_hash,
         }
+        policy_authorization = self.authorization_provider.authorize_transition(transition)
+        if not isinstance(policy_authorization, Mapping):
+            raise RemoteProviderError("god_policy_transition_authorization_invalid")
+        expected_authorization = {
+            "schema": POLICY_TRANSITION_SCHEMA,
+            "capability": "cryptic.sequence_anchor.advance",
+            "network_id": network_id,
+            "expected_sequence": expected_sequence,
+            "expected_policy_hash": expected_hash,
+            "sequence": sequence,
+            "policy_hash": policy_hash,
+        }
+        if any(policy_authorization.get(key) != value
+               for key, value in expected_authorization.items()):
+            raise RemoteProviderError("god_policy_transition_binding_mismatch")
         body = {
             "schema": ANCHOR_SCHEMA, "network_id": network_id,
             "sequence": sequence, "policy_hash": policy_hash,
@@ -464,6 +487,7 @@ class HTTPSSequenceAnchor:
             "expected_policy_hash": expected_hash,
             "issued_at": int(self.clock()), "nonce": secrets.token_hex(16),
             "certificate": dict(certificate),
+            "policy_authorization": dict(policy_authorization),
         }
         status, _headers, raw = self.transport(
             "PUT", self._url(network_id),
