@@ -167,6 +167,21 @@ class PoolShareLedger:
             previous=stored_hash
         return True
 
+    def get_share(self, *, share_id: str, proof_hash: str) -> dict | None:
+        """Look up an already committed share for safe idempotent request recovery."""
+        with _connect(self.database) as conn:
+            row = conn.execute(
+                """SELECT share_id,network_id,pool_id,job_id,worker_id,proof_hash,
+                          work_digest,nonce,accepted_at,event_hash
+                   FROM pool_shares WHERE share_id=? AND proof_hash=?""",
+                (share_id, proof_hash),
+            ).fetchone()
+        if row is None:
+            return None
+        keys = ("share_id","network_id","pool_id","job_id","worker_id",
+                "proof_hash","work_digest","nonce","accepted_at","event_hash")
+        return dict(zip(keys, row))
+
     def list_shares(self,worker_id:str|None=None)->list[dict]:
         with _connect(self.database) as conn:
             if worker_id is None:
