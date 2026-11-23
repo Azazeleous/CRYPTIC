@@ -8,7 +8,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from src.consensus.gcf import GCFEngine, GCFError, ValidatorSet, make_proposal, make_vote as make_gcf1_vote, sha256_hex, canonical_bytes
 from src.consensus.gcf2 import make_vote
 from src.consensus.gcf2_engine import GCF2VoteStore
-from src.consensus.gcf2_independent_verifier import (\n    GCF2IndependentVerificationError, verify_finality_certificate,\n)\n
+from src.consensus.gcf2_independent_verifier import (
+    GCF2IndependentVerificationError, verify_finality_certificate,
+)
+
 
 def keypair():
     key = Ed25519PrivateKey.generate()
