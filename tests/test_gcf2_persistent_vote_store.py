@@ -175,6 +175,32 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
         self.assertEqual(lock["candidate_digest"], digest)
         self.assertEqual(lock["first_round"], 2)
 
+        for validator in ("v1", "v2"):
+            self._submit_gcf2_candidate(proposal_round_two, validator)
+        polc = self.store.get_polc(digest)
+        self.assertIsNotNone(polc)
+        finality_result = None
+        for validator in ("v0", "v1", "v2"):
+            finality_result = self.store.submit_vote(make_vote(
+                validator_id=validator,
+                validator_private_key_hex=self.keys[validator][0],
+                network_id="gaia-testnet", epoch=1, height=9, round=2,
+                parent_hash="ab" * 32, vote_type="PRECOMMIT",
+                vote_kind="CANDIDATE", candidate_digest=digest,
+                approve=True, polc_digest=polc["polc_digest"],
+                issued_at=self.now, expires_at=self.now + 60,
+            ))
+        certificate = self.store.get_finality_certificate(height=9)
+        self.assertIsNotNone(finality_result["finality"])
+        checked = verify_finality_certificate(
+            certificate, network_id="gaia-testnet", epoch=1,
+            validators={
+                name: {"public_key_hex": pair[1], "weight": 1}
+                for name, pair in self.keys.items()
+            },
+        )
+        self.assertTrue(checked["valid"], checked)
+
     def test_nil_vote_consumes_persistent_slot_but_creates_no_candidate_lock(self):
         nil = self.vote("v1", kind="NIL")
         self.assertTrue(self.store.submit_vote(nil)["accepted"])
