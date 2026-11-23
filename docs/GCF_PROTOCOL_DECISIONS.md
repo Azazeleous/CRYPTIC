@@ -90,3 +90,16 @@ The opt-in `GCF2VoteStore` now adds:
 - An affirmative candidate PREVOTE quorum produces a deterministic GCF/2 POLC using the separate `GCF/2|POLC` domain and validator-ID-sorted signed PREVOTEs. An affirmative candidate PRECOMMIT is admitted only when it carries the exact persisted POLC digest.
 
 This is still not a GCF/2 finality implementation. The store is opt-in and is not composed into the production runtime. No GCF/2 finality certificate, height advancement, signer/HSM policy integration, peer negotiation, Worker verification, cross-language vectors, or proof-bound lock transition is claimed. GCF/1 remains the only active finality profile. CI for the latest implementation is pending.
+
+
+## GCF/2 implementation status — POLC, finality certificate, and runtime gate
+
+The opt-in GCF/2 path now includes durable vote-slot admission and deterministic POLC construction as described above, plus:
+
+- A durable GCF/2 finality-certificate record scoped uniquely to network, epoch, and height. The certificate contains the verified POLC and canonical validator-ID-sorted affirmative PRECOMMITs.
+- An independent verifier checks the GCF/1 proposal signature and candidate context, GCF/2 vote signatures and windows, validator-set digest, POLC digest/quorum, PRECOMMIT digest binding/quorum, and finality-certificate digest.
+- Once a GCF/2 finality certificate is stored, later votes at that height are rejected so additional arrivals cannot mutate the certificate or create a second finality value.
+- GCF/1 and GCF/2 finality paths reject a conflicting certificate for the same network/epoch/height when they share the same database.
+- The runtime exposes an explicit enable_gcf2_vote_store option. It is disabled by default and requires an injected trusted active-parent resolver. It is not exposed through the GCF/1 HTTP API.
+
+**Activation boundary:** GCF/2 finality certificates are durable protocol evidence, but they do not yet advance chain height or commit the external sequence anchor. GCF/2 is not production-enabled. Local signing/HSM anti-equivocation integration, peer version negotiation and transport, Cloudflare Worker verification, cross-language known-answer vectors, and proof-bound cross-round lock transitions remain required. HCCGN proof and justice-evidence gates remain separate trust checks; the independent certificate verifier does not replace those external gates.
