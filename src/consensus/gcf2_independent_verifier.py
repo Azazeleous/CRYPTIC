@@ -14,6 +14,9 @@ from typing import Any, Mapping
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
+from src.consensus.gcf import ValidatorSet
+from src.consensus.round_change import value_digest, verify_round_change_certificate
+
 SCHEMA = "GCF/2"
 VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\x00"
 PROPOSAL_DOMAIN = b"GCF/1|PROPOSAL|ED25519\x00"
@@ -201,6 +204,26 @@ def verify_finality_certificate(
         proposal, network_id=network_id, epoch=epoch,
         validators=validators, verified_at=certificate["finalized_at"],
     )
+    if proposal["round"] == 0:
+        if "round_change_certificate" in proposal:
+            fail("FINALITY_ROUND_ZERO_HAS_ROUND_CHANGE_CERTIFICATE")
+    else:
+        round_change = proposal.get("round_change_certificate")
+        if not isinstance(round_change, Mapping):
+            fail("FINALITY_ROUND_CHANGE_CERTIFICATE_REQUIRED")
+        validator_set = ValidatorSet(network_id, epoch, validators)
+        checked_round_change = verify_round_change_certificate(
+            round_change, validator_set=validator_set,
+            height=proposal["height"], clock=lambda: certificate["finalized_at"],
+        )
+        if (not checked_round_change.get("valid")
+                or checked_round_change.get("target_round") != proposal["round"]):
+            fail("FINALITY_ROUND_CHANGE_CERTIFICATE_INVALID")
+        highest_polc = checked_round_change.get("highest_polc")
+        if (highest_polc is not None
+                and value_digest(highest_polc["proposal"]) != value_digest(proposal)):
+            fail("FINALITY_PROPOSAL_CONFLICTS_WITH_HIGHEST_POLC")
+
     candidate_digest = hashlib.sha256(canonical_bytes(dict(proposal))).hexdigest()
     if (
         proposal.get("network_id") != network_id
