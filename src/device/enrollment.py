@@ -538,6 +538,7 @@ class DeviceRegistry:
         identifier = _device_id(device_id)
         now = int(self.clock())
         with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT revoked,expires_at FROM devices WHERE device_id=?",
                 (identifier,),
@@ -557,7 +558,6 @@ class DeviceRegistry:
                 **body,
                 "signature": _signature(self.host_private_key, CHALLENGE_DOMAIN, body),
             }
-            connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "INSERT INTO pending_sessions(session_id,device_id,challenge_json,expires_at) VALUES(?,?,?,?)",
                 (body["session_id"], identifier,
@@ -586,6 +586,7 @@ class DeviceRegistry:
             raise DeviceEnrollmentError("device_session_id_invalid")
         now = int(self.clock())
         with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 "SELECT p.challenge_json,p.expires_at,p.consumed,d.public_key_hex,"
                 "d.capabilities_json,d.scopes_json,d.revoked,d.expires_at "
@@ -612,7 +613,6 @@ class DeviceRegistry:
                 RESPONSE_DOMAIN, unsigned, "device_response_signature_invalid",
             )
             expires_at = min(now + SESSION_TTL, row[7])
-            connection.execute("BEGIN IMMEDIATE")
             updated = connection.execute(
                 "UPDATE pending_sessions SET consumed=1 WHERE session_id=? AND consumed=0",
                 (session_id,),
