@@ -145,6 +145,26 @@ class PoolCoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(PoolServiceError, "job_expired"):
             self.pool.submit_share(submission, authenticated_worker_id="worker-a")
 
+    def test_committed_share_retry_recovers_after_job_expiry(self):
+        job = self.issue()
+        submission = execute_pool_job(
+            job, trusted_issuer_public_key_hex=self.public_hex,
+            expected_issuer_id="issuer", expected_pool_id="gaia-internal",
+            expected_network_id="hccgn-test", worker_id="worker-a", now=self.now,
+        )
+        first = self.pool.submit_share(
+            submission, authenticated_worker_id="worker-a"
+        )
+        self.now = job["expires_at"] + 1
+        retry = self.pool.submit_share(
+            submission, authenticated_worker_id="worker-a"
+        )
+        self.assertTrue(retry["accepted"])
+        self.assertTrue(retry["replayed"])
+        self.assertEqual(retry["share_id"], first["share_id"])
+        self.assertEqual(retry["event_hash"], first["event_hash"])
+        self.assertTrue(self.ledger.verify_chain())
+
     def test_nonce_reservations_support_full_uint64_boundary(self):
         start = (1 << 64) - 8
         job = self.issue(nonce_start=start, max_attempts=8)
