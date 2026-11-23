@@ -76,3 +76,17 @@ The pacemaker is not a consensus oracle. It does not automatically create propos
 ## Decision 6 — Compatibility
 
 These decisions do not claim that a pacemaker or nil-vote implementation has already passed conformance tests. The current implementation supports proof-bound explicit round changes; automatic scheduling remains disabled until a separately tested controller is integrated. The protocol remains GCF/1 and does not reinterpret prior signed data.
+
+
+## GCF/2 implementation status — durable vote slots and POLC (in progress)
+
+The opt-in `GCF2VoteStore` now adds:
+
+- Durable SQLite vote slots keyed by network, epoch, height, round, phase, and validator. Candidate and NIL votes compete for the same slot; a second or conflicting vote is rejected after restart as well as within one process.
+- A trusted active-parent resolver is mandatory for both NIL and CANDIDATE votes. Candidate proposals must also resolve to the active parent at admission time; the parent hash carried by a signed vote is not trusted by itself.
+- NIL votes consume the durable slot but do not create a candidate lock, erase an existing candidate lock, or contribute to candidate POLC weight.
+- Candidate locks are deliberately conservative in this iteration: a validator cannot change candidate digest for the same height and phase. The proof-bound cross-round lock-transition path is not yet implemented for GCF/2.
+- GCF/1 and GCF/2 vote stores must share the same SQLite database. Both submission paths reject a height/phase/validator slot already used by the other protocol version, preventing cross-version double-signing.
+- An affirmative candidate PREVOTE quorum produces a deterministic GCF/2 POLC using the separate `GCF/2|POLC` domain and validator-ID-sorted signed PREVOTEs. An affirmative candidate PRECOMMIT is admitted only when it carries the exact persisted POLC digest.
+
+This is still not a GCF/2 finality implementation. The store is opt-in and is not composed into the production runtime. No GCF/2 finality certificate, height advancement, signer/HSM policy integration, peer negotiation, Worker verification, cross-language vectors, or proof-bound lock transition is claimed. GCF/1 remains the only active finality profile. CI for the latest implementation is pending.
