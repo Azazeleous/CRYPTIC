@@ -22,6 +22,7 @@ from src.consensus.hccgn_registry import (
 from src.consensus.hccgn_work import HCCGNWorkProofProvider, PROFILE_ID
 from src.consensus.http_api import GCFWSGI
 from src.consensus.policy_update import GCFPolicyUpdateCoordinator
+from src.consensus.round_progression import RoundProgressionController
 from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.governance.justice_adapter import JusticeEvidenceVerifier
 from src.governance.remote_providers import load_independently_pinned_root
@@ -76,6 +77,7 @@ class ConsensusRuntime:
     adam_store: AdamCommitStore
     apex: APEXValidator
     policy_update: GCFPolicyUpdateCoordinator | None
+    round_progression: RoundProgressionController
     http: GCFWSGI
 
     @property
@@ -201,10 +203,15 @@ def build_consensus_runtime(
             peer_mesh=policy_update_peer_mesh,
             clock=clock or time.time,
         )
+    round_progression = RoundProgressionController(
+        engine=engine, database=root / "round-progression.sqlite3",
+        monotonic=time.monotonic,
+    )
     http = GCFWSGI(engine, apex_validator=apex)
     for database_path in (
         root / "hccgn-proofs.sqlite3", root / "hccgn-target-policy.sqlite3",
         root / "gcf.sqlite3", root / "adam.sqlite3",
+        root / "round-progression.sqlite3",
     ):
         try:
             os.chmod(database_path, 0o600)
@@ -212,5 +219,6 @@ def build_consensus_runtime(
             raise RuntimeConfigurationError("runtime_database_permissions_failed") from exc
     return ConsensusRuntime(
         proof_store, target_policy, work_provider, hccgn_gate, justice_gate,
-        god_authorizer, engine, adam_store, apex, policy_update, http,
+        god_authorizer, engine, adam_store, apex, policy_update,
+        round_progression, http,
     )
