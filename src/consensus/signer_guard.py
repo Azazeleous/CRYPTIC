@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -120,6 +121,56 @@ class ConsensusSigningGuard:
                   BEFORE DELETE ON consensus_signing_lock_history
                   BEGIN SELECT RAISE(ABORT,'consensus_signing_lock_history_immutable'); END;
             """)
+            legacy_rows = db.execute(
+                """SELECT network_id,epoch,height,signed_round,slot_type,
+                          validator_id,protocol_schema,payload_json,created_at
+                   FROM consensus_signing_slots
+                   WHERE slot_type IN ('PREVOTE','PRECOMMIT')
+                   ORDER BY height,signed_round"""
+            ).fetchall()
+            for row in legacy_rows:
+                try:
+                    legacy_body = json.loads(bytes(row[7]).decode("utf-8"))
+                except (ValueError, UnicodeDecodeError, TypeError) as exc:
+                    raise ConsensusSigningError("legacy_signing_slot_payload_invalid") from exc
+                db.execute(
+                    """INSERT OR IGNORE INTO consensus_signing_protocol_locks
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (row[0], row[1], row[2], row[4], row[5], row[6], row[8]),
+                )
+                legacy_digest = legacy_body.get("candidate_digest")
+                if isinstance(legacy_digest, str):
+                    existing_lock = db.execute(
+                        """SELECT locked_round FROM consensus_signing_candidate_locks
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND slot_type=? AND validator_id=?""",
+                        (row[0], row[1], row[2], row[4], row[5]),
+                    ).fetchone()
+                    if existing_lock is None:
+                        db.execute(
+                            """INSERT INTO consensus_signing_candidate_locks
+                               VALUES(?,?,?,?,?,?,?)""",
+                            (row[0], row[1], row[2], row[4], row[5],
+                             legacy_digest, row[3]),
+                        )
+                        db.execute(
+                            """INSERT INTO consensus_signing_lock_history
+                               (network_id,epoch,height,slot_type,validator_id,
+                                protocol_schema,previous_digest,candidate_digest,
+                                round,transition_kind,evidence_digest,created_at)
+                               VALUES(?,?,?,?,?,?,NULL,?,?,?,NULL,?)""",
+                            (row[0], row[1], row[2], row[4], row[5], row[6],
+                             legacy_digest, row[3], "MIGRATED_EXISTING_LOCK", row[8]),
+                        )
+                    elif row[3] > existing_lock[0]:
+                        db.execute(
+                            """UPDATE consensus_signing_candidate_locks
+                               SET candidate_digest=?,locked_round=?
+                               WHERE network_id=? AND epoch=? AND height=?
+                                 AND slot_type=? AND validator_id=?""",
+                            (legacy_digest, row[3], row[0], row[1], row[2],
+                             row[4], row[5]),
+                        )
             db.execute("""
                 CREATE TRIGGER IF NOT EXISTS consensus_signing_slots_no_delete
                 BEFORE DELETE ON consensus_signing_slots
@@ -143,6 +194,10 @@ class ConsensusSigningGuard:
                   OR NEW.signature_b64 IS NULL
                 BEGIN SELECT RAISE(ABORT,'consensus_signing_slot_immutable'); END
             """)
+        try:
+            os.chmod(self.database, 0o600)
+        except OSError as exc:
+            raise ConsensusSigningError("signer_database_permissions_failed") from exc
 
     @contextmanager
     def _db(self):
@@ -186,6 +241,8 @@ class ConsensusSigningGuard:
             raise ConsensusSigningError("consensus_vote_slot_invalid")
         if body["vote_type"] not in ("PREVOTE", "PRECOMMIT"):
             raise ConsensusSigningError("consensus_vote_phase_invalid")
+        if isinstance(created_at, bool) or not isinstance(created_at, int) or created_at < 0:
+            raise ConsensusSigningError("signing_timestamp_invalid")
         candidate_digest = body.get("candidate_digest")
         vote_kind = body.get("vote_kind", "CANDIDATE")
         if schema == "GCF/2" and vote_kind == "NIL":
