@@ -45,16 +45,10 @@ def build_consensus_lock_transition_verifier(
         if not isinstance(evidence, Mapping) or not isinstance(next_vote, Mapping):
             return False
         try:
-            prior_proposal = engine._proposal(
-                engine._db_context_for_read(), prior_digest
-            )
+            with engine._db() as db:
+                prior_proposal = engine._proposal(db, prior_digest)
         except Exception:
-            # Use the engine's read helper without relying on an open transaction.
-            try:
-                with engine._db() as db:
-                    prior_proposal = engine._proposal(db, prior_digest)
-            except Exception:
-                return False
+            return False
         try:
             with engine._db() as db:
                 next_proposal = engine._proposal(db, next_vote["candidate_digest"])
