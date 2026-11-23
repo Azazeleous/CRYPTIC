@@ -127,7 +127,7 @@ class PoolCoordinatorTests(unittest.TestCase):
             issuer_id="issuer", pool_id="gaia-internal",
             network_id="hccgn-test",
             trusted_issuer_public_key_hex=self.public_hex,
-            resolve_active_target=lambda boundary: b"\\xff" * 32,
+            resolve_active_target=lambda boundary: b"\xff" * 32,
             clock=lambda: self.now,
         )
         self.assertEqual(restarted.status()["jobs_expired"], 1)
