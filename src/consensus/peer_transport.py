@@ -95,7 +95,7 @@ class GCFPeerNode:
         self.replay_db_path = str(replay_db_path)
         Path(self.replay_db_path).parent.mkdir(parents=True, exist_ok=True)
         with self._db() as db:
-            db.execute("""
+            db.executescript("""
                 CREATE TABLE IF NOT EXISTS peer_messages(
                   sender_id TEXT NOT NULL,
                   message_id TEXT NOT NULL,
