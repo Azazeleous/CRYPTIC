@@ -21,6 +21,7 @@ from src.consensus.gcf2 import (
 )
 
 POLC_DOMAIN = b"GCF/2|POLC\x00"
+CERT_DOMAIN = b"GCF/2|FINALITY-CERTIFICATE\x00"
 
 
 class GCF2VoteStore:
