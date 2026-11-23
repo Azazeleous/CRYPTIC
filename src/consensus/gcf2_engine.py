@@ -485,6 +485,22 @@ class GCF2VoteStore:
         proposal = certificate.get("proposal")
         if not isinstance(proposal, Mapping):
             raise GCFError("GCF2_FINALITY_PROPOSAL_MISSING")
+        if self._trusted_parent(height) != proposal.get("parent_hash"):
+            raise GCFError("GCF2_FINALITY_PARENT_NOT_ACTIVE")
+        validators = {
+            validator_id: {
+                "public_key_hex": validator.public_key_hex,
+                "weight": validator.weight,
+            }
+            for validator_id, validator in self.validator_set.validators.items()
+        }
+        from src.consensus.gcf2_independent_verifier import verify_finality_certificate
+        independently_verified = verify_finality_certificate(
+            certificate, network_id=self.validator_set.network_id,
+            epoch=self.validator_set.epoch, validators=validators,
+        )
+        if not independently_verified.get("valid"):
+            raise GCFError("GCF2_FINALITY_CERTIFICATE_REVERIFICATION_FAILED")
         anchor_sequence = proposal.get("anchor_sequence")
         if (isinstance(anchor_sequence, bool) or not isinstance(anchor_sequence, int)
                 or anchor_sequence < 1):
