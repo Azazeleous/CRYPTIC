@@ -46,4 +46,10 @@ tests/test_error_correction.py covers field inverses and primitive-element cycli
 
 The chunk store uses SHA-256 content addressing, immutable manifest IDs, same-directory atomic replacement, file fsync, and best-effort directory fsync. Reads are side-effect free and verify every chunk digest, declared size, total size, and whole-content digest. Platform-specific power-loss durability remains unverified.
 
-The code is a software reference implementation. It does not claim hardware acceleration, constant-time operation, formal proof, storage durability, or production deployment. Benchmarks and platform-specific performance claims require separate measurements.
+CI evidence on source commit db726ee691c292df4e84777a6ed9f16c604e2206:
+
+- CRYPTIC CI run 45214995986 — 393 tests passed.
+- Mining-engine run 45214995960 — 393 tests passed; independent Go HCCGN conformance and bounded HCCGN/SHA-256d benchmark steps passed.
+- GAIA local trophy workflow run 45214996067 — passed.
+
+The code is a software reference implementation. It does not claim hardware acceleration, constant-time operation, formal proof, physical power-loss durability, or production deployment. The three-lane design uses two separately written RS decoders plus the layered QC-LDPC/RS path; a third-party implementation and formal proof remain future verification work. Benchmarks and platform-specific performance claims require separate measurements.
