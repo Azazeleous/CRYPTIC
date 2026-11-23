@@ -49,6 +49,22 @@ class PoolCoordinatorTests(unittest.TestCase):
         params.update(overrides)
         return self.pool.issue_job(**params)
 
+    def test_pool_binds_settlement_ledger_to_historical_job_resolver(self):
+        ledger = self.pool.configure_settlement_ledger(
+            database=self.root / "settlements.sqlite3",
+            trusted_reward_policy_public_key_hex=self.public_hex,
+            verify_finality_certificate=lambda *_args: {"valid": True},
+        )
+        self.assertIs(self.pool.settlement_ledger, ledger)
+        with self.assertRaisesRegex(
+            PoolServiceError, "pool_settlement_ledger_already_configured"
+        ):
+            self.pool.configure_settlement_ledger(
+                database=self.root / "second-settlement.sqlite3",
+                trusted_reward_policy_public_key_hex=self.public_hex,
+                verify_finality_certificate=lambda *_args: {"valid": True},
+            )
+
     def test_issue_submit_and_measure_durable_state(self):
         job = self.issue()
         submission = execute_pool_job(
