@@ -24,12 +24,12 @@
 | Model routing | proposed | provider contract and evaluation |
 | Local model inference | proposed | reproducible benchmark on target hardware |
 | Extension absorption | proposed | sandbox, manifest, conformance, permission tests |
-| GF(256) | proposed | field axioms and known-answer tests |
-| Reed–Solomon | proposed | encode/decode vectors and error-bound tests |
-| Berlekamp–Welch | proposed | polynomial reconstruction tests |
-| QC-LDPC | proposed | parity-check, syndrome, decoder convergence tests |
-| Three-lane correction | proposed | fault injection and independent re-verification |
-| Chunked sparse storage | proposed | layout benchmark, crash recovery, integrity tests |
+| GF(256) | implemented (E3 reference; PR #36 CI-verified) | Primitive polynomial 0x11D; field inverse, multiplication, division, polynomial operations, and finite-field linear solving. CRYPTIC CI run 45214995986 and mining-engine run 45214995960 each passed 393 tests. |
+| Reed–Solomon | implemented (E3 reference; PR #36 CI-verified) | Non-systematic GF(256) evaluation profile; corrects up to floor((n-k)/2) unknown symbol errors; erasure decoding is not claimed. PR #36 CI run 45214995986 passed 393 tests. |
+| Berlekamp–Welch | implemented (E3 reference; PR #36 CI-verified) | Bounded polynomial recovery with uniqueness checks and deterministic error-position reporting. A separately written bitwise-GF(256) reference decoder is included. PR #36 CI run 45214995986 passed 393 tests. |
+| QC-LDPC | implemented (E3 reference; PR #36 CI-verified) | Structured circulant-shift base matrix, systematic encoder, normalized min-sum decoder, single-bit syndrome path, and fail-closed convergence checks. This is QC-LDPC, not random sparse LDPC. PR #36 CI run 45214995986 passed 393 tests. |
+| Three-lane correction | implemented (E2 reference; PR #36 CI-verified) | Layered QC-LDPC/production-RS, direct production-RS, and separately written bitwise-GF(256) reference-RS lanes. Two-of-three agreement required; accepted output is re-encoded by both RS implementations and QC encoder. Third-party implementation/formal proof remain open. PR #36 CI run 45214995986 passed 393 tests. |
+| Chunked content-addressed storage | implemented (E2 reference; PR #36 CI-verified) | SHA-256 chunk objects, canonical immutable manifests, atomic writes, file fsync, best-effort directory fsync, and read-time chunk/manifest/whole-content verification. Physical power-loss durability remains unverified. PR #36 CI run 45214995986 passed 393 tests. |
 | Virtual computer/SOS | proposed | isolation and escape-resistance tests |
 | Device assistant | proposed | enrollment, scope, revoke, audit tests |
 | Local seed and Merkle ledger CLI | implemented (E2) | seven local unit tests pass; repository commit and runtime integration still require CI/integration evidence |
@@ -60,11 +60,11 @@ Update this ledger only with reproducible evidence. Never mark a feature complet
 
 ## Phase 4 implementation verification — 2026-11-23
 
-At commit 40b373e5d4aeebdc63d7efc93ef01b45459b5246:
+At source commit db726ee691c292df4e84777a6ed9f16c604e2206:
 
-- CRYPTIC CI: run 45207388160 — 386 unit tests passed.
-- Mining-engine tests: run 45207388327 — 386 unit tests passed; independent Go HCCGN conformance vectors and bounded HCCGN/SHA-256d benchmarks passed.
-- GAIA local trophy mining: run 45207387922 — passed.
+- CRYPTIC CI: run 45214995986 — 393 unit tests passed.
+- Mining-engine tests: run 45214995960 — 393 unit tests passed; independent Go HCCGN conformance vectors and bounded HCCGN/SHA-256d benchmark steps passed.
+- GAIA local trophy mining: run 45214996067 — passed.
 
 | Capability | Status | Evidence and boundary |
 |---|---|---|
@@ -74,5 +74,6 @@ At commit 40b373e5d4aeebdc63d7efc93ef01b45459b5246:
 | QC-LDPC | implemented and CI-verified in PR #36 | Structured circulant-shift base matrix, identity-circulant parity partition, systematic encoding, normalized min-sum, and verified single-bit syndrome correction. This is QC-LDPC, not random sparse LDPC. |
 | Layered correction | implemented and CI-verified in PR #36 | QC-LDPC decoding is followed by Reed-Solomon decoding, syndrome verification, independent re-encoding, and a SHA-256 output receipt. |
 | Content-addressed chunk storage | implemented and CI-verified in PR #36 | Immutable SHA-256 chunk objects and canonical manifests; read-time chunk, size, manifest, and whole-content verification. File fsync and best-effort directory fsync are implemented, but physical power-loss durability is not established. |
+| Three-lane correction | implemented and CI-verified in PR #36 | Layered QC-LDPC/production-RS, direct production-RS, and separately written bitwise-GF(256) reference-RS decoder. Two-of-three agreement is required; both RS implementations and the QC encoder independently re-encode accepted output. A third-party implementation and formal proof remain open. |
 
-Three-lane correction across independently implemented decoders, formal proof, performance qualification, and physical power-loss recovery remain open. This CI evidence verifies the repository test profile only; it does not establish production deployment or hardware durability.
+This CI evidence verifies the repository test profile only; it does not establish production deployment, constant-time behavior, formal proof, hardware durability, or cross-platform storage power-loss guarantees.
