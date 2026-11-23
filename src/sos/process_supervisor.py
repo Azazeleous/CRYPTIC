@@ -180,7 +180,7 @@ class ProcessSupervisor:
                 raise ProcessSupervisorError("worker_deadline_invalid")
             deadline = min(deadline, float(deadline_monotonic))
         if deadline <= started:
-            raise ProcessDeadlineExceeded("worker_deadline_exceeded", worker_terminated=True)
+            raise ProcessDeadlineExceeded("worker_deadline_exceeded", worker_terminated=False)
 
         receive_connection, send_connection = self._ctx.Pipe(duplex=False)
         process = self._ctx.Process(
