@@ -61,7 +61,7 @@ class QCParityCheck:
         self.parity_bits = rows * lift
         self.codeword_bits = columns * lift
         checks: list[tuple[int, ...]] = []
-        for row_block, row in enumerate(matrix):
+        for row in matrix:
             for index in range(lift):
                 neighbors = tuple(
                     column * lift + ((index + shift) % lift)
@@ -78,9 +78,8 @@ class QCParityCheck:
         if len(values) != expected:
             raise QCLDPCError(name + "_length_invalid")
         result = tuple(values)
-        if any(isinstance(bit, bool) is False and bit not in (0, 1) for bit in result):
-            raise QCLDPCError(name + "_must_contain_bits")
-        if any(bit not in (0, 1) for bit in result):
+        if any(isinstance(bit, bool) or not isinstance(bit, int) or bit not in (0, 1)
+               for bit in result):
             raise QCLDPCError(name + "_must_contain_bits")
         return result
 
@@ -101,10 +100,8 @@ class QCParityCheck:
 
     def syndrome(self, codeword_bits: Sequence[int]) -> tuple[int, ...]:
         bits = self._bits(codeword_bits, self.codeword_bits, "codeword")
-        return tuple(
-            _xor(bits[index] for index in neighbors)
-            for neighbors in self.check_to_variables
-        )
+        return tuple(_xor(bits[index] for index in neighbors)
+                     for neighbors in self.check_to_variables)
 
     def decode(
         self,
@@ -117,11 +114,15 @@ class QCParityCheck:
             raise QCLDPCError("llr_length_invalid")
         if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or max_iterations < 1:
             raise QCLDPCError("max_iterations_invalid")
-        if not isinstance(normalization, (int, float)) or not math.isfinite(normalization) or not 0 < normalization <= 1:
+        if (not isinstance(normalization, (int, float)) or isinstance(normalization, bool)
+                or not math.isfinite(normalization) or not 0 < normalization <= 1):
             raise QCLDPCError("normalization_must_be_in_0_1")
-        channel = tuple(float(value) for value in channel_llr)
+        try:
+            channel = tuple(float(value) for value in channel_llr)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise QCLDPCError("llr_values_must_be_finite_numbers") from exc
         if any(not math.isfinite(value) for value in channel):
-            raise QCLDPCError("llr_values_must_be_finite")
+            raise QCLDPCError("llr_values_must_be_finite_numbers")
         check_messages = [[0.0] * len(neighbors) for neighbors in self.check_to_variables]
         posterior = list(channel)
         hard = tuple(0 if value >= 0 else 1 for value in posterior)
@@ -145,7 +146,6 @@ class QCParityCheck:
                 for edge in range(len(neighbors)):
                     others = [value for j, value in enumerate(incoming) if j != edge]
                     if not others:
-                        outgoing[edge] = 0.0
                         continue
                     sign = -1.0 if sum(value < 0 for value in others) % 2 else 1.0
                     magnitude = min(abs(value) for value in others)
