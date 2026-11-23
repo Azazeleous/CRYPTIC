@@ -124,3 +124,5 @@ At commit `1708a6d57d87e64e4da51b749427a53ed3c75704`, the following GitHub Actio
 - GAIA local trophy mining: run 45159184527
 
 The CI suite includes the finalized-block pool settlement ledger, persistent signer guard, signed GCF peer capability negotiation, GCF/2 finality verifier, Python/JavaScript known-answer vector, and Cloudflare sequence-anchor GCF/2 verification. This is repository test evidence only; it does not satisfy external HSM custody, independent validator operations, justice-authority governance, physical recovery drills, or production activation gates.
+
+| GCF/2 proof-bound lock transitions | implementation and targeted tests added; CI pending | Candidate locks now preserve value identity across rounds. A conflicting value requires a verified round-change certificate, a highest POLC from a round strictly above the prior lock, and exact value-digest equality with the new proposal. Same-value continuation can advance with a valid round-change certificate. NIL votes never create or modify candidate locks. The independent Python finality verifier validates nested round-change evidence. |
