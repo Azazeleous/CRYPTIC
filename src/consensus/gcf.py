@@ -272,6 +272,16 @@ class GCFEngine:
               certificate_digest TEXT NOT NULL,
               PRIMARY KEY(network_id,epoch,height,target_round)
             );
+            CREATE TABLE IF NOT EXISTS round_change_message_history(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              target_round INTEGER NOT NULL, validator_id TEXT NOT NULL, nonce TEXT NOT NULL,
+              message_json TEXT NOT NULL, received_at INTEGER NOT NULL,
+              PRIMARY KEY(network_id,epoch,height,target_round,validator_id,nonce),
+              UNIQUE(network_id,epoch,height,validator_id,nonce)
+            );
+            INSERT OR IGNORE INTO round_change_message_history
+              SELECT network_id,epoch,height,target_round,validator_id,nonce,message_json,received_at
+              FROM round_change_messages;
             INSERT OR IGNORE INTO vote_locks
               SELECT p.network_id,p.epoch,p.height,p.round,v.vote_type,v.validator_id,v.candidate_digest
               FROM votes v JOIN proposals p ON p.candidate_digest=v.candidate_digest;
@@ -629,29 +639,48 @@ class GCFEngine:
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
-                existing = db.execute("""
-                    SELECT message_json FROM round_change_messages
+                encoded = encoded_message.decode()
+                prior_rows = db.execute("""
+                    SELECT message_json FROM round_change_message_history
                     WHERE network_id=? AND epoch=? AND height=?
                       AND target_round=? AND validator_id=?
                 """, (self.validator_set.network_id, self.validator_set.epoch,
-                      height, target, checked["validator_id"])).fetchone()
-                encoded = encoded_message.decode()
-                if existing is not None:
-                    if existing["message_json"] != encoded:
+                      height, target, checked["validator_id"])).fetchall()
+                for prior_row in prior_rows:
+                    prior_message = json.loads(prior_row["message_json"])
+                    prior_check = verify_round_change_message(
+                        prior_message, validator_set=self.validator_set,
+                        height=height, target_round=target, clock=self.clock,
+                    )
+                    if prior_check.get("valid"):
+                        if prior_row["message_json"] == encoded:
+                            raise GCFError("ROUND_CHANGE_DUPLICATE")
                         raise GCFError("ROUND_CHANGE_EQUIVOCATION")
-                    raise GCFError("ROUND_CHANGE_DUPLICATE")
                 db.execute("""
-                    INSERT INTO round_change_messages VALUES(?,?,?,?,?,?,?,?)
+                    INSERT INTO round_change_message_history VALUES(?,?,?,?,?,?,?,?)
                 """, (self.validator_set.network_id, self.validator_set.epoch,
                       height, target, checked["validator_id"], message["nonce"],
                       encoded, int(self.clock())))
                 rows = db.execute("""
-                    SELECT message_json FROM round_change_messages
+                    SELECT validator_id,message_json FROM round_change_message_history
                     WHERE network_id=? AND epoch=? AND height=? AND target_round=?
-                    ORDER BY validator_id
+                    ORDER BY validator_id,received_at DESC,nonce DESC
                 """, (self.validator_set.network_id, self.validator_set.epoch,
                       height, target)).fetchall()
-                messages = [json.loads(row["message_json"]) for row in rows]
+                active_by_validator = {}
+                for row in rows:
+                    prior_message = json.loads(row["message_json"])
+                    prior_check = verify_round_change_message(
+                        prior_message, validator_set=self.validator_set,
+                        height=height, target_round=target, clock=self.clock,
+                    )
+                    if not prior_check.get("valid"):
+                        continue
+                    validator_id = row["validator_id"]
+                    if validator_id in active_by_validator:
+                        raise GCFError("ROUND_CHANGE_ACTIVE_MESSAGE_CONFLICT")
+                    active_by_validator[validator_id] = prior_message
+                messages = [active_by_validator[key] for key in sorted(active_by_validator)]
                 certificate = make_round_change_certificate(
                     messages, network_id=self.validator_set.network_id,
                     epoch=self.validator_set.epoch, height=height, target_round=target,
@@ -705,9 +734,10 @@ class GCFEngine:
             raise GCFError("ROUND_CHANGE_UNKNOWN_VALIDATOR")
         with self._db() as db:
             row = db.execute("""
-                SELECT message_json FROM round_change_messages
+                SELECT message_json FROM round_change_message_history
                 WHERE network_id=? AND epoch=? AND height=?
                   AND target_round=? AND validator_id=?
+                ORDER BY received_at DESC,nonce DESC
             """, (self.validator_set.network_id, self.validator_set.epoch,
                   height, target_round, validator_id)).fetchone()
         if row is None:
