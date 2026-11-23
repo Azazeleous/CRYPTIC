@@ -10,6 +10,7 @@ from src.device.enrollment import (
     DeviceEnrollmentError,
     DeviceRegistry,
     make_device_response,
+    make_device_revocation,
     make_enrollment_certificate,
     make_enrollment_request,
 )
@@ -146,14 +147,37 @@ class DeviceEnrollmentTests(unittest.TestCase):
 
     def test_device_revocation_invalidates_existing_sessions(self):
         _challenge, _response, session = self.enroll_and_authenticate()
-        self.assertTrue(self.registry.revoke_device(
-            "samsung-a15-controller", actor="operator-root",
-        ))
+        revocation = make_device_revocation(
+            device_id="samsung-a15-controller",
+            operator_private_key=self.operator_private,
+            signer_id="operator-root",
+            issued_at=self.now,
+            expires_at=self.now + 120,
+            nonce="3" * 32,
+        )
+        self.assertTrue(self.registry.revoke_device(revocation))
         self.assertFalse(self.registry.authorize(
             session.session_id, "network.read", "network:lan",
         ))
         with self.assertRaisesRegex(DeviceEnrollmentError, "device_not_active"):
             self.registry.begin_authentication("samsung-a15-controller")
+
+    def test_unsigned_or_replayed_revocation_is_rejected(self):
+        self.registry.enroll(self.request, self.certificate)
+        revocation = make_device_revocation(
+            device_id="samsung-a15-controller",
+            operator_private_key=self.operator_private,
+            signer_id="operator-root",
+            issued_at=self.now,
+            expires_at=self.now + 120,
+            nonce="4" * 32,
+        )
+        forged = {**revocation, "device_id": "another-device"}
+        with self.assertRaisesRegex(DeviceEnrollmentError, "signature_invalid"):
+            self.registry.revoke_device(forged)
+        self.assertTrue(self.registry.revoke_device(revocation))
+        with self.assertRaisesRegex(DeviceEnrollmentError, "device_revocation_replay"):
+            self.registry.revoke_device(revocation)
 
     def test_expired_session_is_not_authorized(self):
         _challenge, _response, session = self.enroll_and_authenticate()
