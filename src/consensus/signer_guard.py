@@ -87,7 +87,7 @@ class ConsensusSigningGuard:
                   payload_json BLOB NOT NULL,
                   signature_b64 TEXT,
                   created_at INTEGER NOT NULL,
-                  PRIMARY KEY(network_id,epoch,height,slot_type,validator_id)
+                  PRIMARY KEY(network_id,epoch,height,round,slot_type,validator_id)
                 )
             """)
             db.executescript("""
@@ -121,6 +121,35 @@ class ConsensusSigningGuard:
                   BEFORE DELETE ON consensus_signing_lock_history
                   BEGIN SELECT RAISE(ABORT,'consensus_signing_lock_history_immutable'); END;
             """)
+            slot_pk = [
+                row[1] for row in sorted(
+                    (row for row in db.execute("PRAGMA table_info(consensus_signing_slots)")
+                     if row[5] > 0), key=lambda item: item[5]
+                )
+            ]
+            if "round" not in slot_pk:
+                db.execute("DROP TRIGGER IF EXISTS consensus_signing_slots_no_delete")
+                db.execute("DROP TRIGGER IF EXISTS consensus_signing_slots_guard_update")
+                db.execute("""
+                    CREATE TABLE consensus_signing_slots_v2 (
+                      network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                      height INTEGER NOT NULL, round INTEGER NOT NULL,
+                      signed_round INTEGER NOT NULL, slot_type TEXT NOT NULL,
+                      validator_id TEXT NOT NULL, protocol_schema TEXT NOT NULL,
+                      payload_digest TEXT NOT NULL, payload_json BLOB NOT NULL,
+                      signature_b64 TEXT, created_at INTEGER NOT NULL,
+                      PRIMARY KEY(network_id,epoch,height,round,slot_type,validator_id)
+                    )
+                """)
+                db.execute("""
+                    INSERT INTO consensus_signing_slots_v2
+                    SELECT network_id,epoch,height,signed_round,signed_round,
+                           slot_type,validator_id,protocol_schema,payload_digest,
+                           payload_json,signature_b64,created_at
+                    FROM consensus_signing_slots
+                """)
+                db.execute("DROP TABLE consensus_signing_slots")
+                db.execute("ALTER TABLE consensus_signing_slots_v2 RENAME TO consensus_signing_slots")
             legacy_rows = db.execute(
                 """SELECT network_id,epoch,height,signed_round,slot_type,
                           validator_id,protocol_schema,payload_json,created_at
