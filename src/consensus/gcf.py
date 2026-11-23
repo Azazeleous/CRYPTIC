@@ -747,7 +747,11 @@ class GCFEngine:
             message, validator_set=self.validator_set, height=height,
             target_round=target_round, clock=self.clock,
         )
-        if not checked.get("valid") or checked["validator_id"] != validator_id:
+        if not checked.get("valid"):
+            if checked.get("reason") == "round_change_expired_or_future":
+                return None
+            raise GCFError("PERSISTED_ROUND_CHANGE_MESSAGE_INVALID")
+        if checked["validator_id"] != validator_id:
             raise GCFError("PERSISTED_ROUND_CHANGE_MESSAGE_INVALID")
         return message
 
