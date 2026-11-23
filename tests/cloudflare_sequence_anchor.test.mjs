@@ -10,7 +10,6 @@ import worker from "../cloudflare/sequence-anchor/src/index.js";
 const ZERO = "0".repeat(64);
 const TOKEN = "anchor-test-token-".padEnd(40, "x");
 const ANCHOR_DOMAIN = new TextEncoder().encode("CRYPTIC-SEQUENCE-ANCHOR/1\0");
-const GOD_POLICY_DOMAIN = new TextEncoder().encode("CRYPTIC-GOD-POLICY-TRANSITION/1\0");
 const PROPOSAL_DOMAIN = new TextEncoder().encode("GCF/1|PROPOSAL|ED25519\0");
 const VOTE_DOMAIN = new TextEncoder().encode("GCF/1|VOTE|ED25519\0");
 const CERT_DOMAIN = new TextEncoder().encode("GCF/1|FINALITY-CERTIFICATE\0");
@@ -89,9 +88,6 @@ async function setup() {
   const anchorPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
   const anchorPkcs8 = await crypto.subtle.exportKey("pkcs8", anchorPair.privateKey);
   const anchorPublic = await crypto.subtle.exportKey("raw", anchorPair.publicKey);
-  const godPair = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-  const godPublic = new Uint8Array(await crypto.subtle.exportKey("raw", godPair.publicKey));
-  const godPublicHex = Array.from(godPublic, b => b.toString(16).padStart(2, "0")).join("");
   const validatorPairs = [];
   const validators = [];
   for (let i = 1; i <= 4; i++) {
@@ -112,12 +108,9 @@ async function setup() {
     ANCHOR_VALIDATOR_SET_SHA256: setHash,
     ANCHOR_VALIDATOR_NETWORK_ID: "test-net",
     ANCHOR_VALIDATOR_EPOCH: "1",
-    ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX: godPublicHex,
-    ANCHOR_GOD_POLICY_SIGNER_ID: "god-policy-root",
-    ANCHOR_GOD_POLICY_ID: "cryptic-policy-v1",
   };
   return {
-    env, validatorPairs, validators, godPair,
+    env, validatorPairs, validators,
     anchorPublicKey: await crypto.subtle.importKey("raw", anchorPublic,
       { name: "Ed25519" }, false, ["verify"]),
   };
@@ -253,36 +246,13 @@ async function makeRoundChangeCertificate(messages, { height, targetRound }) {
   ])) };
 }
 
-async function makeGodPolicyAuthorization(ctx, transition) {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const unsigned = {
-    schema: "CRYPTIC-GOD-POLICY-TRANSITION/1",
-    signer_id: "god-policy-root",
-    capability: "cryptic.sequence_anchor.advance",
-    policy_id: "cryptic-policy-v1",
-    network_id: transition.network_id,
-    expected_sequence: transition.expected_sequence,
-    expected_policy_hash: transition.expected_policy_hash,
-    sequence: transition.sequence,
-    policy_hash: transition.policy_hash,
-    issued_at: issuedAt,
-    expires_at: issuedAt + 120,
-    nonce: crypto.randomUUID().replaceAll("-", "").slice(0, 32),
-  };
+function writeBody(sequence, hash, expectedSequence, expectedHash, certificate) {
   return {
-    ...unsigned,
-    signature: await sign(ctx.godPair.privateKey, GOD_POLICY_DOMAIN, unsigned),
-  };
-}
-async function writeBody(ctx, sequence, hash, expectedSequence, expectedHash, certificate) {
-  const body = {
     schema: "CRYPTIC-SEQUENCE-ANCHOR/1", network_id: "test-net",
     sequence, policy_hash: hash, expected_sequence: expectedSequence,
     expected_policy_hash: expectedHash, issued_at: Math.floor(Date.now() / 1000),
     nonce: crypto.randomUUID().replaceAll("-", "").slice(0, 32), certificate,
   };
-  body.policy_authorization = await makeGodPolicyAuthorization(ctx, body);
-  return body;
 }
 async function put(ctx, body, initial = false) {
   return request(ctx.env, "PUT", "/v1/anchors/test-net", {
@@ -304,7 +274,7 @@ async function verifyAnchorRecord(record, publicKey) {
 test("unauthenticated write is rejected before D1 mutation", async () => {
   const ctx = await setup();
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: "1".repeat(64) });
-  const body = await writeBody(ctx,1, "1".repeat(64), 0, ZERO, cert);
+  const body = writeBody(1, "1".repeat(64), 0, ZERO, cert);
   const response = await request(ctx.env, "PUT", "/v1/anchors/test-net", {
     headers: { "if-none-match": "*", "content-type": "application/json" }, body,
   });
@@ -315,54 +285,12 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
 test("bearer-token holder cannot advance an arbitrary tuple without valid GCF finality", async () => {
   const ctx = await setup();
   const arbitraryHash = "9".repeat(64);
-  const body = await writeBody(ctx,9001, arbitraryHash, 0, ZERO, {
+  const body = writeBody(9001, arbitraryHash, 0, ZERO, {
     schema: "GCF/1",
     network_id: "test-net",
     sequence: 9001,
     policy_hash: arbitraryHash,
   });
-  const response = await put(ctx, body, true);
-  assert.equal(response.status, 403);
-  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
-});
-
-test("Worker requires a GOD signature bound to the exact policy transition", async () => {
-  const ctx = await setup();
-  const hash = "8".repeat(64);
-  const certificate = await makeCertificate(ctx, {
-    sequence: 1, oldHash: ZERO, newHash: hash,
-  });
-  const body = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
-  body.policy_authorization = {
-    ...body.policy_authorization,
-    policy_hash: "7".repeat(64),
-  };
-  const response = await put(ctx, body, true);
-  assert.equal(response.status, 403);
-  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
-});
-
-test("Worker fails closed when the GOD policy trust root is not configured", async () => {
-  const ctx = await setup();
-  const hash = "8".repeat(64);
-  const certificate = await makeCertificate(ctx, {
-    sequence: 1, oldHash: ZERO, newHash: hash,
-  });
-  const body = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
-  delete ctx.env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX;
-  const response = await put(ctx, body, true);
-  assert.equal(response.status, 503);
-  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
-});
-
-test("Worker rejects a forged GOD signature before any D1 mutation", async () => {
-  const ctx = await setup();
-  const hash = "8".repeat(64);
-  const certificate = await makeCertificate(ctx, {
-    sequence: 1, oldHash: ZERO, newHash: hash,
-  });
-  const body = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
-  body.policy_authorization.signature = b64(new Uint8Array(64));
   const response = await put(ctx, body, true);
   assert.equal(response.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
@@ -401,7 +329,6 @@ test("Python GCF/2 known-answer certificate verifies identically in the Worker",
       proposal, certificate: vector.certificate,
     },
   };
-  body.policy_authorization = await makeGodPolicyAuthorization(ctx, body);
   const response = await request(
     ctx.env, "PUT", "/v1/anchors/" + vector.network_id,
     { headers: {
@@ -420,7 +347,7 @@ test("pinned GCF/2 finality certificate authorizes sequence-anchor initializatio
   const certificate = await makeGcf2AnchorEnvelope(ctx, {
     sequence: 1, height: 44, oldHash: ZERO, newHash: hash,
   });
-  const response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, certificate), true);
+  const response = await put(ctx, writeBody(1, hash, 0, ZERO, certificate), true);
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").policy_hash, hash);
 });
@@ -432,7 +359,7 @@ test("GCF/2 anchor verifier rejects a tampered finality digest", async () => {
     sequence: 1, height: 45, oldHash: ZERO, newHash: hash,
   });
   certificate.certificate.certificate_digest = "0".repeat(64);
-  const response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, certificate), true);
+  const response = await put(ctx, writeBody(1, hash, 0, ZERO, certificate), true);
   assert.equal(response.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
@@ -441,7 +368,7 @@ test("pinned GCF finality certificate authorizes initialization and advancement"
   const ctx = await setup();
   const firstHash = "1".repeat(64);
   const firstCert = await makeCertificate(ctx, { sequence: 1, height: 17, oldHash: ZERO, newHash: firstHash });
-  const first = await writeBody(ctx,1, firstHash, 0, ZERO, firstCert);
+  const first = writeBody(1, firstHash, 0, ZERO, firstCert);
   const initialized = await put(ctx, first, true);
   assert.equal(initialized.status, 200, JSON.stringify(await initialized.clone().json()));
   const record = await initialized.json();
@@ -450,13 +377,13 @@ test("pinned GCF finality certificate authorizes initialization and advancement"
 
   const secondHash = "2".repeat(64);
   const secondCert = await makeCertificate(ctx, { sequence: 2, height: 18, oldHash: firstHash, newHash: secondHash });
-  const second = await writeBody(ctx,2, secondHash, 1, firstHash, secondCert);
+  const second = writeBody(2, secondHash, 1, firstHash, secondCert);
   const advanced = await put(ctx, second);
   assert.equal(advanced.status, 200, JSON.stringify(await advanced.clone().json()));
   assert.equal((await advanced.json()).sequence, 2);
 
   const staleCert = await makeCertificate(ctx, { sequence: 2, oldHash: firstHash, newHash: "3".repeat(64) });
-  const stale = await writeBody(ctx,2, "3".repeat(64), 1, firstHash, staleCert);
+  const stale = writeBody(2, "3".repeat(64), 1, firstHash, staleCert);
   assert.equal((await put(ctx, stale)).status, 412);
   assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").sequence, 2);
 });
@@ -465,20 +392,20 @@ test("rejects insufficient quorum, forged signatures, wrong epoch, and transitio
   const ctx = await setup();
   const hash = "4".repeat(64);
   let cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash, signers: [0, 1] });
-  let response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  let response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
 
   cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
   cert.precommits[0].signature = b64(new Uint8Array(64));
-  response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
 
   cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash, epoch: 2 });
-  response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
 
   cert = await makeCertificate(ctx, { sequence: 1, oldHash: "f".repeat(64), newHash: hash });
-  response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
@@ -519,12 +446,12 @@ test("pinned Worker verifies nested round-change certificates and POLC-bound pro
     sequence: 1, height, oldHash: ZERO, newHash: policyHash,
     round: 2, roundChangeCertificate: secondRoundCertificate,
   });
-  const accepted = await put(ctx, await writeBody(ctx,1, policyHash, 0, ZERO, finality), true);
+  const accepted = await put(ctx, writeBody(1, policyHash, 0, ZERO, finality), true);
   assert.equal(accepted.status, 200, JSON.stringify(await accepted.clone().json()));
 
   const corrupted = structuredClone(finality);
   corrupted.proposal.round_change_certificate.messages[0].highest_polc.proposal.payload_hash = "a".repeat(64);
-  const rejected = await put(ctx, await writeBody(ctx,1, policyHash, 0, ZERO, corrupted), true);
+  const rejected = await put(ctx, writeBody(1, policyHash, 0, ZERO, corrupted), true);
   assert.equal(rejected.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").policy_hash, policyHash);
 });
@@ -533,7 +460,7 @@ test("certificate digest replay is rejected even when request nonce changes", as
   const ctx = await setup();
   const hash = "5".repeat(64);
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
-  const first = await writeBody(ctx,1, hash, 0, ZERO, cert);
+  const first = writeBody(1, hash, 0, ZERO, cert);
   assert.equal((await put(ctx, first, true)).status, 200);
   // Model restoration of only the anchor row while retaining the independent
   // certificate receipt ledger. The exact certificate must remain unusable.
@@ -547,7 +474,7 @@ test("missing pinned validator-set configuration fails closed as unavailable", a
   const ctx = await setup();
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: "6".repeat(64) });
   delete ctx.env.ANCHOR_VALIDATOR_SET_SHA256;
-  const response = await put(ctx, await writeBody(ctx,1, "6".repeat(64), 0, ZERO, cert), true);
+  const response = await put(ctx, writeBody(1, "6".repeat(64), 0, ZERO, cert), true);
   assert.equal(response.status, 503);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
@@ -557,7 +484,7 @@ test("validator-set hash pin mismatch fails closed", async () => {
   const hash = "8".repeat(64);
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
   ctx.env.ANCHOR_VALIDATOR_SET_SHA256 = "0".repeat(64);
-  const response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  const response = await put(ctx, writeBody(1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, "validator_set_hash_pin_mismatch");
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
@@ -570,7 +497,7 @@ test("rejects malformed nonce, request schema, and bearer token", async () => {
   });
   assert.equal(badNonce.status, 400);
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: "7".repeat(64) });
-  const body = await writeBody(ctx,1, "7".repeat(64), 0, ZERO, cert);
+  const body = writeBody(1, "7".repeat(64), 0, ZERO, cert);
   const badAuth = await request(ctx.env, "PUT", "/v1/anchors/test-net", {
     headers: { authorization: "Bearer invalid", "if-none-match": "*",
       "content-type": "application/json" }, body,
