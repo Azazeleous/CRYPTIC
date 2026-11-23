@@ -798,6 +798,17 @@ class GCFEngine:
             db.execute("BEGIN IMMEDIATE")
             try:
                 proposal = self._proposal(db, candidate_digest)
+                gcf2_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gcf2_finality_certificates'"
+                ).fetchone()
+                if gcf2_table is not None:
+                    gcf2_finality = db.execute(
+                        """SELECT 1 FROM gcf2_finality_certificates
+                           WHERE network_id=? AND epoch=? AND height=? LIMIT 1""",
+                        (proposal["network_id"], proposal["epoch"], proposal["height"]),
+                    ).fetchone()
+                    if gcf2_finality is not None:
+                        raise GCFError("GCF1_GCF2_FINALITY_CONFLICT")
                 prevotes, polc_digest = self._polc(db, candidate_digest)
                 precommits = self._votes(db, candidate_digest, "PRECOMMIT")
                 for vote in precommits:
