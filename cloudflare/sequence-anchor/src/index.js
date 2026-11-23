@@ -462,7 +462,153 @@ async function verifyRoundChangeCertificate(roundChange, proposal, vset, verific
   return { ok: true, weight, quorumWeight, highestPolcRound: polcs.size ? Math.max(...polcs.keys()) : null };
 }
 
+const GCF2_ANCHOR_ENVELOPE_SCHEMA = "GCF/2-ANCHOR-ENVELOPE/1";
+const GCF2_VOTE_SCHEMA = "GCF/2";
+const GCF2_VOTE_DOMAIN = new TextEncoder().encode("GCF/2|VOTE|ED25519\0");
+const GCF2_POLC_DOMAIN = new TextEncoder().encode("GCF/2|POLC\0");
+const GCF2_CERT_DOMAIN = new TextEncoder().encode("GCF/2|FINALITY-CERTIFICATE\0");
+
+async function verifyGcf2VoteSet(votes, phase, proposal, candidateDigest,
+  vset, finalizedAt, polcDigest = null) {
+  if (!Array.isArray(votes) || votes.length < 1 ||
+      votes.length > vset.validators.size) {
+    return { ok: false, reason: "gcf2_vote_set_invalid" };
+  }
+  const fields = ["schema", "network_id", "epoch", "height", "round",
+    "parent_hash", "vote_type", "vote_kind", "candidate_digest",
+    "validator_id", "approve", "polc_digest", "issued_at", "expires_at",
+    "signature"];
+  let weight = 0, previousId = null;
+  const seen = new Set();
+  for (const vote of votes) {
+    if (!vote || typeof vote !== "object" || Array.isArray(vote) ||
+        Object.keys(vote).sort().join("|") !== fields.slice().sort().join("|") ||
+        vote.schema !== GCF2_VOTE_SCHEMA || vote.network_id !== proposal.network_id ||
+        vote.epoch !== proposal.epoch || vote.height !== proposal.height ||
+        vote.round !== proposal.round || vote.parent_hash !== proposal.parent_hash ||
+        vote.vote_type !== phase || vote.vote_kind !== "CANDIDATE" ||
+        vote.candidate_digest !== candidateDigest || vote.approve !== true ||
+        vote.polc_digest !== polcDigest ||
+        !Number.isSafeInteger(vote.issued_at) ||
+        !Number.isSafeInteger(vote.expires_at) ||
+        vote.expires_at <= vote.issued_at ||
+        vote.expires_at - vote.issued_at > 300 ||
+        vote.issued_at < proposal.issued_at ||
+        vote.expires_at > proposal.expires_at ||
+        vote.issued_at > finalizedAt + 30 ||
+        vote.expires_at < finalizedAt - 30 ||
+        Math.abs(finalizedAt - vote.issued_at) > 300 ||
+        typeof vote.validator_id !== "string" ||
+        seen.has(vote.validator_id) ||
+        (previousId !== null && vote.validator_id <= previousId)) {
+      return { ok: false, reason: "gcf2_vote_fields_invalid" };
+    }
+    const validator = vset.validators.get(vote.validator_id);
+    if (!validator) return { ok: false, reason: "gcf2_unknown_validator" };
+    const unsigned = Object.fromEntries(Object.entries(vote).filter(([key]) => key !== "signature"));
+    if (!await verifyGcfSignature(
+      validator.public_key_hex, vote.signature, GCF2_VOTE_DOMAIN, unsigned
+    )) return { ok: false, reason: "gcf2_vote_signature_invalid" };
+    seen.add(vote.validator_id);
+    previousId = vote.validator_id;
+    weight += validator.weight;
+  }
+  return { ok: true, weight, reached: weight >= vset.quorumWeight };
+}
+
+async function verifyGcf2FinalityCertificate(envelope, transition, networkId, env) {
+  const vsetResult = await loadPinnedValidatorSet(env, networkId);
+  if (!vsetResult.ok) return vsetResult;
+  const vset = vsetResult;
+  const envelopeFields = ["schema", "proposal", "certificate"];
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope) ||
+      Object.keys(envelope).sort().join("|") !== envelopeFields.slice().sort().join("|") ||
+      envelope.schema !== GCF2_ANCHOR_ENVELOPE_SCHEMA) {
+    return { ok: false, reason: "gcf2_anchor_envelope_invalid" };
+  }
+  const certificate = envelope.certificate;
+  const proposal = envelope.proposal;
+  const certFields = ["schema", "network_id", "epoch", "height", "round",
+    "parent_hash", "candidate_digest", "validator_set_hash", "finalized_at",
+    "polc", "precommits", "certificate_digest"];
+  if (!certificate || typeof certificate !== "object" || Array.isArray(certificate) ||
+      Object.keys(certificate).sort().join("|") !== certFields.slice().sort().join("|") ||
+      certificate.schema !== GCF2_VOTE_SCHEMA || certificate.network_id !== networkId ||
+      certificate.epoch !== vset.epoch ||
+      !Number.isSafeInteger(certificate.height) || certificate.height < 1 ||
+      !Number.isSafeInteger(certificate.round) || certificate.round < 0 ||
+      !Number.isSafeInteger(certificate.finalized_at) || certificate.finalized_at < 0 ||
+      certificate.validator_set_hash !== vset.setHash) {
+    return { ok: false, reason: "gcf2_finality_certificate_fields_invalid" };
+  }
+  if (!proposal || proposal.network_id !== networkId ||
+      proposal.epoch !== vset.epoch || proposal.height !== certificate.height ||
+      proposal.round !== certificate.round || proposal.parent_hash !== certificate.parent_hash ||
+      proposal.anchor_sequence !== transition.sequence ||
+      proposal.parent_hash !== transition.expected_policy_hash ||
+      proposal.payload_hash !== transition.policy_hash) {
+    return { ok: false, reason: "gcf2_anchor_transition_binding_invalid" };
+  }
+  const proposalResult = await verifyGcfProposal(proposal, certificate, vset);
+  if (!proposalResult.ok) return proposalResult;
+  if (proposalResult.digest !== certificate.candidate_digest) {
+    return { ok: false, reason: "gcf2_candidate_digest_mismatch" };
+  }
+  const polc = certificate.polc;
+  const polcFields = ["schema", "network_id", "epoch", "height", "round",
+    "parent_hash", "candidate_digest", "validator_set_hash", "prevotes",
+    "polc_digest"];
+  if (!polc || typeof polc !== "object" || Array.isArray(polc) ||
+      Object.keys(polc).sort().join("|") !== polcFields.slice().sort().join("|") ||
+      polc.schema !== GCF2_VOTE_SCHEMA || polc.network_id !== networkId ||
+      polc.epoch !== vset.epoch || polc.height !== certificate.height ||
+      polc.round !== certificate.round || polc.parent_hash !== certificate.parent_hash ||
+      polc.candidate_digest !== certificate.candidate_digest ||
+      polc.validator_set_hash !== vset.setHash) {
+    return { ok: false, reason: "gcf2_polc_context_invalid" };
+  }
+  const polcBody = Object.fromEntries(Object.entries(polc).filter(([key]) => key !== "polc_digest"));
+  const expectedPolcDigest = await sha256Hex(new Uint8Array([
+    ...GCF2_POLC_DOMAIN, ...new TextEncoder().encode(canonical(polcBody))
+  ]));
+  if (polc.polc_digest !== expectedPolcDigest) {
+    return { ok: false, reason: "gcf2_polc_digest_invalid" };
+  }
+  const prevoteResult = await verifyGcf2VoteSet(
+    polc.prevotes, "PREVOTE", proposal, proposalResult.digest,
+    vset, certificate.finalized_at, null
+  );
+  if (!prevoteResult.ok || !prevoteResult.reached) {
+    return { ok: false, reason: prevoteResult.reason || "gcf2_prevote_quorum_missing" };
+  }
+  const precommitResult = await verifyGcf2VoteSet(
+    certificate.precommits, "PRECOMMIT", proposal, proposalResult.digest,
+    vset, certificate.finalized_at, polc.polc_digest
+  );
+  if (!precommitResult.ok || !precommitResult.reached) {
+    return { ok: false, reason: precommitResult.reason || "gcf2_precommit_quorum_missing" };
+  }
+  const certBody = Object.fromEntries(
+    Object.entries(certificate).filter(([key]) => key !== "certificate_digest")
+  );
+  const expectedCertificateDigest = await sha256Hex(new Uint8Array([
+    ...GCF2_CERT_DOMAIN, ...new TextEncoder().encode(canonical(certBody))
+  ]));
+  if (certificate.certificate_digest !== expectedCertificateDigest) {
+    return { ok: false, reason: "gcf2_certificate_digest_invalid" };
+  }
+  return {
+    ok: true, certificateDigest: expectedCertificateDigest,
+    signerId: "validator-set:" + vset.setHash,
+    nonce: expectedCertificateDigest.slice(0, 32),
+    expiresAt: Math.floor(Date.now() / 1000) + 31536000,
+  };
+}
+
 async function verifyFinalityCertificate(certificate, transition, networkId, env) {
+  if (certificate && certificate.schema === GCF2_ANCHOR_ENVELOPE_SCHEMA) {
+    return verifyGcf2FinalityCertificate(certificate, transition, networkId, env);
+  }
   const vsetResult = await loadPinnedValidatorSet(env, networkId);
   if (!vsetResult.ok) return vsetResult;
   const vset = vsetResult;
