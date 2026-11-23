@@ -321,6 +321,8 @@ class PoolCoordinator:
             ).fetchone()
         if row is None:
             raise PoolServiceError("job_not_found")
+        if row[1] == "expired":
+            raise PoolServiceError("job_expired")
         if row[1] != "active":
             raise PoolServiceError("job_revoked")
         if row[2] != authenticated_worker_id:
@@ -375,6 +377,8 @@ class PoolCoordinator:
                 ).fetchone()
             if row is None:
                 raise PoolServiceError("job_unknown")
+            if row[1] == "expired":
+                raise PoolServiceError("job_expired")
             if row[1] != "active":
                 raise PoolServiceError("job_revoked")
             if row[2] != authenticated_worker_id:
