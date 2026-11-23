@@ -695,6 +695,32 @@ class GCFEngine:
             "certificate": certificate if result["valid"] else None,
         }
 
+    def get_round_change_message(self, *, height: int, target_round: int,
+                                 validator_id: str) -> dict | None:
+        """Read and re-verify one persisted validator message for safe retry."""
+        from src.consensus.round_change import verify_round_change_message
+        _require_int(height, "height", 1)
+        _require_int(target_round, "target_round", 1)
+        if validator_id not in self.validator_set.validators:
+            raise GCFError("ROUND_CHANGE_UNKNOWN_VALIDATOR")
+        with self._db() as db:
+            row = db.execute("""
+                SELECT message_json FROM round_change_messages
+                WHERE network_id=? AND epoch=? AND height=?
+                  AND target_round=? AND validator_id=?
+            """, (self.validator_set.network_id, self.validator_set.epoch,
+                  height, target_round, validator_id)).fetchone()
+        if row is None:
+            return None
+        message = json.loads(row["message_json"])
+        checked = verify_round_change_message(
+            message, validator_set=self.validator_set, height=height,
+            target_round=target_round, clock=self.clock,
+        )
+        if not checked.get("valid") or checked["validator_id"] != validator_id:
+            raise GCFError("PERSISTED_ROUND_CHANGE_MESSAGE_INVALID")
+        return message
+
     def get_round_change_certificate(self, *, height: int, target_round: int) -> dict | None:
         """Return a cached certificate only after re-verifying it against current trust."""
         from src.consensus.round_change import verify_round_change_certificate
