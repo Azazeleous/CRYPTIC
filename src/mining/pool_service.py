@@ -81,7 +81,7 @@ class PoolCoordinator:
         self.clock = clock
         self._lock = threading.RLock()
         with _connect(self.database) as conn:
-            conn.execute("""
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS pool_jobs (
                     job_id TEXT PRIMARY KEY,
                     job_json BLOB NOT NULL,
