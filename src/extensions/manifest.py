@@ -17,6 +17,7 @@ MANIFEST_DOMAIN = b"CRYPTIC-EXTENSION-MANIFEST/1\x00"
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_MANIFEST_TTL_SECONDS = 365 * 24 * 60 * 60
 EXTENSION_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,127}$")
+PUBLISHER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SEMVER = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 CAPABILITY = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){1,3}$")
 SUPPORTED_CAPABILITIES = frozenset({
@@ -81,7 +82,7 @@ def verify_extension_manifest(
         raise ExtensionManifestError("extension_id_invalid")
     if not isinstance(version, str) or not SEMVER.fullmatch(version):
         raise ExtensionManifestError("extension_version_invalid")
-    if not isinstance(publisher_id, str) or not publisher_id or len(publisher_id) > 128:
+    if not isinstance(publisher_id, str) or not PUBLISHER_ID.fullmatch(publisher_id):
         raise ExtensionManifestError("publisher_id_invalid")
     if not isinstance(description, str) or len(description) > 1024:
         raise ExtensionManifestError("extension_description_invalid")
