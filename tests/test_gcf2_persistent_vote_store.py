@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from src.consensus.gcf import GCFEngine, GCFError, ValidatorSet, make_proposal, make_vote as make_gcf1_vote, sha256_hex, canonical_bytes
 from src.consensus.gcf2 import make_vote
 from src.consensus.gcf2_engine import GCF2VoteStore
-
+from src.consensus.gcf2_independent_verifier import (\n    GCF2IndependentVerificationError, verify_finality_certificate,\n)\n
 
 def keypair():
     key = Ed25519PrivateKey.generate()
@@ -111,6 +111,54 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
         self.store.resolve_active_parent = lambda _height: "ff" * 32
         with self.assertRaisesRegex(GCFError, "GCF2_ACTIVE_PARENT_MISMATCH"):
             self.store.submit_vote(self.vote("v3", kind="NIL"))
+
+    def test_finality_certificate_is_persisted_and_independently_verified(self):
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(self.vote(validator))
+        polc = self.store.get_polc(self.digest)
+        self.assertIsNotNone(polc)
+        result = None
+        for validator in ("v0", "v1", "v2"):
+            result = self.store.submit_vote(
+                self.vote(validator, phase="PRECOMMIT",
+                          polc_digest=polc["polc_digest"])
+            )
+        self.assertIsNotNone(result["finality"])
+        certificate = self.store.get_finality_certificate(height=9)
+        self.assertIsNotNone(certificate)
+        validators = {
+            name: {"public_key_hex": pair[1], "weight": 1}
+            for name, pair in self.keys.items()
+        }
+        checked = verify_finality_certificate(
+            certificate, network_id="gaia-testnet", epoch=1,
+            validators=validators, proposal=self.proposal,
+        )
+        self.assertTrue(checked["valid"])
+        self.assertEqual(checked["precommit_weight"], 3)
+
+    def test_independent_finality_verifier_rejects_certificate_tampering(self):
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(self.vote(validator))
+        polc = self.store.get_polc(self.digest)
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(
+                self.vote(validator, phase="PRECOMMIT",
+                          polc_digest=polc["polc_digest"])
+            )
+        certificate = self.store.get_finality_certificate(height=9)
+        certificate["certificate_digest"] = "00" * 32
+        validators = {
+            name: {"public_key_hex": pair[1], "weight": 1}
+            for name, pair in self.keys.items()
+        }
+        with self.assertRaisesRegex(
+            GCF2IndependentVerificationError, "FINALITY_CERTIFICATE_DIGEST_INVALID"
+        ):
+            verify_finality_certificate(
+                certificate, network_id="gaia-testnet", epoch=1,
+                validators=validators, proposal=self.proposal,
+            )
 
     def test_validator_round_state_rejects_round_regression_across_phases(self):
         with self.store._db() as db:
