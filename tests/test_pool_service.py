@@ -113,6 +113,38 @@ class PoolCoordinatorTests(unittest.TestCase):
         with self.assertRaisesRegex(PoolServiceError, "nonce_range_overlap"):
             self.issue(worker_id="worker-b", nonce_start=0, max_attempts=8)
 
+    def test_expired_job_transitions_durably_and_survives_restart(self):
+        job = self.issue()
+        self.now = job["expires_at"] + 1
+        self.assertEqual(self.pool.expire_jobs(), 1)
+        status = self.pool.status()
+        self.assertEqual(status["jobs_expired"], 1)
+        self.assertEqual(status["jobs_active"], 0)
+        restarted = PoolCoordinator(
+            database=self.root / "jobs.sqlite3",
+            share_ledger=self.ledger,
+            issuer_private_key_hex=self.private_hex,
+            issuer_id="issuer", pool_id="gaia-internal",
+            network_id="hccgn-test",
+            trusted_issuer_public_key_hex=self.public_hex,
+            resolve_active_target=lambda boundary: b"\\xff" * 32,
+            clock=lambda: self.now,
+        )
+        self.assertEqual(restarted.status()["jobs_expired"], 1)
+        with self.assertRaisesRegex(PoolServiceError, "job_expired"):
+            restarted.get_job(job["job_id"], authenticated_worker_id="worker-a")
+
+    def test_expired_job_cannot_accept_a_late_share(self):
+        job = self.issue()
+        submission = execute_pool_job(
+            job, trusted_issuer_public_key_hex=self.public_hex,
+            expected_issuer_id="issuer", expected_pool_id="gaia-internal",
+            expected_network_id="hccgn-test", worker_id="worker-a", now=self.now,
+        )
+        self.now = job["expires_at"] + 1
+        with self.assertRaisesRegex(PoolServiceError, "job_expired"):
+            self.pool.submit_share(submission, authenticated_worker_id="worker-a")
+
     def test_nonce_reservations_support_full_uint64_boundary(self):
         start = (1 << 64) - 8
         job = self.issue(nonce_start=start, max_attempts=8)
