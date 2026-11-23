@@ -14,7 +14,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 SCHEMA = "GCF/2"
-VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\\x00"
+VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\x00"
 VOTE_FIELDS = {
     "schema", "network_id", "epoch", "height", "round", "parent_hash",
     "vote_type", "vote_kind", "candidate_digest", "validator_id",
