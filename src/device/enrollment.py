@@ -27,6 +27,7 @@ REQUEST_SCHEMA = "CRYPTIC-DEVICE-ENROLLMENT-REQUEST/1"
 CERT_SCHEMA = "CRYPTIC-DEVICE-ENROLLMENT-CERT/1"
 CHALLENGE_SCHEMA = "CRYPTIC-DEVICE-HOST-CHALLENGE/1"
 RESPONSE_SCHEMA = "CRYPTIC-DEVICE-RESPONSE/1"
+REVOCATION_SCHEMA = "CRYPTIC-DEVICE-REVOCATION/1"
 REQUEST_DOMAIN = b"CRYPTIC-DEVICE-ENROLLMENT-REQUEST/1\x00"
 CERT_DOMAIN = b"CRYPTIC-DEVICE-ENROLLMENT-CERT/1\x00"
 CHALLENGE_DOMAIN = b"CRYPTIC-DEVICE-HOST-CHALLENGE/1\x00"
@@ -223,6 +224,40 @@ def make_enrollment_certificate(
     }
 
 
+def make_device_revocation(
+    *,
+    device_id: str,
+    operator_private_key: Ed25519PrivateKey | bytes,
+    signer_id: str,
+    issued_at: int,
+    expires_at: int,
+    nonce: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(signer_id, str) or not SIGNER_ID.fullmatch(signer_id):
+        raise DeviceEnrollmentError("operator_signer_id_invalid")
+    if (not isinstance(issued_at, int) or isinstance(issued_at, bool)
+            or not isinstance(expires_at, int) or isinstance(expires_at, bool)
+            or expires_at <= issued_at or expires_at - issued_at > 300):
+        raise DeviceEnrollmentError("device_revocation_validity_invalid")
+    nonce_value = secrets.token_hex(16) if nonce is None else nonce
+    if not isinstance(nonce_value, str) or not HEX_32.fullmatch(nonce_value):
+        raise DeviceEnrollmentError("device_revocation_nonce_invalid")
+    body = {
+        "schema": REVOCATION_SCHEMA,
+        "device_id": _device_id(device_id),
+        "signer_id": signer_id,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "nonce": nonce_value,
+    }
+    return {
+        **body,
+        "signature": _signature(
+            _private_key(operator_private_key), REVOCATION_DOMAIN, body
+        ),
+    }
+
+
 def verify_host_challenge(
     challenge: Mapping[str, Any],
     host_public_key: bytes | Ed25519PublicKey,
@@ -334,6 +369,12 @@ class DeviceRegistry:
                     scopes_json TEXT NOT NULL,
                     expires_at INTEGER NOT NULL,
                     revoked INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS revocation_nonces (
+                    nonce TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    signer_id TEXT NOT NULL,
+                    issued_at INTEGER NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS audit_events (
                     sequence INTEGER PRIMARY KEY,
@@ -636,13 +677,43 @@ class DeviceRegistry:
             connection.execute("COMMIT")
         return allowed
 
-    def revoke_device(self, device_id: str, *, actor: str) -> bool:
-        identifier = _device_id(device_id)
-        if not isinstance(actor, str) or not SIGNER_ID.fullmatch(actor):
-            raise DeviceEnrollmentError("revocation_actor_invalid")
+    def revoke_device(self, revocation: Mapping[str, Any]) -> bool:
+        if not isinstance(revocation, dict):
+            raise DeviceEnrollmentError("device_revocation_object_required")
+        fields = {
+            "schema", "device_id", "signer_id", "issued_at",
+            "expires_at", "nonce", "signature",
+        }
+        if set(revocation) != fields or revocation["schema"] != REVOCATION_SCHEMA:
+            raise DeviceEnrollmentError("device_revocation_schema_invalid")
+        identifier = _device_id(revocation["device_id"])
+        signer_id = revocation["signer_id"]
+        if not isinstance(signer_id, str) or not SIGNER_ID.fullmatch(signer_id):
+            raise DeviceEnrollmentError("operator_signer_id_invalid")
         now = int(self.clock())
+        _time_window(
+            revocation["issued_at"], revocation["expires_at"], now,
+            300, "device_revocation",
+        )
+        nonce = revocation["nonce"]
+        if not isinstance(nonce, str) or not HEX_32.fullmatch(nonce):
+            raise DeviceEnrollmentError("device_revocation_nonce_invalid")
+        try:
+            operator_key = _public_key(self.operator_trust[signer_id])
+        except (KeyError, TypeError) as exc:
+            raise DeviceEnrollmentError("operator_signer_untrusted") from exc
+        unsigned = {key: value for key, value in revocation.items() if key != "signature"}
+        _verify_signature(
+            operator_key, revocation["signature"], REVOCATION_DOMAIN,
+            unsigned, "device_revocation_signature_invalid",
+        )
         with closing(self._connect()) as connection:
             connection.execute("BEGIN IMMEDIATE")
+            if connection.execute(
+                "SELECT 1 FROM revocation_nonces WHERE nonce=?", (nonce,)
+            ).fetchone():
+                connection.execute("ROLLBACK")
+                raise DeviceEnrollmentError("device_revocation_replay")
             row = connection.execute(
                 "SELECT revoked FROM devices WHERE device_id=?", (identifier,)
             ).fetchone()
@@ -650,8 +721,21 @@ class DeviceRegistry:
                 connection.execute("ROLLBACK")
                 return False
             if row[0]:
+                connection.execute(
+                    "INSERT INTO revocation_nonces(nonce,device_id,signer_id,issued_at) VALUES(?,?,?,?)",
+                    (nonce, identifier, signer_id, revocation["issued_at"]),
+                )
+                self._audit(
+                    connection, actor=signer_id, action="device.revoke",
+                    resource=identifier, outcome="already_revoked",
+                    details={"nonce": nonce}, timestamp=now,
+                )
                 connection.execute("COMMIT")
                 return True
+            connection.execute(
+                "INSERT INTO revocation_nonces(nonce,device_id,signer_id,issued_at) VALUES(?,?,?,?)",
+                (nonce, identifier, signer_id, revocation["issued_at"]),
+            )
             connection.execute(
                 "UPDATE devices SET revoked=1 WHERE device_id=?", (identifier,)
             )
@@ -659,9 +743,9 @@ class DeviceRegistry:
                 "UPDATE active_sessions SET revoked=1 WHERE device_id=?", (identifier,)
             )
             self._audit(
-                connection, actor=actor, action="device.revoke",
+                connection, actor=signer_id, action="device.revoke",
                 resource=identifier, outcome="accepted",
-                details={}, timestamp=now,
+                details={"nonce": nonce}, timestamp=now,
             )
             connection.execute("COMMIT")
         return True
