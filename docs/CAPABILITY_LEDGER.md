@@ -56,3 +56,23 @@
 Latest GCF/HCCGN current-mainline verification (2026-11-21): workflow run 44941497738 on commit 245687496b49e2b9c58937953fe6caff03b33b94 completed successfully. Python suite: 368 tests, 2 skipped. Independent Go HCCGN-WORK/1 conformance vectors passed. HCCGN midstate kernel: 100,000 hashes in 0.051038959 seconds (1,959,287.61 hashes/second), with full-hash reference match. The bounded SHA-256d benchmark also passed. These are GitHub-hosted runner measurements, not target-device throughput, network target-search rate, or production validator performance.
 
 Update this ledger only with reproducible evidence. Never mark a feature complete because its directory, interface, or design document exists.
+
+
+## Phase 4 implementation verification — 2026-11-23
+
+At commit 40b373e5d4aeebdc63d7efc93ef01b45459b5246:
+
+- CRYPTIC CI: run 45207388160 — 386 unit tests passed.
+- Mining-engine tests: run 45207388327 — 386 unit tests passed; independent Go HCCGN conformance vectors and bounded HCCGN/SHA-256d benchmarks passed.
+- GAIA local trophy mining: run 45207387922 — passed.
+
+| Capability | Status | Evidence and boundary |
+|---|---|---|
+| GF(256) arithmetic | implemented and CI-verified in PR #36 | Field operations use primitive polynomial 0x11D with inverse, multiplication, division, polynomial operations, and finite-field linear solving. |
+| Berlekamp-Welch | implemented and CI-verified in PR #36 | Bounded polynomial recovery rejects inconsistent or non-unique systems and reports corrected evaluation positions. |
+| Reed-Solomon | implemented and CI-verified in PR #36 | Non-systematic GF(256) evaluation profile corrects up to floor((n-k)/2) unknown symbol errors; erasure decoding is not claimed. |
+| QC-LDPC | implemented and CI-verified in PR #36 | Structured circulant-shift base matrix, identity-circulant parity partition, systematic encoding, normalized min-sum, and verified single-bit syndrome correction. This is QC-LDPC, not random sparse LDPC. |
+| Layered correction | implemented and CI-verified in PR #36 | QC-LDPC decoding is followed by Reed-Solomon decoding, syndrome verification, independent re-encoding, and a SHA-256 output receipt. |
+| Content-addressed chunk storage | implemented and CI-verified in PR #36 | Immutable SHA-256 chunk objects and canonical manifests; read-time chunk, size, manifest, and whole-content verification. File fsync and best-effort directory fsync are implemented, but physical power-loss durability is not established. |
+
+Three-lane correction across independently implemented decoders, formal proof, performance qualification, and physical power-loss recovery remain open. This CI evidence verifies the repository test profile only; it does not establish production deployment or hardware durability.
