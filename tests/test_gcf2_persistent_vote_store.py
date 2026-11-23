@@ -54,6 +54,7 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
             proposer_id="v0", proposer_private_key_hex=self.keys["v0"][0],
             nonce="0123456789abcdef0123456789abcdef",
             issued_at=self.now, expires_at=self.now + 240,
+            anchor_sequence=9,
         )
         self.digest = sha256_hex(canonical_bytes(self.proposal))
         self.gcf1.submit_proposal(self.proposal)
@@ -240,6 +241,35 @@ class GCF2PersistentVoteStoreTests(unittest.TestCase):
         self.store.resolve_active_parent = lambda _height: "ff" * 32
         with self.assertRaisesRegex(GCFError, "GCF2_ACTIVE_PARENT_MISMATCH"):
             self.store.submit_vote(self.vote("v3", kind="NIL"))
+
+    def test_finality_activation_is_explicit_persistent_and_idempotent(self):
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(self.vote(validator))
+        polc = self.store.get_polc(self.digest)
+        for validator in ("v0", "v1", "v2"):
+            self.store.submit_vote(
+                self.vote(validator, phase="PRECOMMIT",
+                          polc_digest=polc["polc_digest"])
+            )
+        certificate = self.store.get_finality_certificate(height=9)
+        self.store.finality_activator = lambda cert: {
+            "accepted": True, "finalized": True,
+            "anchor_sequence": cert["proposal"]["anchor_sequence"],
+            "certificate_digest": cert["certificate_digest"],
+        }
+        first = self.store.activate_finality_certificate(height=9)
+        second = self.store.activate_finality_certificate(height=9)
+        self.assertTrue(first["activated"])
+        self.assertFalse(first["replayed"])
+        self.assertTrue(second["replayed"])
+        self.assertEqual(first["certificate_digest"], certificate["certificate_digest"])
+        self.assertEqual(
+            self.store.get_finality_activation(height=9)["anchor_sequence"], 9
+        )
+
+    def test_finality_activation_fails_closed_without_anchor_adapter(self):
+        with self.assertRaisesRegex(GCFError, "GCF2_FINALITY_ACTIVATOR_NOT_CONFIGURED"):
+            self.store.activate_finality_certificate(height=9)
 
     def test_finality_certificate_is_persisted_and_independently_verified(self):
         for validator in ("v0", "v1", "v2"):
