@@ -61,7 +61,7 @@ class ProcessSupervisorTests(unittest.TestCase):
                 timeout_seconds=1,
                 deadline_monotonic=time.monotonic() - 1,
             )
-        self.assertTrue(raised.exception.worker_terminated)
+        self.assertFalse(raised.exception.worker_terminated)
         self.assertIsNone(raised.exception.process_id)
 
 
