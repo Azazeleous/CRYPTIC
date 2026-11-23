@@ -1,4 +1,6 @@
 import test from "node:test";
+import { readFileSync } from "node:fs";
+import { gunzipSync } from "node:zlib";
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 globalThis.crypto ||= webcrypto;
@@ -277,6 +279,47 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
   });
   assert.equal(response.status, 401);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+test("Python GCF/2 known-answer certificate verifies identically in the Worker", async () => {
+  const vectorBytes = gunzipSync(Buffer.from(
+    readFileSync(new URL("./vectors/gcf2_finality_known_answer.json.gz.b64", import.meta.url), "utf8"),
+    "base64",
+  ));
+  const vector = JSON.parse(vectorBytes.toString("utf8"));
+  const ctx = await setup();
+  const pinnedSet = {
+    network_id: vector.network_id, epoch: vector.epoch,
+    validators: vector.validators,
+  };
+  ctx.env.ANCHOR_VALIDATOR_SET_JSON = JSON.stringify(pinnedSet);
+  ctx.env.ANCHOR_VALIDATOR_SET_SHA256 = vector.validator_set_hash;
+  ctx.env.ANCHOR_VALIDATOR_NETWORK_ID = vector.network_id;
+  ctx.env.ANCHOR_VALIDATOR_EPOCH = String(vector.epoch);
+  const proposal = vector.proposal;
+  const body = {
+    schema: "CRYPTIC-SEQUENCE-ANCHOR/1",
+    network_id: vector.network_id, sequence: proposal.anchor_sequence,
+    policy_hash: proposal.payload_hash,
+    expected_sequence: proposal.anchor_sequence - 1,
+    expected_policy_hash: proposal.parent_hash,
+    issued_at: Math.floor(Date.now() / 1000),
+    nonce: "a".repeat(32),
+    certificate: {
+      schema: "GCF/2-ANCHOR-ENVELOPE/1",
+      proposal, certificate: vector.certificate,
+    },
+  };
+  const response = await request(
+    ctx.env, "PUT", "/v1/anchors/" + vector.network_id,
+    { headers: {
+      authorization: "Bearer " + TOKEN,
+      "if-match": '"' + body.expected_sequence + ":" + body.expected_policy_hash + '"',
+      "content-type": "application/json",
+    }, body },
+  );
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  assert.equal(ctx.env.ANCHOR_DB.rows.get(vector.network_id).policy_hash, proposal.payload_hash);
 });
 
 test("pinned GCF/2 finality certificate authorizes sequence-anchor initialization", async () => {
