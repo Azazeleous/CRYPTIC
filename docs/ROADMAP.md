@@ -31,7 +31,7 @@
 - QC-LDPC encoder with a structured circulant-shift base matrix, normalized min-sum decoder, and a verified single-bit syndrome path — implementation and tests CI-verified in PR #36.
 - Layered QC-LDPC → Reed–Solomon correction with independent syndrome and re-encoding checks — implementation and tests CI-verified in PR #36.
 - Content-addressed chunk objects and canonical integrity manifests — implementation and tamper tests added in PR #36; physical power-loss durability remains unverified.
-- Three-lane correction now has three paths: layered QC-LDPC/production-RS, direct production-RS, and an independently written bitwise-GF(256) reference-RS decoder. Two matching lanes are required; every accepted result is re-encoded by both RS implementations and the QC encoder. Deterministic tests added in PR #36; current-head CI verification pending. Independent cross-language/third-party implementation and formal verification remain open.
+- Three-lane correction now has three paths: layered QC-LDPC/production-RS, direct production-RS, and an independently written bitwise-GF(256) reference-RS decoder. Two matching lanes are required; every accepted result is re-encoded by both RS implementations and the QC encoder. Deterministic tests added in PR #36; CI-verified in PR #36 source commit db726ee: 393 tests passed in CRYPTIC CI and mining-engine CI; Go conformance vectors and bounded benchmarks passed. Independent third-party implementation and formal verification remain open.
 
 ## Phase 5 — Extensions and SOS
 - Extension manifest and sandbox.
