@@ -682,6 +682,68 @@ async function verifyFinalityCertificate(certificate, transition, networkId, env
     nonce: certificateDigest.slice(0, 32), expiresAt: Math.floor(Date.now() / 1000) + 31536000 };
 }
 
+async function verifyGodPolicyTransitionAuthorization(authorization, transition, env, now) {
+  const requiredEnvironment = [
+    "ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX",
+    "ANCHOR_GOD_POLICY_SIGNER_ID",
+    "ANCHOR_GOD_POLICY_ID",
+  ];
+  if (requiredEnvironment.some(key => typeof env[key] !== "string" || !env[key])) {
+    return { ok: false, unavailable: true, reason: "god_policy_trust_not_configured" };
+  }
+  if (!strictHex(env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX) ||
+      env.ANCHOR_GOD_POLICY_SIGNER_ID.length > 128 ||
+      env.ANCHOR_GOD_POLICY_ID.length > 256) {
+    return { ok: false, unavailable: true, reason: "god_policy_trust_configuration_invalid" };
+  }
+  const fields = [
+    "schema", "signer_id", "capability", "policy_id", "network_id",
+    "expected_sequence", "expected_policy_hash", "sequence", "policy_hash",
+    "issued_at", "expires_at", "nonce", "signature",
+  ];
+  if (!authorization || typeof authorization !== "object" || Array.isArray(authorization) ||
+      Object.keys(authorization).sort().join("|") !== fields.slice().sort().join("|")) {
+    return { ok: false, reason: "god_policy_authorization_schema_invalid" };
+  }
+  const expected = {
+    schema: GOD_POLICY_TRANSITION_SCHEMA,
+    signer_id: env.ANCHOR_GOD_POLICY_SIGNER_ID,
+    capability: "cryptic.sequence_anchor.advance",
+    policy_id: env.ANCHOR_GOD_POLICY_ID,
+    network_id: transition.network_id,
+    expected_sequence: transition.expected_sequence,
+    expected_policy_hash: transition.expected_policy_hash,
+    sequence: transition.sequence,
+    policy_hash: transition.policy_hash,
+  };
+  if (Object.entries(expected).some(([key, value]) => authorization[key] !== value)) {
+    return { ok: false, reason: "god_policy_authorization_transition_binding_mismatch" };
+  }
+  if (!Number.isSafeInteger(authorization.issued_at) ||
+      !Number.isSafeInteger(authorization.expires_at) ||
+      authorization.expires_at <= authorization.issued_at ||
+      authorization.expires_at - authorization.issued_at > GOD_POLICY_MAX_TTL_SECONDS ||
+      authorization.issued_at > now + 30 ||
+      authorization.expires_at < now - 30 ||
+      typeof authorization.nonce !== "string" || !NONCE.test(authorization.nonce)) {
+    return { ok: false, reason: "god_policy_authorization_time_or_nonce_invalid" };
+  }
+  const unsigned = Object.fromEntries(
+    Object.entries(authorization).filter(([key]) => key !== "signature")
+  );
+  try {
+    if (!await verifyGcfSignature(
+      env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX,
+      authorization.signature,
+      GOD_POLICY_TRANSITION_DOMAIN,
+      unsigned
+    )) return { ok: false, reason: "god_policy_authorization_signature_invalid" };
+  } catch {
+    return { ok: false, reason: "god_policy_authorization_signature_invalid" };
+  }
+  return { ok: true };
+}
+
 async function advanceAnchor(request, networkId, env) {
   if (!await authorized(request, env)) return json({ error: "unauthorized" }, 401);
   let raw;
@@ -694,7 +756,8 @@ async function advanceAnchor(request, networkId, env) {
   } catch { return json({ error: "invalid_json" }, 400); }
   if (canonical(body) !== decoded) return json({ error: "noncanonical_json" }, 400);
   const fields = ["schema", "network_id", "sequence", "policy_hash",
-    "expected_sequence", "expected_policy_hash", "issued_at", "nonce", "certificate"];
+    "expected_sequence", "expected_policy_hash", "issued_at", "nonce",
+    "certificate", "policy_authorization"];
   if (!body || typeof body !== "object" || Array.isArray(body) ||
       Object.keys(body).sort().join("|") !== fields.slice().sort().join("|")) {
     return json({ error: "request_schema_invalid" }, 400);
@@ -706,6 +769,13 @@ async function advanceAnchor(request, networkId, env) {
       !HEX_256.test(body.policy_hash) || !HEX_256.test(body.expected_policy_hash) ||
       !validTimestamp(body.issued_at, now) || !NONCE.test(body.nonce)) {
     return json({ error: "request_fields_invalid" }, 400);
+  }
+  const godAuthorization = await verifyGodPolicyTransitionAuthorization(
+    body.policy_authorization, body, env, now
+  );
+  if (!godAuthorization.ok) {
+    return json({ error: godAuthorization.reason },
+      godAuthorization.unavailable ? 503 : 403);
   }
   const certificateVerification = await verifyFinalityCertificate(body.certificate, body,
     networkId, env);
@@ -790,7 +860,9 @@ export default {
         configured: Boolean(env.ANCHOR_DB && env.ANCHOR_SIGNER_ID &&
           env.ANCHOR_SIGNING_KEY_PKCS8_B64 && env.ANCHOR_WRITE_TOKEN &&
           env.ANCHOR_VALIDATOR_SET_JSON && env.ANCHOR_VALIDATOR_SET_SHA256 &&
-          env.ANCHOR_VALIDATOR_NETWORK_ID && env.ANCHOR_VALIDATOR_EPOCH) });
+          env.ANCHOR_VALIDATOR_NETWORK_ID && env.ANCHOR_VALIDATOR_EPOCH &&
+          env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX && env.ANCHOR_GOD_POLICY_SIGNER_ID &&
+          env.ANCHOR_GOD_POLICY_ID) });
     }
     const match = url.pathname.match(/^\/v1\/anchors\/([^/]+)$/);
     if (!match) return json({ error: "not_found" }, 404);
