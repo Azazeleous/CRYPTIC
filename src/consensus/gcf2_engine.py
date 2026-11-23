@@ -169,6 +169,21 @@ class GCF2VoteStore:
             db.execute("BEGIN IMMEDIATE")
             try:
                 self._reject_cross_version_slot(db, normalized)
+                finalized = db.execute(
+                    """SELECT candidate_digest FROM gcf2_finality_certificates
+                       WHERE network_id=? AND epoch=? AND height=? LIMIT 1""",
+                    (normalized["network_id"], normalized["epoch"], normalized["height"]),
+                ).fetchone()
+                if finalized is not None:
+                    raise GCFError("GCF2_HEIGHT_ALREADY_FINALIZED")
+                gcf1_finalized = db.execute(
+                    """SELECT 1 FROM certificates c JOIN proposals p
+                       ON p.candidate_digest=c.candidate_digest
+                       WHERE p.network_id=? AND p.epoch=? AND p.height=? LIMIT 1""",
+                    (normalized["network_id"], normalized["epoch"], normalized["height"]),
+                ).fetchone()
+                if gcf1_finalized is not None:
+                    raise GCFError("GCF2_GCF1_HEIGHT_ALREADY_FINALIZED")
                 round_state = db.execute(
                     """SELECT highest_round FROM gcf2_validator_rounds
                        WHERE network_id=? AND epoch=? AND height=? AND validator_id=?""",
