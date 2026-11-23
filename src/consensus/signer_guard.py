@@ -185,7 +185,7 @@ class ConsensusSigningGuard:
                         """INSERT INTO consensus_signing_slots
                            (network_id,epoch,height,round,signed_round,slot_type,validator_id,
                             protocol_schema,payload_digest,payload_json,signature_b64,created_at)
-                           VALUES(?,?,?,?,?,?,?,?,?,NULL,?)""",
+                           VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?)""",
                         (key[0], key[1], key[2], key[3], round_number, key[4], key[5],
                          protocol_schema, digest, encoded_body, created_at),
                     )
