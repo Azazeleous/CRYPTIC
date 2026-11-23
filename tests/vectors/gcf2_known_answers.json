@@ -15,11 +15,22 @@
   "proof_hash": "3333333333333333333333333333333333333333333333333333333333333333",
   "justice_policy_hash": "4444444444444444444444444444444444444444444444444444444444444444",
   "nonce": "0123456789abcdef0123456789abcdef",
-  "validator_seed_bytes": ["01", "02", "03", "04"],
+  "validator_seed_bytes": [
+    "01",
+    "02",
+    "03",
+    "04"
+  ],
   "expected": {
     "validator_set_hash": "94020d3594896fcfe2cbeea86cb21220640b57020cf074a519b62135603c6d73",
     "candidate_digest": "a1c046c56e2f996d82653082aa1cdaa9945ef73ac3511ea3eedea9888ba05b1b",
     "polc_digest": "18237ba2278ff96f1329fc7216beb7509feb905294dbeb64bbc728d23e86f9af",
     "certificate_digest": "17062e8ada9b67cd07113f3babe040fb0b3f796c1f7d91fcf341d95ddf1d3d51"
+  },
+  "validator_public_keys": {
+    "v0": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+    "v1": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+    "v2": "ed4928c628d1c2c6eae90338905995612959273a5c63f93636c14614ac8737d1",
+    "v3": "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c"
   }
 }
