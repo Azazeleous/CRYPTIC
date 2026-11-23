@@ -170,7 +170,7 @@ def verify_finality_certificate(
     """Independently verify a GCF/2 POLC and affirmative PRECOMMIT certificate."""
     certificate_fields = {
         "schema", "network_id", "epoch", "height", "round", "parent_hash",
-        "candidate_digest", "validator_set_hash", "finalized_at", "polc",
+        "candidate_digest", "validator_set_hash", "proposal", "finalized_at", "polc",
         "precommits", "certificate_digest",
     }
     polc_fields = {
@@ -191,10 +191,12 @@ def verify_finality_certificate(
         value = certificate[field]
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             fail("FINALITY_CERTIFICATE_" + field.upper() + "_INVALID")
-    if proposal is None:
-        proposal = certificate.get("proposal")
-    if not isinstance(proposal, Mapping):
-        fail("FINALITY_CERTIFICATE_PROPOSAL_REQUIRED")
+    embedded_proposal = certificate["proposal"]
+    if not isinstance(embedded_proposal, Mapping):
+        fail("FINALITY_CERTIFICATE_PROPOSAL_INVALID")
+    if proposal is not None and dict(proposal) != dict(embedded_proposal):
+        fail("FINALITY_CERTIFICATE_PROPOSAL_MISMATCH")
+    proposal = embedded_proposal
     _verify_gcf1_proposal_signature(
         proposal, network_id=network_id, epoch=epoch,
         validators=validators, verified_at=certificate["finalized_at"],
