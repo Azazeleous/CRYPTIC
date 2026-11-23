@@ -122,6 +122,13 @@ class RuntimeCompositionTests(unittest.TestCase):
             "justice_commitment": {},
         }).allowed)
 
+    def test_raw_trust_key_preserves_whitespace_valued_edge_bytes(self):
+        path = self.root / "raw-whitespace-key.pub"
+        raw = bytes([0x20]) + bytes(range(1, 31)) + bytes([0x09])
+        path.write_bytes(raw)
+        os.chmod(path, 0o600)
+        self.assertEqual(load_pinned_ed25519_public_key(path), raw)
+
     def test_runtime_data_directory_is_private(self):
         private_dir = self.root / "private-data"
         runtime = build_consensus_runtime(
