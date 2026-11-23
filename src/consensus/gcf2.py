@@ -134,34 +134,40 @@ def verify_vote(
 
 
 def tally_votes(votes: list[Mapping[str, Any]], *, validator_set: ValidatorSet,
-                vote_type: str, candidate_digest: str | None = None) -> dict:
-    """Tally unique verified vote slots; only affirmative candidate votes count toward candidate quorum."""
-    if vote_type not in ("PREVOTE", "PRECOMMIT") or not isinstance(votes, list):
+                clock, vote_type: str, candidate_digest: str | None = None,
+                proposal: Mapping[str, Any] | None = None) -> dict:
+    """Verify and tally one round/phase slot set; nil never contributes to candidate quorum."""
+    if vote_type not in ("PREVOTE", "PRECOMMIT") or not isinstance(votes, list) or not votes:
         raise GCFError("GCF2_TALLY_INPUT_INVALID")
     seen: set[str] = set()
     candidate_ids: set[str] = set()
     nil_ids: set[str] = set()
     negative_ids: set[str] = set()
+    context = None
     for vote in votes:
-        if vote.get("vote_type") != vote_type:
+        checked = verify_vote(vote, validator_set=validator_set, clock=clock,
+                              proposal=proposal if vote.get("vote_kind") == "CANDIDATE" else None)
+        current = tuple(checked[key] for key in
+                        ("network_id", "epoch", "height", "round", "parent_hash", "vote_type"))
+        if context is None:
+            context = current
+        elif context != current:
+            raise GCFError("GCF2_TALLY_CONTEXT_MISMATCH")
+        if checked["vote_type"] != vote_type:
             raise GCFError("GCF2_TALLY_PHASE_MISMATCH")
-        validator_id = vote.get("validator_id")
-        if not isinstance(validator_id, str) or validator_id in seen:
+        validator_id = checked["validator_id"]
+        if validator_id in seen:
             raise GCFError("GCF2_DUPLICATE_VALIDATOR_VOTE_SLOT")
         seen.add(validator_id)
-        if vote.get("vote_kind") == "NIL":
-            if vote.get("candidate_digest") is not None or vote.get("approve") is not None:
-                raise GCFError("GCF2_NIL_VOTE_MALFORMED")
+        if checked["vote_kind"] == "NIL":
             nil_ids.add(validator_id)
-        elif vote.get("vote_kind") == "CANDIDATE":
-            if vote.get("candidate_digest") != candidate_digest:
+        elif checked["vote_kind"] == "CANDIDATE":
+            if checked["candidate_digest"] != candidate_digest:
                 raise GCFError("GCF2_CANDIDATE_TALLY_MISMATCH")
-            if vote.get("approve") is True:
+            if checked["approve"] is True:
                 candidate_ids.add(validator_id)
-            elif vote.get("approve") is False:
-                negative_ids.add(validator_id)
             else:
-                raise GCFError("GCF2_CANDIDATE_APPROVAL_INVALID")
+                negative_ids.add(validator_id)
         else:
             raise GCFError("GCF2_VOTE_KIND_INVALID")
     candidate_weight = validator_set.weight_of(candidate_ids)
