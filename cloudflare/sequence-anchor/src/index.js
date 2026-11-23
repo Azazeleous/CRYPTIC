@@ -529,7 +529,7 @@ async function verifyGcf2FinalityCertificate(envelope, transition, networkId, en
   const certificate = envelope.certificate;
   const proposal = envelope.proposal;
   const certFields = ["schema", "network_id", "epoch", "height", "round",
-    "parent_hash", "candidate_digest", "validator_set_hash", "finalized_at",
+    "parent_hash", "candidate_digest", "validator_set_hash", "proposal", "finalized_at",
     "polc", "precommits", "certificate_digest"];
   if (!certificate || typeof certificate !== "object" || Array.isArray(certificate) ||
       Object.keys(certificate).sort().join("|") !== certFields.slice().sort().join("|") ||
@@ -541,7 +541,9 @@ async function verifyGcf2FinalityCertificate(envelope, transition, networkId, en
       certificate.validator_set_hash !== vset.setHash) {
     return { ok: false, reason: "gcf2_finality_certificate_fields_invalid" };
   }
-  if (!proposal || proposal.network_id !== networkId ||
+  if (!proposal || !certificate.proposal ||
+      canonical(certificate.proposal) !== canonical(proposal) ||
+      proposal.network_id !== networkId ||
       proposal.epoch !== vset.epoch || proposal.height !== certificate.height ||
       proposal.round !== certificate.round || proposal.parent_hash !== certificate.parent_hash ||
       proposal.anchor_sequence !== transition.sequence ||
