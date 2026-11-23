@@ -91,3 +91,28 @@ Passing unit tests and CI are software evidence only. Production activation
 still requires deployed mTLS identity controls, independent policy/issuer key
 custody, durable backup and recovery drills, abuse/rate controls, monitoring,
 and independent operator review.
+
+
+## Finalized-block settlement ledger v1
+
+The pool now has a separate `PoolSettlementLedger` in `src/consensus/pool_settlement.py`. It does not change share admission or the HCCGN miner.
+
+### Settlement prerequisites
+
+1. Verify the complete GCF finality certificate with an independent verifier configured with the active validator set and the required HCCGN, governance, and justice evidence gates. The ledger requires the verifier to return `valid: true`; an unconfigured verifier denies settlement.
+2. Supply a signed `CRYPTIC-POOL-REWARD-POLICY/1` policy. The policy fields are exactly: `schema`, `policy_id`, `network_id`, `pool_id`, `epoch`, `effective_height_start`, `effective_height_end`, `reward_units`, `max_total_credits`, `asset`, `issuer_id`, `issued_at`, `expires_at`, and `signature`. The signature uses the `CRYPTIC-POOL-REWARD-POLICY/1\\0` Ed25519 domain and a public key pinned by the settlement service.
+3. Verify the share ledger hash chain and resolve the share's historical job through `PoolCoordinator.resolve_issued_job`. This re-verifies the original issuer signature at the job's issue time without making an expired or revoked job eligible for new submissions.
+4. Require exactly one accepted share whose proof hash matches the finalized proposal proof hash, and require its signed job to match the finalized network, pool, epoch, height, parent hash, and payload hash.
+5. Atomically append a settlement event and one internal credit record. A network/epoch/height can be settled only once. Exact retries are idempotent; a different certificate or policy at the same height is a conflict. A signed policy-wide credit cap is enforced.
+
+### Accounting boundary
+
+The current HCCGN pool admission profile accepts proofs against the active network target; it does not implement a separate pool partial-share target or difficulty-weighted shares. Therefore v1 credits only the unique pool worker whose accepted proof is the exact proof finalized by consensus. It does not distribute a block reward across unrelated accepted work. Any future partial-share allocation must be a separately versioned and authorized policy/protocol.
+
+The ledger asset is fixed to `INTERNAL_NONREDEEMABLE_CREDIT`. It has no transfer, withdrawal, redemption, token-minting, or payout API. The policy's `reward_units` are accounting units only and do not imply a transferable asset or external liability.
+
+### Composition
+
+Construct the settlement ledger with the persistent share ledger, `PoolCoordinator.resolve_issued_job`, an independently configured finality-verifier callback, and the pinned reward-policy public key. Call `settle_finalized_block(finality=..., reward_policy=..., pool_id=...)` only after the certificate and policy are available. Monitor `verify_chain()`, `list_settlements()`, and `worker_balances()`. Protect the settlement database and its backups with the same operational controls as the share ledger.
+
+Unit tests and CI do not prove independent policy-key custody, HSM deployment, host integrity, backup recovery, or production reward governance. Settlement is not a public payout service.
