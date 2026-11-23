@@ -304,7 +304,7 @@ async function verifyAnchorRecord(record, publicKey) {
 test("unauthenticated write is rejected before D1 mutation", async () => {
   const ctx = await setup();
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: "1".repeat(64) });
-  const body = await writeBody(ctx,1, "1".repeat(64), 0, ZERO, cert);
+  const body = await writeBody(ctx, 1, "1".repeat(64), 0, ZERO, cert);
   const response = await request(ctx.env, "PUT", "/v1/anchors/test-net", {
     headers: { "if-none-match": "*", "content-type": "application/json" }, body,
   });
@@ -364,7 +364,7 @@ test("pinned GCF/2 finality certificate authorizes sequence-anchor initializatio
   const certificate = await makeGcf2AnchorEnvelope(ctx, {
     sequence: 1, height: 44, oldHash: ZERO, newHash: hash,
   });
-  const response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, certificate), true);
+  const response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, certificate), true);
   assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
   assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").policy_hash, hash);
 });
@@ -376,8 +376,46 @@ test("GCF/2 anchor verifier rejects a tampered finality digest", async () => {
     sequence: 1, height: 45, oldHash: ZERO, newHash: hash,
   });
   certificate.certificate.certificate_digest = "0".repeat(64);
-  const response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, certificate), true);
+  const response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, certificate), true);
   assert.equal(response.status, 403);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
+test("GOD policy authorization is mandatory and bound to the exact anchor transition", async () => {
+  const ctx = await setup();
+  const hash = "e".repeat(64);
+  const certificate = await makeCertificate(ctx, {
+    sequence: 1, oldHash: ZERO, newHash: hash,
+  });
+
+  const missing = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  delete missing.policy_authorization;
+  const missingResponse = await put(ctx, missing, true);
+  assert.equal(missingResponse.status, 400);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+
+  const substituted = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  substituted.policy_authorization.policy_hash = "f".repeat(64);
+  const substitutedResponse = await put(ctx, substituted, true);
+  assert.equal(substitutedResponse.status, 403);
+  assert.equal((await substitutedResponse.json()).error,
+    "god_policy_authorization_transition_binding_mismatch");
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+
+  const forged = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  forged.policy_authorization.signature = b64(new Uint8Array(64));
+  const forgedResponse = await put(ctx, forged, true);
+  assert.equal(forgedResponse.status, 403);
+  assert.equal((await forgedResponse.json()).error,
+    "god_policy_authorization_signature_invalid");
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+
+  const unavailable = await writeBody(ctx, 1, hash, 0, ZERO, certificate);
+  delete ctx.env.ANCHOR_GOD_POLICY_PUBLIC_KEY_HEX;
+  const unavailableResponse = await put(ctx, unavailable, true);
+  assert.equal(unavailableResponse.status, 503);
+  assert.equal((await unavailableResponse.json()).error,
+    "god_policy_trust_not_configured");
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
 
@@ -385,7 +423,7 @@ test("pinned GCF finality certificate authorizes initialization and advancement"
   const ctx = await setup();
   const firstHash = "1".repeat(64);
   const firstCert = await makeCertificate(ctx, { sequence: 1, height: 17, oldHash: ZERO, newHash: firstHash });
-  const first = await writeBody(ctx,1, firstHash, 0, ZERO, firstCert);
+  const first = await writeBody(ctx, 1, firstHash, 0, ZERO, firstCert);
   const initialized = await put(ctx, first, true);
   assert.equal(initialized.status, 200, JSON.stringify(await initialized.clone().json()));
   const record = await initialized.json();
@@ -409,20 +447,20 @@ test("rejects insufficient quorum, forged signatures, wrong epoch, and transitio
   const ctx = await setup();
   const hash = "4".repeat(64);
   let cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash, signers: [0, 1] });
-  let response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  let response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
 
   cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
   cert.precommits[0].signature = b64(new Uint8Array(64));
-  response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
 
   cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash, epoch: 2 });
-  response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
 
   cert = await makeCertificate(ctx, { sequence: 1, oldHash: "f".repeat(64), newHash: hash });
-  response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
@@ -463,12 +501,12 @@ test("pinned Worker verifies nested round-change certificates and POLC-bound pro
     sequence: 1, height, oldHash: ZERO, newHash: policyHash,
     round: 2, roundChangeCertificate: secondRoundCertificate,
   });
-  const accepted = await put(ctx, await writeBody(ctx,1, policyHash, 0, ZERO, finality), true);
+  const accepted = await put(ctx, await writeBody(ctx, 1, policyHash, 0, ZERO, finality), true);
   assert.equal(accepted.status, 200, JSON.stringify(await accepted.clone().json()));
 
   const corrupted = structuredClone(finality);
   corrupted.proposal.round_change_certificate.messages[0].highest_polc.proposal.payload_hash = "a".repeat(64);
-  const rejected = await put(ctx, await writeBody(ctx,1, policyHash, 0, ZERO, corrupted), true);
+  const rejected = await put(ctx, await writeBody(ctx, 1, policyHash, 0, ZERO, corrupted), true);
   assert.equal(rejected.status, 403);
   assert.equal(ctx.env.ANCHOR_DB.rows.get("test-net").policy_hash, policyHash);
 });
@@ -477,7 +515,7 @@ test("certificate digest replay is rejected even when request nonce changes", as
   const ctx = await setup();
   const hash = "5".repeat(64);
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
-  const first = await writeBody(ctx,1, hash, 0, ZERO, cert);
+  const first = await writeBody(ctx, 1, hash, 0, ZERO, cert);
   assert.equal((await put(ctx, first, true)).status, 200);
   // Model restoration of only the anchor row while retaining the independent
   // certificate receipt ledger. The exact certificate must remain unusable.
@@ -491,7 +529,7 @@ test("missing pinned validator-set configuration fails closed as unavailable", a
   const ctx = await setup();
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: "6".repeat(64) });
   delete ctx.env.ANCHOR_VALIDATOR_SET_SHA256;
-  const response = await put(ctx, await writeBody(ctx,1, "6".repeat(64), 0, ZERO, cert), true);
+  const response = await put(ctx, await writeBody(ctx, 1, "6".repeat(64), 0, ZERO, cert), true);
   assert.equal(response.status, 503);
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
@@ -501,7 +539,7 @@ test("validator-set hash pin mismatch fails closed", async () => {
   const hash = "8".repeat(64);
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: hash });
   ctx.env.ANCHOR_VALIDATOR_SET_SHA256 = "0".repeat(64);
-  const response = await put(ctx, await writeBody(ctx,1, hash, 0, ZERO, cert), true);
+  const response = await put(ctx, await writeBody(ctx, 1, hash, 0, ZERO, cert), true);
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, "validator_set_hash_pin_mismatch");
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
@@ -514,7 +552,7 @@ test("rejects malformed nonce, request schema, and bearer token", async () => {
   });
   assert.equal(badNonce.status, 400);
   const cert = await makeCertificate(ctx, { sequence: 1, oldHash: ZERO, newHash: "7".repeat(64) });
-  const body = await writeBody(ctx,1, "7".repeat(64), 0, ZERO, cert);
+  const body = await writeBody(ctx, 1, "7".repeat(64), 0, ZERO, cert);
   const badAuth = await request(ctx.env, "PUT", "/v1/anchors/test-net", {
     headers: { authorization: "Bearer invalid", "if-none-match": "*",
       "content-type": "application/json" }, body,
