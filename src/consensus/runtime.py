@@ -45,16 +45,22 @@ def load_pinned_ed25519_public_key(path: str | os.PathLike[str]) -> bytes:
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise RuntimeConfigurationError("god_trust_root_owner_mismatch")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            raw = stream.read(4097).strip()
+            raw = stream.read(4097)
         if len(raw) > 4096:
             raise RuntimeConfigurationError("god_trust_root_file_too_large")
     finally:
         os.close(descriptor)
-    if len(raw) == 64:
-        try:
-            raw = bytes.fromhex(raw.decode("ascii"))
-        except (UnicodeDecodeError, ValueError) as exc:
-            raise RuntimeConfigurationError("god_trust_root_encoding_invalid") from exc
+    # Preserve exact 32-byte binary keys. Calling bytes.strip() on raw key
+    # material can silently delete valid leading/trailing 0x09..0x0d/0x20 bytes.
+    if len(raw) != 32:
+        candidate = raw.strip()
+        if len(candidate) == 64:
+            try:
+                raw = bytes.fromhex(candidate.decode("ascii"))
+            except (UnicodeDecodeError, ValueError) as exc:
+                raise RuntimeConfigurationError("god_trust_root_encoding_invalid") from exc
+        else:
+            raw = candidate
     if len(raw) != 32:
         raise RuntimeConfigurationError("god_trust_root_length_invalid")
     return raw
