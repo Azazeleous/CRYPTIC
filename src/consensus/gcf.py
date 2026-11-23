@@ -529,6 +529,22 @@ class GCFEngine:
             try:
                 proposal = self._proposal(db, digest)
                 normalized = self._verify_vote(vote, proposal)
+                # GCF/1 and GCF/2 share one durable height/phase/validator
+                # anti-equivocation boundary. A GCF/2 slot blocks GCF/1 signing.
+                gcf2_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gcf2_vote_slots'"
+                ).fetchone()
+                if gcf2_table is not None:
+                    cross_version = db.execute(
+                        """SELECT 1 FROM gcf2_vote_slots
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND vote_type=? AND validator_id=? LIMIT 1""",
+                        (normalized["network_id"], normalized["epoch"],
+                         normalized["height"], normalized["vote_type"],
+                         normalized["validator_id"]),
+                    ).fetchone()
+                    if cross_version is not None:
+                        raise GCFError("GCF1_CROSS_VERSION_VOTE_SLOT_ALREADY_USED")
                 if normalized["vote_type"] == "PRECOMMIT" and normalized["approve"]:
                     _, polc_digest = self._polc(db, digest)
                     if normalized["polc_digest"] != polc_digest:
