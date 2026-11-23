@@ -11,8 +11,11 @@ transition-signing service.
   `CRYPTIC-SEQUENCE-ANCHOR/1\0` domain and canonical JSON.
 - GET requests require a 128-bit hexadecimal nonce and return signed state.
 - PUT requests require a bearer credential of at least 32 non-whitespace
-  characters for transport authentication **and** a valid GCF/1 finality
-  certificate.
+  characters for transport authentication **and** a valid GCF finality
+  certificate. The bearer credential is never transition authority by itself.
+- A regression test submits an arbitrary sequence/hash using a valid bearer
+  credential but an invalid/non-finalized certificate and verifies that the
+  Worker rejects the request before any D1 anchor mutation.
 - The Worker checks the certificate's proposal signature, candidate digest,
   active network/epoch, proposer membership and key, validator-set hash,
   unique sorted PREVOTE/PRECOMMIT signers, each vote signature, POLC digest,
