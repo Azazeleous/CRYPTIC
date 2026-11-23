@@ -495,6 +495,34 @@ class PoolCoordinator:
         except Exception as exc:
             raise PoolServiceError("pool_settlement_rejected:" + str(exc)) from exc
 
+    def resolve_issued_job(self, job_id: str) -> dict:
+        """Resolve an issuer-authenticated historical job for finality settlement.
+
+        Expired or revoked jobs remain non-submittable. This read-only method
+        verifies their original signature at issuance time for audit purposes.
+        """
+        if not isinstance(job_id, str) or len(job_id) != 32:
+            raise PoolServiceError("job_id_invalid")
+        with _connect(self.database) as conn:
+            row = conn.execute(
+                "SELECT job_json FROM pool_jobs WHERE job_id=?", (job_id,)
+            ).fetchone()
+        if row is None:
+            raise PoolServiceError("job_unknown")
+        try:
+            job = json.loads(bytes(row[0]).decode("ascii"))
+            verify_pool_job(
+                job,
+                trusted_issuer_public_key_hex=self.trusted_issuer_public_key_hex,
+                expected_issuer_id=self.issuer_id,
+                expected_pool_id=self.pool_id,
+                expected_network_id=self.network_id,
+                now=job["issued_at"],
+            )
+        except Exception as exc:
+            raise PoolServiceError("persisted_job_signature_invalid") from exc
+        return job
+
     def status(self) -> dict:
         """Return measured durable state; chain integrity failure is explicit."""
         self.expire_jobs()
