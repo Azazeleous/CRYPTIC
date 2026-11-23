@@ -19,6 +19,7 @@ from typing import Any
 
 MAX_INPUT_BYTES = 1024 * 1024
 MAX_OUTPUT_BYTES = 64 * 1024
+MAX_WIRE_RESPONSE_BYTES = 4 * ((MAX_OUTPUT_BYTES + 2) // 3) + 4096
 MAX_TIMEOUT_SECONDS = 10.0
 MIN_TIMEOUT_SECONDS = 0.05
 MAX_DIAGNOSTIC_PAUSE_SECONDS = 5.0
@@ -30,6 +31,12 @@ class ProcessSupervisorError(ValueError):
 
 class ProcessDeadlineExceeded(TimeoutError):
     """The worker was terminated because its absolute deadline elapsed."""
+
+    def __init__(self, message: str, *, process_id: int | None = None,
+                 worker_terminated: bool = False):
+        super().__init__(message)
+        self.process_id = process_id
+        self.worker_terminated = worker_terminated
 
 
 @dataclass(frozen=True)
@@ -173,7 +180,7 @@ class ProcessSupervisor:
                 raise ProcessSupervisorError("worker_deadline_invalid")
             deadline = min(deadline, float(deadline_monotonic))
         if deadline <= started:
-            raise ProcessDeadlineExceeded("worker_deadline_exceeded")
+            raise ProcessDeadlineExceeded("worker_deadline_exceeded", worker_terminated=True)
 
         receive_connection, send_connection = self._ctx.Pipe(duplex=False)
         process = self._ctx.Process(
@@ -188,9 +195,12 @@ class ProcessSupervisor:
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not receive_connection.poll(remaining):
                 self._stop(process)
-                raise ProcessDeadlineExceeded("worker_deadline_exceeded")
+                raise ProcessDeadlineExceeded(
+                    "worker_deadline_exceeded", process_id=process.pid,
+                    worker_terminated=not process.is_alive(),
+                )
             try:
-                raw = receive_connection.recv_bytes(MAX_OUTPUT_BYTES + 4096)
+                raw = receive_connection.recv_bytes(MAX_WIRE_RESPONSE_BYTES)
             except (OSError, EOFError) as exc:
                 self._stop(process)
                 raise ProcessSupervisorError("worker_response_invalid") from exc
@@ -212,7 +222,10 @@ class ProcessSupervisor:
             if len(output) > MAX_OUTPUT_BYTES:
                 raise ProcessSupervisorError("worker_output_too_large")
             if time.monotonic() >= deadline:
-                raise ProcessDeadlineExceeded("worker_deadline_exceeded")
+                raise ProcessDeadlineExceeded(
+                    "worker_deadline_exceeded", process_id=process.pid,
+                    worker_terminated=not process.is_alive(),
+                )
             return ProcessResult(
                 operation=operation,
                 output=output,
