@@ -13,7 +13,7 @@ from src.consensus.gcf import (
 )
 
 SCHEMA = "GCF/2"
-VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\\x00"
+VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\x00"
 MAX_VOTE_LIFETIME_SECONDS = 300
 VOTE_FIELDS = {
     "schema", "network_id", "epoch", "height", "round", "parent_hash",
