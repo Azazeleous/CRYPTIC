@@ -167,6 +167,19 @@ class PoolShareLedger:
             previous=stored_hash
         return True
 
+    def worker_stats(self) -> list[dict]:
+        """Return measured accepted-share totals per worker."""
+        with _connect(self.database) as conn:
+            rows = conn.execute(
+                """SELECT worker_id,COUNT(*),MAX(accepted_at)
+                   FROM pool_shares GROUP BY worker_id ORDER BY worker_id"""
+            ).fetchall()
+        return [
+            {"worker_id": row[0], "accepted_shares": row[1],
+             "last_accepted_at": row[2]}
+            for row in rows
+        ]
+
     def get_share(self, *, share_id: str, proof_hash: str) -> dict | None:
         """Look up an already committed share for safe idempotent request recovery."""
         with _connect(self.database) as conn:
