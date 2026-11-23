@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping
 
 from src.adam.commit_store import AdamCommitStore, APEXValidator
 from src.consensus.gcf import GCFEngine, ValidatorSet
+from src.consensus.gcf2_engine import GCF2VoteStore
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
 from src.consensus.hccgn_registry import (
     HCCGNActiveTargetPolicy, HCCGNProofStore, HCCGNSequenceAnchor,
@@ -80,6 +81,7 @@ class ConsensusRuntime:
     policy_update: GCFPolicyUpdateCoordinator | None
     round_progression: RoundProgressionController
     round_orchestrator: RoundChangeOrchestrator | None
+    gcf2_vote_store: GCF2VoteStore | None
     http: GCFWSGI
 
     @property
@@ -110,6 +112,8 @@ def build_consensus_runtime(
     local_validator_id: str | None = None,
     round_change_signer: Callable | None = None,
     round_change_broadcaster: Callable | None = None,
+    enable_gcf2_vote_store: bool = False,
+    gcf2_active_parent_resolver: Callable[[int], str | None] | None = None,
 ) -> ConsensusRuntime:
     """Build the complete local runtime around operator-supplied trust services.
 
@@ -127,6 +131,10 @@ def build_consensus_runtime(
         raise RuntimeConfigurationError("policy_update_proposer_and_signer_must_be_paired")
     if policy_update_signer is not None and sequence_anchor is None:
         raise RuntimeConfigurationError("policy_update_requires_sequence_anchor")
+    if not isinstance(enable_gcf2_vote_store, bool):
+        raise RuntimeConfigurationError("gcf2_enable_flag_invalid")
+    if enable_gcf2_vote_store and not callable(gcf2_active_parent_resolver):
+        raise RuntimeConfigurationError("gcf2_requires_trusted_active_parent_resolver")
     if policy_update_peer_mesh is not None and policy_update_signer is None:
         raise RuntimeConfigurationError("policy_update_peer_mesh_requires_coordinator")
     round_orchestrator_args = (local_validator_id, round_change_signer, round_change_broadcaster)
@@ -197,6 +205,14 @@ def build_consensus_runtime(
     if clock is not None:
         engine_kwargs["clock"] = clock
     engine = GCFEngine(root / "gcf.sqlite3", validator_set, **engine_kwargs)
+    gcf2_vote_store = None
+    if enable_gcf2_vote_store:
+        gcf2_vote_store = GCF2VoteStore(
+            database=root / "gcf.sqlite3", validator_set=validator_set,
+            gcf1_engine=engine,
+            resolve_active_parent=gcf2_active_parent_resolver,
+            clock=clock or time.time,
+        )
     adam_store = AdamCommitStore(root / "adam.sqlite3")
     apex = APEXValidator(
         adam_store, hccgn_verifier=hccgn_gate,
@@ -239,5 +255,5 @@ def build_consensus_runtime(
     return ConsensusRuntime(
         proof_store, target_policy, work_provider, hccgn_gate, justice_gate,
         god_authorizer, engine, adam_store, apex, policy_update,
-        round_progression, round_orchestrator, http,
+        round_progression, round_orchestrator, gcf2_vote_store, http,
     )
