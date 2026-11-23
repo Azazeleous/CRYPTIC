@@ -69,6 +69,16 @@ def make_vote(
 
 
 def _validate_semantics(vote: Mapping[str, Any]) -> None:
+    for field, minimum in (("epoch", 1), ("height", 1), ("round", 0),
+                           ("issued_at", 0), ("expires_at", 1)):
+        value = vote.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum or value > (1 << 63) - 1:
+            raise GCFError(f"GCF2_{field.upper()}_INVALID")
+    if not isinstance(vote.get("network_id"), str) or not vote["network_id"]:
+        raise GCFError("GCF2_NETWORK_ID_INVALID")
+    if not isinstance(vote.get("validator_id"), str) or not vote["validator_id"]:
+        raise GCFError("GCF2_VALIDATOR_ID_INVALID")
+    _hash(vote.get("parent_hash"), "PARENT_HASH")
     if vote["vote_type"] not in ("PREVOTE", "PRECOMMIT"):
         raise GCFError("GCF2_VOTE_TYPE_INVALID")
     if vote["vote_kind"] == "NIL":
@@ -78,6 +88,9 @@ def _validate_semantics(vote: Mapping[str, Any]) -> None:
     elif vote["vote_kind"] == "CANDIDATE":
         if vote["candidate_digest"] is None or not isinstance(vote["approve"], bool):
             raise GCFError("GCF2_CANDIDATE_VOTE_FIELDS_INVALID")
+        _hash(vote["candidate_digest"], "CANDIDATE_DIGEST")
+        if vote["polc_digest"] is not None:
+            _hash(vote["polc_digest"], "POLC_DIGEST")
         if vote["vote_type"] == "PREVOTE" and vote["polc_digest"] is not None:
             raise GCFError("GCF2_PREVOTE_MUST_NOT_CARRY_POLC")
         if vote["vote_type"] == "PRECOMMIT" and vote["approve"] and vote["polc_digest"] is None:
