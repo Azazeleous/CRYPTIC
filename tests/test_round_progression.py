@@ -89,6 +89,26 @@ class RoundProgressionControllerTests(unittest.TestCase):
             cert["digest"],
         )
 
+    def test_pending_timeout_intent_is_recovered_after_restart(self):
+        self.controller.arm(height=12)
+        first = self.controller.poll_timeout(height=12, now_monotonic=105.0)
+        self.assertIsNotNone(first)
+        restarted = RoundProgressionController(
+            engine=self.engine, database=self.db,
+            monotonic=lambda: 9000.0,
+        )
+        recovered = restarted.poll_timeout(height=12, now_monotonic=9000.0)
+        self.assertEqual(recovered, first)
+
+    def test_certificate_source_round_must_match_local_progression(self):
+        self.controller.activate_certificate(self.certificate(target=1), height=12)
+        stale = self.certificate(target=2)  # signed source_round remains zero
+        with self.assertRaisesRegex(
+            RoundProgressionError, "source_round_mismatch",
+        ):
+            self.controller.activate_certificate(stale, height=12)
+        self.assertEqual(self.controller.current_round(12), 1)
+
     def test_timeout_cannot_advance_without_a_certificate(self):
         self.controller.arm(height=12)
         self.controller.poll_timeout(height=12, now_monotonic=105.0)
