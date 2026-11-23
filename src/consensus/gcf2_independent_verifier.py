@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 SCHEMA = "GCF/2"
 VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\x00"
+PROPOSAL_DOMAIN = b"GCF/1|PROPOSAL|ED25519\x00"
 VOTE_FIELDS = {
     "schema", "network_id", "epoch", "height", "round", "parent_hash",
     "vote_type", "vote_kind", "candidate_digest", "validator_id",
@@ -190,6 +191,10 @@ def verify_finality_certificate(
         value = certificate[field]
         if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
             fail("FINALITY_CERTIFICATE_" + field.upper() + "_INVALID")
+    _verify_gcf1_proposal_signature(
+        proposal, network_id=network_id, epoch=epoch,
+        validators=validators, verified_at=certificate["finalized_at"],
+    )
     candidate_digest = hashlib.sha256(canonical_bytes(dict(proposal))).hexdigest()
     if (
         proposal.get("network_id") != network_id
@@ -288,3 +293,53 @@ def verify_finality_certificate(
         "validator_set_hash": set_digest,
         "certificate_digest": expected_certificate_digest,
     }
+
+
+def _verify_gcf1_proposal_signature(
+    proposal: Mapping[str, Any], *, network_id: str, epoch: int,
+    validators: Mapping[str, Mapping[str, Any]], verified_at: int,
+) -> None:
+    required = {
+        "schema", "network_id", "epoch", "height", "round", "parent_hash",
+        "payload_hash", "proof_hash", "justice_commitment", "issued_at",
+        "expires_at", "proposer_id", "proposer_public_key", "nonce", "signature",
+    }
+    allowed = required | {"anchor_sequence", "round_change_certificate"}
+    if (not isinstance(proposal, Mapping) or not required.issubset(proposal)
+            or not set(proposal).issubset(allowed)):
+        raise GCF2IndependentVerificationError("PROPOSAL_FIELDS_INVALID")
+    if proposal["schema"] != "GCF/1" or proposal["network_id"] != network_id:
+        raise GCF2IndependentVerificationError("PROPOSAL_NETWORK_OR_SCHEMA_INVALID")
+    if proposal["epoch"] != epoch:
+        raise GCF2IndependentVerificationError("PROPOSAL_EPOCH_INVALID")
+    for field, minimum in (("height", 1), ("round", 0),
+                           ("issued_at", 0), ("expires_at", 1)):
+        value = proposal[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            raise GCF2IndependentVerificationError("PROPOSAL_" + field.upper() + "_INVALID")
+    if (proposal["expires_at"] <= proposal["issued_at"]
+            or proposal["expires_at"] - proposal["issued_at"] > 3600
+            or proposal["issued_at"] > verified_at + 30
+            or proposal["expires_at"] < verified_at - 30):
+        raise GCF2IndependentVerificationError("PROPOSAL_TIME_WINDOW_INVALID")
+    for field in ("parent_hash", "payload_hash", "proof_hash"):
+        if not _valid_hash(proposal[field]):
+            raise GCF2IndependentVerificationError("PROPOSAL_" + field.upper() + "_INVALID")
+    proposer_id = proposal["proposer_id"]
+    validator = validators.get(proposer_id)
+    if not isinstance(validator, Mapping):
+        raise GCF2IndependentVerificationError("PROPOSER_NOT_IN_VALIDATOR_SET")
+    public_key_hex = validator.get("public_key_hex")
+    if proposal["proposer_public_key"] != public_key_hex:
+        raise GCF2IndependentVerificationError("PROPOSER_KEY_MISMATCH")
+    try:
+        public = bytes.fromhex(public_key_hex)
+        signature = base64.b64decode(proposal["signature"], validate=True)
+        body = {key: value for key, value in proposal.items() if key != "signature"}
+        if len(public) != 32 or len(signature) != 64:
+            raise ValueError("key_or_signature_length_invalid")
+        Ed25519PublicKey.from_public_bytes(public).verify(
+            signature, PROPOSAL_DOMAIN + canonical_bytes(body),
+        )
+    except (ValueError, TypeError, KeyError, InvalidSignature) as exc:
+        raise GCF2IndependentVerificationError("PROPOSAL_SIGNATURE_INVALID") from exc
