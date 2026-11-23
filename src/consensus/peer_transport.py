@@ -58,12 +58,14 @@ class GCFPeerNode:
                  peer_certificate_fingerprints: Mapping[str, str],
                  replay_db_path: str | Path, clock=time.time,
                  max_connections: int = DEFAULT_MAX_PEER_CONNECTIONS,
-                 io_timeout_seconds: float = DEFAULT_PEER_IO_TIMEOUT_SECONDS):
+                 io_timeout_seconds: float = DEFAULT_PEER_IO_TIMEOUT_SECONDS,
+                 gcf2_vote_store: Any | None = None):
         if node_id not in validator_set.validators:
             raise PeerTransportError("LOCAL_NODE_NOT_IN_VALIDATOR_SET")
         if public_key_hex(private_key_hex) != validator_set.validators[node_id].public_key_hex:
             raise PeerTransportError("LOCAL_PRIVATE_KEY_DOES_NOT_MATCH_VALIDATOR_ID")
         self.engine = engine
+        self.gcf2_vote_store = gcf2_vote_store
         self.validator_set = validator_set
         self.node_id = node_id
         self.private_key_hex = private_key_hex
@@ -99,6 +101,12 @@ class GCFPeerNode:
                   message_id TEXT NOT NULL,
                   issued_at INTEGER NOT NULL,
                   PRIMARY KEY(sender_id,message_id)
+                );
+                CREATE TABLE IF NOT EXISTS peer_protocols(
+                  peer_id TEXT PRIMARY KEY,
+                  versions_json TEXT NOT NULL,
+                  selected_version TEXT NOT NULL,
+                  negotiated_at INTEGER NOT NULL
                 )
             """)
 
@@ -116,7 +124,7 @@ class GCFPeerNode:
 
     def make_envelope(self, message_type: str, payload: Mapping[str, Any],
                       *, message_id: str, issued_at: int | None = None) -> dict:
-        if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"}:
+        if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE", "HELLO", "GCF2_VOTE"}:
             raise PeerTransportError("MESSAGE_TYPE_UNSUPPORTED")
         body = {
             "schema": P2P_SCHEMA,
@@ -156,7 +164,7 @@ class GCFPeerNode:
         payload = envelope["payload"]
         if not isinstance(payload, Mapping):
             raise PeerTransportError("MESSAGE_PAYLOAD_INVALID")
-        if envelope["message_type"] not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"}:
+        if envelope["message_type"] not in {"PROPOSAL", "VOTE", "ROUND_CHANGE", "HELLO", "GCF2_VOTE"}:
             raise PeerTransportError("MESSAGE_TYPE_UNSUPPORTED")
         body = {k: v for k, v in envelope.items() if k != "signature"}
         public_key = self.validator_set.validators[sender].public_key_hex
@@ -183,7 +191,46 @@ class GCFPeerNode:
                 raise
 
         try:
-            if envelope["message_type"] == "PROPOSAL":
+            if envelope["message_type"] == "HELLO":
+                required_hello = {"schema", "network_id", "epoch", "supported_versions"}
+                versions = payload.get("supported_versions")
+                if (set(payload) != required_hello
+                        or payload.get("schema") != "GCF-CAPABILITIES/1"
+                        or payload.get("network_id") != self.validator_set.network_id
+                        or payload.get("epoch") != self.validator_set.epoch
+                        or not isinstance(versions, list)
+                        or not versions
+                        or versions != sorted(set(versions))
+                        or any(item not in {"GCF/1", "GCF/2"} for item in versions)):
+                    raise PeerTransportError("PROTOCOL_CAPABILITIES_INVALID")
+                local = ["GCF/1"] + (["GCF/2"] if self.gcf2_vote_store is not None else [])
+                common = sorted(set(local).intersection(versions))
+                selected = common[-1] if common else None
+                if selected is None:
+                    raise PeerTransportError("NO_COMMON_CONSENSUS_PROTOCOL")
+                with self._db() as db:
+                    db.execute(
+                        """INSERT INTO peer_protocols VALUES(?,?,?,?)
+                           ON CONFLICT(peer_id) DO UPDATE SET
+                           versions_json=excluded.versions_json,
+                           selected_version=excluded.selected_version,
+                           negotiated_at=excluded.negotiated_at""",
+                        (sender, json.dumps(versions, separators=(",", ":")),
+                         selected, int(self.clock())),
+                    )
+                result = {"selected_version": selected, "local_versions": local}
+            elif envelope["message_type"] == "GCF2_VOTE":
+                if self.gcf2_vote_store is None:
+                    raise PeerTransportError("GCF2_NOT_ENABLED_ON_NODE")
+                with self._db() as db:
+                    negotiated = db.execute(
+                        "SELECT selected_version FROM peer_protocols WHERE peer_id=?",
+                        (sender,),
+                    ).fetchone()
+                if negotiated is None or negotiated[0] != "GCF/2":
+                    raise PeerTransportError("GCF2_PROTOCOL_NOT_NEGOTIATED")
+                result = self.gcf2_vote_store.submit_vote(payload)
+            elif envelope["message_type"] == "PROPOSAL":
                 result = self.engine.submit_proposal(payload)
             elif envelope["message_type"] == "VOTE":
                 result = self.engine.submit_vote(payload)
@@ -361,7 +408,7 @@ class GCFPeerMesh:
 
     async def broadcast(self, message_type: str, payload: Mapping[str, Any]) -> dict:
         """Fan out one signed proposal, validator vote, or round-change message."""
-        if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE"} or not isinstance(payload, Mapping):
+        if message_type not in {"PROPOSAL", "VOTE", "ROUND_CHANGE", "GCF2_VOTE"} or not isinstance(payload, Mapping):
             raise PeerTransportError("BROADCAST_MESSAGE_INVALID")
         message_id = secrets.token_hex(16)
         semaphore = asyncio.Semaphore(self.max_parallel)
@@ -369,6 +416,22 @@ class GCFPeerMesh:
         async def deliver(peer_id, config):
             async with semaphore:
                 try:
+                    if message_type == "GCF2_VOTE":
+                        hello = await asyncio.wait_for(
+                            self.node.send(
+                                config["host"], config["port"], self.tls_context,
+                                config["server_fingerprint"], "HELLO",
+                                {"schema": "GCF-CAPABILITIES/1",
+                                 "network_id": self.node.validator_set.network_id,
+                                 "epoch": self.node.validator_set.epoch,
+                                 "supported_versions": ["GCF/1", "GCF/2"]},
+                                secrets.token_hex(16),
+                            ),
+                            timeout=self.timeout_seconds,
+                        )
+                        selected = hello.get("result", {}).get("selected_version") if isinstance(hello, Mapping) else None
+                        if hello.get("status") != "accepted" or selected != "GCF/2":
+                            return {"accepted": False, "error": "GCF2_PROTOCOL_NOT_NEGOTIATED"}
                     response = await asyncio.wait_for(
                         self.node.send(
                             config["host"], config["port"], self.tls_context,
