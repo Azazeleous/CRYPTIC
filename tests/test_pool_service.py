@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -164,6 +165,35 @@ class PoolCoordinatorTests(unittest.TestCase):
         self.assertEqual(retry["share_id"], first["share_id"])
         self.assertEqual(retry["event_hash"], first["event_hash"])
         self.assertTrue(self.ledger.verify_chain())
+
+    def test_legacy_job_lifecycle_schema_migrates_expired_state(self):
+        legacy_db = self.root / "legacy-jobs.sqlite3"
+        with sqlite3.connect(legacy_db) as conn:
+            conn.execute("""
+                CREATE TABLE pool_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    job_json BLOB NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('active','revoked')),
+                    created_at INTEGER NOT NULL,
+                    revoked_at INTEGER
+                )
+            """)
+        migrated = PoolCoordinator(
+            database=legacy_db, share_ledger=self.ledger,
+            issuer_private_key_hex=self.private_hex, issuer_id="issuer",
+            pool_id="gaia-internal", network_id="hccgn-test",
+            trusted_issuer_public_key_hex=self.public_hex,
+            resolve_active_target=lambda boundary: b"\\xff" * 32,
+            clock=lambda: self.now,
+        )
+        with sqlite3.connect(legacy_db) as conn:
+            schema = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='pool_jobs'"
+            ).fetchone()[0]
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(pool_jobs)")}
+        self.assertIn("'expired'", schema)
+        self.assertIn("assigned_worker_id", columns)
+        self.assertEqual(migrated.status()["jobs_total"], 0)
 
     def test_nonce_reservations_support_full_uint64_boundary(self):
         start = (1 << 64) - 8
