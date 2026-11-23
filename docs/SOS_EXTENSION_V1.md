@@ -53,4 +53,10 @@ tests/test_sos_virtual_computer.py covers publisher signature verification, arti
 
 tests/test_gate_contracts.py also covers a trust-root parsing edge case: raw 32-byte Ed25519 keys are preserved exactly even when the first or last byte is an ASCII whitespace value.
 
-CI evidence is recorded in the pull request and capability ledger only after the current branch head passes. No live extension code, host process isolation, device enrollment, or hardware durability is claimed.
+CI evidence on source commit 400693eaf77fdd540b6c52640f03116c1f059c4c:
+
+- CRYPTIC CI run 45216310927 — 380 tests passed (2 skipped).
+- Mining-engine run 45216310898 — 380 tests passed.
+- GAIA local trophy run 45216310945 — passed.
+
+No live extension code, hard host process isolation, device enrollment, or physical power-loss durability is claimed.
