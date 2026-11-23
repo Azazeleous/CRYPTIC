@@ -20,7 +20,7 @@ from src.consensus.gcf2 import (
     SCHEMA, VOTE_DOMAIN, verify_vote,
 )
 
-POLC_DOMAIN = b"GCF/2|POLC\\x00"
+POLC_DOMAIN = b"GCF/2|POLC\x00"
 
 
 class GCF2VoteStore:
