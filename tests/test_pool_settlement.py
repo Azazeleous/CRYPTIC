@@ -156,6 +156,12 @@ class PoolSettlementLedgerTests(unittest.TestCase):
         self.settlement.settle_finalized_block(
             finality=self.finality, reward_policy=policy, pool_id="gaia-pool",
         )
+        second_share = {
+            **self.share, "share_id": "aa" * 32,
+            "proof_hash": "99" * 32, "work_digest": "bb" * 32,
+            "nonce": 10,
+        }
+        self.share_ledger.record_accepted_share(second_share)
         self.proposal["height"] = 28
         self.proposal["proof_hash"] = "99" * 32
         self.certificate["height"] = 28
@@ -167,7 +173,7 @@ class PoolSettlementLedgerTests(unittest.TestCase):
             b"GCF/1|FINALITY-CERTIFICATE\x00" + _canonical(self.certificate)
         ).hexdigest()
         finality = {"certificate": self.certificate, "certificate_digest": digest}
-        with self.assertRaisesRegex(PoolSettlementError, "finalized_proof_has_no_unique_accepted_pool_share"):
+        with self.assertRaisesRegex(PoolSettlementError, "reward_policy_credit_cap_exceeded"):
             self.settlement.settle_finalized_block(
                 finality=finality, reward_policy=policy, pool_id="gaia-pool",
             )
