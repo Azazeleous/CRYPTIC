@@ -31,7 +31,9 @@ The HCCGN miner implementation is not modified by this coordinator.
 
 - Jobs have a bounded lifetime of at most 300 seconds.
 - Jobs are persisted before being returned to their assigned worker.
-- The operator must allocate non-overlapping nonce windows when issuing jobs to different workers; worker binding alone does not partition the nonce space.
+- The coordinator durably reserves each nonce interval per network, epoch, height, parent hash, and payload hash in the same SQLite transaction as job issuance. Overlapping intervals are rejected across workers, including after revocation; revoked ranges are not recycled.
+- Nonce interval endpoints are stored as fixed-width decimal text so the complete unsigned 64-bit nonce space, including an exclusive endpoint of `2^64`, is represented without SQLite signed-integer truncation.
+- Worker binding and nonce-range reservation are independent controls: the first limits who may use a job, and the second prevents two issued jobs from assigning the same work window.
 - Revoked jobs are rejected.
 - Shares are checked against the currently active target policy at submission
   time, not merely the target that was active when the job was issued. A policy
