@@ -66,7 +66,7 @@ class ConsensusSigningGuard:
         self.network_id = network_id
         self.epoch = epoch
         self.validator_id = validator_id
-        self.public_key_hex = public_key.hex()
+        self.public_key_hex = public.hex()
         self.sign_bytes = sign_bytes
         with self._db() as db:
             db.execute("""
