@@ -132,6 +132,10 @@ def normalize_finality(
         digest = certificate.get("certificate_digest")
         if not isinstance(digest, str) or not HEX32.fullmatch(digest):
             raise PoolSettlementError("gcf2_finality_digest_missing")
+    if proposal is None:
+        proposal = certificate.get("proposal")
+    elif certificate.get("proposal") is not None and dict(proposal) != dict(certificate["proposal"]):
+        raise PoolSettlementError("finality_proposal_mismatch")
     if not isinstance(proposal, Mapping):
         raise PoolSettlementError("finality_proposal_missing")
     if certificate.get("network_id") != proposal.get("network_id") or \
