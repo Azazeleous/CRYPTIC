@@ -282,6 +282,20 @@ test("unauthenticated write is rejected before D1 mutation", async () => {
   assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
 });
 
+test("bearer-token holder cannot advance an arbitrary tuple without valid GCF finality", async () => {
+  const ctx = await setup();
+  const arbitraryHash = "9".repeat(64);
+  const body = writeBody(9001, arbitraryHash, 0, ZERO, {
+    schema: "GCF/1",
+    network_id: "test-net",
+    sequence: 9001,
+    policy_hash: arbitraryHash,
+  });
+  const response = await put(ctx, body, true);
+  assert.equal(response.status, 403);
+  assert.equal(ctx.env.ANCHOR_DB.rows.size, 0);
+});
+
 test("Python GCF/2 known-answer certificate verifies identically in the Worker", async () => {
   const vectorBytes = gunzipSync(Buffer.from(
     readFileSync(new URL("./vectors/gcf2_finality_known_answer.json.gz.b64", import.meta.url), "utf8"),
