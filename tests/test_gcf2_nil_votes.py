@@ -8,6 +8,9 @@ from src.consensus.gcf import GCFError, ValidatorSet, make_proposal
 from src.consensus.gcf2 import (
     SCHEMA, VOTE_DOMAIN, make_vote, tally_votes, verify_vote,
 )
+from src.consensus.gcf2_independent_verifier import (
+    GCF2IndependentVerificationError, verify_vote as independently_verify_vote,
+)
 
 
 def keypair():
@@ -143,6 +146,43 @@ class GCF2NilVoteTests(unittest.TestCase):
         checked = verify_vote(vote, validator_set=self.vset, clock=self.clock)
         self.assertEqual(checked["vote_type"], "PRECOMMIT")
         self.assertIsNone(checked["polc_digest"])
+
+    def test_independent_verifier_accepts_signed_nil_and_candidate_votes(self):
+        validators = {
+            name: {"public_key_hex": pair[1], "weight": 1}
+            for name, pair in self.keys.items()
+        }
+        nil_vote = self.nil_vote("v1")
+        candidate_vote = self.candidate_vote("v2")
+        self.assertEqual(
+            independently_verify_vote(
+                nil_vote, network_id="gaia-testnet", epoch=1,
+                validators=validators, now=self.now,
+            )["vote_kind"],
+            "NIL",
+        )
+        self.assertEqual(
+            independently_verify_vote(
+                candidate_vote, network_id="gaia-testnet", epoch=1,
+                validators=validators, now=self.now, proposal=self.proposal,
+            )["vote_kind"],
+            "CANDIDATE",
+        )
+
+    def test_independent_verifier_rejects_tampered_signature(self):
+        validators = {
+            name: {"public_key_hex": pair[1], "weight": 1}
+            for name, pair in self.keys.items()
+        }
+        vote = self.nil_vote("v1")
+        vote["height"] = 10
+        with self.assertRaisesRegex(
+            GCF2IndependentVerificationError, "SIGNATURE_INVALID"
+        ):
+            independently_verify_vote(
+                vote, network_id="gaia-testnet", epoch=1,
+                validators=validators, now=self.now,
+            )
 
 
 if __name__ == "__main__":
