@@ -22,7 +22,11 @@ from src.consensus.hccgn_work import (
     HCCGNWorkProofProvider,
     PROFILE_ID,
 )
-from src.consensus.pool_runtime import build_gcf1_pool_finality_verifier
+from src.consensus.pool_runtime import (
+    build_adam_finalized_state_verifier,
+    build_gcf1_pool_finality_verifier,
+)
+from src.adam.commit_store import AdamCommitStore, APEXValidator
 from src.consensus.pool_settlement import (
     INTERNAL_ASSET,
     POLICY_DOMAIN,
@@ -78,7 +82,7 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
             epoch=1,
             lifetime_seconds=120,
             parent_hash="00" * 32,
-            payload_hash="11" * 32,
+            payload_hash=self.payload_hash,
             primary_stride=3037,
             compact_stride=5,
             nonce_start=0,
@@ -119,6 +123,13 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
             god_authorizer=self.allow_test_gate,
             justice_verifier=self.allow_test_gate,
             clock=lambda: self.now,
+            finalized_state_verifier=build_adam_finalized_state_verifier(self.adam_store),
+        )
+        self.adam_store = AdamCommitStore(self.root / "adam.sqlite3")
+        self.apex = APEXValidator(
+            self.adam_store, hccgn_verifier=self.hccgn_gate,
+            god_authorizer=self.allow_test_gate,
+            justice_verifier=self.allow_test_gate,
         )
         self.proposal = make_proposal(
             network_id="hccgn-test",
@@ -126,7 +137,7 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
             height=1,
             round=0,
             parent_hash="00" * 32,
-            payload_hash="11" * 32,
+            payload_hash=self.payload_hash,
             proof_hash=proof_hash,
             justice_commitment={
                 "justice_profile": "GAIA-JUSTICE/1",
@@ -200,6 +211,7 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
 
     def test_real_hccgn_pool_share_is_finalized_by_gcf_and_settled(self):
         finality = self.build_finality()
+        self.apex.validate_and_commit(finality["certificate"], self.state_bytes)
         verifier = build_gcf1_pool_finality_verifier(
             hccgn_verifier=self.hccgn_gate,
             god_authorizer=self.allow_test_gate,
