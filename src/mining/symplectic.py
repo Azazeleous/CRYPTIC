@@ -15,11 +15,14 @@ SCHEDULE_SEQUENTIAL = "sequential-v1"
 SCHEDULE_SYMPLECTIC = "symplectic-phase-space-v1"
 MAX_PHASE_STEPS = 1_000_000
 MAX_SYMPLECTIC_WINDOW = 10_000_000
+MAX_SCHEDULE_VERIFY = 1_000_000
 
 
 def _finite_vector(values: Sequence[float], field: str) -> tuple[float, ...]:
     if not isinstance(values, (tuple, list)) or not values:
         raise ValueError(f"{field}_must_be_nonempty_vector")
+    if any(isinstance(value, bool) for value in values):
+        raise ValueError(f"{field}_must_be_numeric_not_boolean")
     result = tuple(float(value) for value in values)
     if not all(math.isfinite(value) for value in result):
         raise ValueError(f"{field}_must_be_finite")
@@ -96,10 +99,13 @@ def integrate_trajectory(
         raise ValueError("steps_out_of_bounds")
     if len(initial.q) != len(system.masses):
         raise ValueError("phase_dimension_mismatch")
+    dt = float(step_size)
+    if not math.isfinite(dt) or dt == 0.0:
+        raise ValueError("step_size_must_be_finite_nonzero")
     states = [initial]
     current = initial
     for _ in range(steps):
-        current = leapfrog_step(system, current, step_size)
+        current = leapfrog_step(system, current, dt)
         states.append(current)
     return tuple(states)
 
@@ -161,6 +167,9 @@ class DiscreteSymplecticMap:
 def phase_space_parameters(count: int, *, drift: int, kick: int) -> dict[str, int | str]:
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_SYMPLECTIC_WINDOW:
         raise ValueError("candidate_window_out_of_bounds")
+    for name, value in (("drift", drift), ("kick", kick)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name}_must_be_integer")
     modulus = max(2, math.isqrt(count - 1) + 1)
     return {
         "profile_id": SCHEDULE_SYMPLECTIC,
@@ -196,6 +205,8 @@ def iter_symplectic_ordinals(count: int, *, drift: int, kick: int) -> Iterable[i
 
 def verify_symplectic_schedule(count: int, *, drift: int, kick: int) -> dict[str, int | bool | str]:
     """Exhaustively verify coverage for a bounded candidate window."""
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_SCHEDULE_VERIFY:
+        raise ValueError("verification_window_out_of_bounds")
     values = tuple(iter_symplectic_ordinals(count, drift=drift, kick=kick))
     unique = len(set(values))
     return {
