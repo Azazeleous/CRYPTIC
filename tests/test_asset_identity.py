@@ -1,5 +1,7 @@
 """Tests for network-scoped canonical asset identity and aliases."""
 import unittest
+import tempfile
+from pathlib import Path
 from src.ingestion.asset_identity import (
     AmbiguousAssetAliasError, AssetAlias, AssetIdentity, AssetIdentityError,
     AssetNotFoundError, AssetRegistry,
@@ -78,6 +80,29 @@ class AssetIdentityTests(unittest.TestCase):
         registry.register(EVM_A, symbol="AAA", decimals=18)
         with self.assertRaises(AssetIdentityError):
             registry.register(EVM_A, symbol="AAA", decimals=6)
+
+
+    def test_sqlite_registry_survives_process_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = str(Path(directory) / "assets.sqlite3")
+            with AssetRegistry(database) as registry:
+                registry.register(EVM_A, symbol="USDC", decimals=6)
+                registry.add_alias(EVM_A, AssetAlias("provider_id", "asset-001", "provider-x"))
+            with AssetRegistry(database) as reopened:
+                by_symbol = reopened.resolve(network_family="evm", network_identity=NETWORK_A, alias_type="symbol", value="USDC")
+                by_provider = reopened.resolve(network_family="evm", network_identity=NETWORK_A, alias_type="provider_id", value="asset-001", source_id="provider-x")
+                self.assertEqual(by_symbol.identity, EVM_A)
+                self.assertEqual(by_provider.identity, EVM_A)
+
+    def test_failed_alias_conflict_rolls_back_new_asset(self):
+        registry = AssetRegistry()
+        registry.register(EVM_A, symbol="AAA")
+        registry.register(EVM_C, symbol="CCC")
+        other = AssetIdentity("evm", NETWORK_A, "0x" + "33" * 20)
+        with self.assertRaises(AmbiguousAssetAliasError):
+            registry.register(other, symbol="AAA")
+        with self.assertRaises(AssetNotFoundError):
+            registry.get(other)
 
     def test_listing_is_deterministic_and_filterable(self):
         registry = AssetRegistry()
