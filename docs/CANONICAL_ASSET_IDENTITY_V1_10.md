@@ -2,9 +2,9 @@
 
 ## Purpose
 
-This increment implements the Phase 1 canonical asset identity capability.
-Ticker symbols, display names, and provider identifiers are not globally
-unique asset identities.
+This increment implements Phase 1 canonical asset identity and collision-safe
+alias handling. Ticker symbols, display names, and provider identifiers are
+not globally unique asset identities.
 
 ## Canonical identity
 
@@ -27,7 +27,16 @@ fingerprint, alias type, value, and source scope. A source-specific alias takes
 precedence over a global alias for that source. Conflicts are rejected and
 missing aliases fail closed. Resolution always requires an explicit network.
 
-## API
+## Persistence and API
+
+AssetRegistry uses SQLite. The default database is in-memory for tests and
+ephemeral use; supply a filesystem database path for persistence across
+process restarts. File-backed databases enable WAL and FULL synchronous mode.
+Asset and alias writes are transactional, alias keys are protected by a
+composite primary key, and foreign keys prevent orphan aliases. The registry
+is thread-safe within one process. Multi-process contention is serialized by
+SQLite transactions; network filesystems and multi-host shared-database
+deployment are not qualified.
 
 The public API is exported from src.ingestion: AssetIdentity, AssetRecord,
 AssetAlias, AssetRegistry, AssetIdentityError, AssetNotFoundError, and
@@ -37,15 +46,15 @@ ticker or endpoint.
 
 ## Boundaries
 
-The registry is thread-safe and deterministic but process-local and in-memory.
-It does not persist asset records, fetch provider metadata, verify token
-contracts, attest issuer identity, or prove a provider-reported mint or
-contract is honest. Those capabilities require provenance, independent
-verification, and durable registry operations.
+The registry does not fetch external metadata, verify contract/mint ownership,
+attest issuer identity, or prove a provider-reported mint or contract is honest.
+Provider provenance, independent asset verification, multi-host durability,
+backup/restore, and complete provider coverage remain open.
 
 ## Verification
 
 Tests cover cross-network identity separation, address normalization,
 native assets, Solana mint validation, symbol collision, provider-scoped
 aliases, alias conflict rejection, unknown alias failure, metadata
-immutability, normalized-chain binding, and deterministic listing.
+immutability, normalized-chain binding, deterministic listing, SQLite
+reopen/persistence, and transaction rollback.
