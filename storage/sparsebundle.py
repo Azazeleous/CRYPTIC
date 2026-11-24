@@ -5,6 +5,7 @@ It is not an Apple .sparsebundle image and does not perform host OS mounts.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -94,7 +95,7 @@ class SparseBundle:
             if (not isinstance(name, str) or not name.strip() or len(name) > 80
                     or name in seen_names):
                 raise SparseBundleError("partition_name_invalid_or_duplicate")
-            if role not in PARTITION_ROLES:
+            if not isinstance(role, str) or role not in PARTITION_ROLES:
                 raise SparseBundleError("partition_role_invalid")
             size = _uint(spec["size"], "partition_size", 1, MAX_PARTITION_SIZE)
             seen_names.add(name)
@@ -142,9 +143,14 @@ class SparseBundle:
         cls._write_atomic(root / "manifest.sha256", digest)
 
     def _load_manifest(self) -> dict:
+        manifest_path = self.root / "manifest.json"
+        digest_path = self.root / "manifest.sha256"
+        if (manifest_path.is_symlink() or digest_path.is_symlink()
+                or not manifest_path.is_file() or not digest_path.is_file()):
+            raise SparseBundleError("manifest_files_must_be_regular")
         try:
-            raw = (self.root / "manifest.json").read_bytes()
-            supplied = (self.root / "manifest.sha256").read_text("ascii").strip()
+            raw = manifest_path.read_bytes()
+            supplied = digest_path.read_text("ascii").strip()
             if not HEX64.fullmatch(supplied):
                 raise SparseBundleError("manifest_digest_invalid")
             if hashlib.sha256(raw).hexdigest() != supplied:
@@ -257,28 +263,33 @@ class SparseBundle:
         if not isinstance(data, bytes):
             raise SparseBundleError("write_data_must_be_bytes")
         with self._lock:
-            row = self._partition(partition_id)
-            offset = _uint(offset, "offset")
-            if offset + len(data) > row["size"]:
-                raise SparseBundleError("write_out_of_bounds")
-            if not data:
+            previous = copy.deepcopy(self._manifest)
+            try:
+                row = self._partition(partition_id)
+                offset = _uint(offset, "offset")
+                if offset + len(data) > row["size"]:
+                    raise SparseBundleError("write_out_of_bounds")
+                if not data:
+                    return self._manifest["generation"]
+                chunk_size = self._manifest["chunk_size"]
+                cursor = 0
+                while cursor < len(data):
+                    index, within = divmod(offset, chunk_size)
+                    take = min(len(data) - cursor, chunk_size - within)
+                    block = bytearray(self._read_chunk(row["extents"].get(str(index))))
+                    block[within:within + take] = data[cursor:cursor + take]
+                    if any(block):
+                        row["extents"][str(index)] = self._store_chunk(bytes(block))
+                    else:
+                        row["extents"].pop(str(index), None)
+                    offset += take
+                    cursor += take
+                self._manifest["generation"] += 1
+                self._write_manifest_files(self.root, self._manifest)
                 return self._manifest["generation"]
-            chunk_size = self._manifest["chunk_size"]
-            cursor = 0
-            while cursor < len(data):
-                index, within = divmod(offset, chunk_size)
-                take = min(len(data) - cursor, chunk_size - within)
-                block = bytearray(self._read_chunk(row["extents"].get(str(index))))
-                block[within:within + take] = data[cursor:cursor + take]
-                if any(block):
-                    row["extents"][str(index)] = self._store_chunk(bytes(block))
-                else:
-                    row["extents"].pop(str(index), None)
-                offset += take
-                cursor += take
-            self._manifest["generation"] += 1
-            self._write_manifest_files(self.root, self._manifest)
-            return self._manifest["generation"]
+            except Exception:
+                self._manifest = previous
+                raise
 
     def verify(self) -> dict:
         with self._lock:
