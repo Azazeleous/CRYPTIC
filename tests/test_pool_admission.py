@@ -19,6 +19,8 @@ class PoolAdmissionTests(unittest.TestCase):
         self.assertTrue(result["accepted"])
         self.assertEqual(result["worker_id"],"worker-a")
         self.assertEqual(len(result["work_digest"]),64)
+        self.assertGreaterEqual(result["nonce"], self.job["nonce_start"])
+        self.assertLess(result["nonce"], self.job["nonce_start"] + self.job["max_attempts"])
     def test_active_target_lookup_is_bound_to_expected_network(self):
         seen={}
         def resolve(job):
