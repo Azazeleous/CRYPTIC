@@ -1,7 +1,6 @@
 """Read-only ingestion source contracts."""
 
-from .replay import ReplayError, replay_journal
-from .runtime import (BoundedIngestionRuntime, DeadlineAwareAdapter, IngestionDeadlineExceeded, IngestionPolicy, IngestionRuntimeError)
+from .asset_identity import (\n    AmbiguousAssetAliasError,\n    AssetAlias,\n    AssetIdentity,\n    AssetIdentityError,\n    AssetNotFoundError,\n    AssetRecord,\n    AssetRegistry,\n)\nfrom .replay import ReplayError, replay_journal\nfrom .runtime import (BoundedIngestionRuntime, DeadlineAwareAdapter, IngestionDeadlineExceeded, IngestionPolicy, IngestionRuntimeError)
 from .normalization import (
     NormalizationError,
     compare_chain_heads,
