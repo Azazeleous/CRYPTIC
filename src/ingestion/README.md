@@ -32,3 +32,7 @@ calls or journal mutation. See `docs/DETERMINISTIC_REPLAY_V1_9.md`.
 ## Bounded ingestion runtime v2.0
 
 The runtime coordinates deadline-aware adapters with bounded workers, queue admission, page/observation/time budgets, one deterministic journal-writer path, per-source health accounting, and offline replay. See docs/BOUNDED_INGESTION_RUNTIME_V2_0.md for the adapter deadline contract and current compatibility limits.
+
+## Canonical asset identity
+
+The asset_identity module provides SQLite-backed network-scoped canonical asset identifiers and collision-safe symbol, name, and provider-ID aliases. File-backed registries persist across process restarts. Symbols are never treated as globally unique identifiers. See docs/CANONICAL_ASSET_IDENTITY_V1_10.md for the schema and boundaries.
