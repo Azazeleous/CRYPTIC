@@ -10,6 +10,19 @@ from .gaia_fabric import (
     verify_arithmetic_fabric,
 )
 from .trophy_solver import mine_trophy_ladder, target_for_difficulty
+from .symplectic import (
+    SCHEDULE_SEQUENTIAL,
+    SCHEDULE_SYMPLECTIC,
+    DiscretePhasePoint,
+    DiscreteSymplecticMap,
+    PhaseState,
+    SeparableHamiltonian,
+    integrate_trajectory,
+    iter_symplectic_ordinals,
+    leapfrog_step,
+    phase_space_parameters,
+    verify_symplectic_schedule,
+)
 
 __all__ = [
     "Candidate",
@@ -25,4 +38,15 @@ __all__ = [
     "verify_arithmetic_fabric",
     "mine_trophy_ladder",
     "target_for_difficulty",
+    "SCHEDULE_SEQUENTIAL",
+    "SCHEDULE_SYMPLECTIC",
+    "DiscretePhasePoint",
+    "DiscreteSymplecticMap",
+    "PhaseState",
+    "SeparableHamiltonian",
+    "integrate_trajectory",
+    "iter_symplectic_ordinals",
+    "leapfrog_step",
+    "phase_space_parameters",
+    "verify_symplectic_schedule",
 ]
