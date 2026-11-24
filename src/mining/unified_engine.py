@@ -159,6 +159,7 @@ class UnifiedMiningEngine:
         result = scan_nonce_range(
             header, target, start_nonce, stop_nonce,
             workers=workers, chunk_size=chunk_size, optimized=True,
+            max_candidates=1,
         )
         candidates = []
         for item in result.candidates:
@@ -185,7 +186,7 @@ class UnifiedMiningEngine:
             metrics={
                 "chunks_completed": result.chunks_completed,
                 "final_chunk_size": result.final_chunk_size,
-                "candidate_count": len(candidates),
+                "retained_candidate_count": len(candidates),
                 "nonce_range": [start_nonce, stop_nonce],
             },
         )
