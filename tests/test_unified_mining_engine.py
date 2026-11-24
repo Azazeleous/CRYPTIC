@@ -34,7 +34,8 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertTrue(receipt.verified)
         self.assertEqual(receipt.attempts, 32)
         self.assertEqual(receipt.metrics["nonce_range"], [0, 32])
-        self.assertEqual(receipt.metrics["candidate_count"], 32)
+        self.assertEqual(receipt.metrics["retained_candidate_count"], 1)
+        self.assertEqual(receipt.candidate["nonce"], 0)
         self.assertEqual(receipt.verification["method"], "independent_full_header_sha256d")
 
     def test_four_lane_profile_uses_disjoint_lane_scheduler_and_reverifies(self):
