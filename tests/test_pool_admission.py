@@ -35,6 +35,23 @@ class PoolAdmissionTests(unittest.TestCase):
     def test_target_must_match_active_policy(self):
         with self.assertRaisesRegex(PoolAdmissionError,"not_active"):
             self.admit(target="00"*32)
+    def test_proof_nonce_must_belong_to_signed_job_range(self):
+        from src.consensus.hccgn_work import HCCGNWorkHeader, build_proof, network_hash, proof_commitment
+
+        header = HCCGNWorkHeader(
+            network_hash("hccgn-test"), self.job["height"], self.job["epoch"],
+            self.job["issued_at"], bytes.fromhex(self.job["parent_hash"]),
+            bytes.fromhex(self.job["payload_hash"]), self.job["primary_stride"],
+            self.job["compact_stride"], self.job["nonce_start"] + self.job["max_attempts"],
+            bytes.fromhex(self.job["target"]),
+        )
+        proof = build_proof(header)
+        outside = dict(self.submission)
+        outside["proof_b64"] = base64.b64encode(proof).decode("ascii")
+        outside["proof_hash"] = proof_commitment(proof)
+        with self.assertRaisesRegex(PoolAdmissionError, "outside_assigned_job_range"):
+            self.admit(outside)
+
     def test_measurement_claims_do_not_change_proof_verification(self):
         changed=dict(self.submission); changed["measurements"]={"attempts":-999,"hashes_per_second":float("nan")}
         self.assertTrue(self.admit(changed)["accepted"])
