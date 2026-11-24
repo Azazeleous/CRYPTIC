@@ -80,6 +80,34 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(len(receipt.candidate["proof_hash"]), 64)
         self.assertEqual(receipt.candidate["nonce"], 0)
 
+
+    def test_hccgn_exhausted_budget_returns_verified_no_candidate_receipt(self):
+        network_id = "cryptic-unified-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id),
+            height=1,
+            sequence=1,
+            timestamp=1_800_000_000,
+            parent_hash=b"\\x00" * 32,
+            payload_hash=b"\\x11" * 32,
+            primary_stride=3037,
+            compact_stride=5,
+            nonce=0,
+            target=b"\\x00" * 32,
+        )
+        receipt = self.engine.mine(
+            PROFILE_HCCGN_WORK,
+            header=header,
+            network_id=network_id,
+            start_nonce=0,
+            max_attempts=8,
+        )
+        self.assertEqual(receipt.status, "no_candidate")
+        self.assertTrue(receipt.verified)
+        self.assertIsNone(receipt.candidate)
+        self.assertEqual(receipt.attempts, 8)
+        self.assertEqual(receipt.metrics["termination"], "attempt_budget_exhausted")
+
     def test_profile_mismatch_and_unknown_profile_fail_closed(self):
         with self.assertRaises(MiningEngineError):
             self.engine.mine("auto", header=b"ambiguous")
