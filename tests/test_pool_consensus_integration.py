@@ -60,6 +60,8 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.now = 1_800_000_000
         self.target = b"\xff" * 32
+        self.state_bytes = b"canonical-pool-state-v1"
+        self.payload_hash = hashlib.sha256(self.state_bytes).hexdigest()
 
         issuer_private, issuer_public = keypair()
         self.reward_private, self.reward_public = keypair()
@@ -123,7 +125,6 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
             god_authorizer=self.allow_test_gate,
             justice_verifier=self.allow_test_gate,
             clock=lambda: self.now,
-            finalized_state_verifier=build_adam_finalized_state_verifier(self.adam_store),
         )
         self.adam_store = AdamCommitStore(self.root / "adam.sqlite3")
         self.apex = APEXValidator(
@@ -217,6 +218,7 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
             god_authorizer=self.allow_test_gate,
             justice_verifier=self.allow_test_gate,
             clock=lambda: self.now,
+            finalized_state_verifier=build_adam_finalized_state_verifier(self.adam_store),
         )
         self.pool.configure_settlement_ledger(
             database=self.root / "settlements.sqlite3",
@@ -243,6 +245,7 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
             god_authorizer=self.allow_test_gate,
             justice_verifier=self.allow_test_gate,
             clock=lambda: self.now,
+            finalized_state_verifier=build_adam_finalized_state_verifier(self.adam_store),
         )
         self.pool.configure_settlement_ledger(
             database=self.root / "settlements.sqlite3",
