@@ -20,7 +20,7 @@
 | Solana JSON-RPC transport + cluster identity | implemented (E3) | PR #12 and #14; CI protocol/adapter tests passed; identity uses genesis hash; live provider verification and subscriptions remain open |
 | Complete asset coverage | unverified | provider-by-provider coverage and limits |
 | Canonical chain identity | implemented (E3) | PR #14; EVM chain ID + genesis hash and Solana genesis hash; cross-source comparisons require matching network identity |
-| Canonical asset identity | proposed | collision and alias test suite |
+| Canonical asset identity and alias registry | implemented (E2 reference; PR #41 CI-verified) | Network family + normalized network fingerprint + chain-native contract/mint reference; symbols and names are aliases only; provider IDs require source scope; alias/metadata conflicts fail closed. CRYPTIC CI run 45321509271 passed 381 tests (2 skipped); mining-engine run 45321509275 and GAIA local trophy run 45321509468 passed. Registry is process-local/in-memory; durable storage and provider provenance remain open. |
 | Model routing | proposed | provider contract and evaluation |
 | Local model inference | proposed | reproducible benchmark on target hardware |
 | Extension absorption | proposed | sandbox, manifest, conformance, permission tests |
