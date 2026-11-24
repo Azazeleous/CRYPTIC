@@ -36,6 +36,7 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(receipt.metrics["nonce_range"], [0, 32])
         self.assertEqual(receipt.metrics["retained_candidate_count"], 1)
         self.assertEqual(receipt.candidate["nonce"], 0)
+        self.assertEqual(receipt.metrics["schedule_profile"], "sequential-v1")
         self.assertEqual(receipt.verification["method"], "independent_full_header_sha256d")
 
     def test_four_lane_profile_uses_disjoint_lane_scheduler_and_reverifies(self):
@@ -85,9 +86,9 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         network_id = "cryptic-unified-testnet"
         header = HCCGNWorkHeader(
             network_id_hash=network_hash(network_id), height=1, sequence=1,
-            timestamp=1_800_000_000, parent_hash=b"\\x00" * 32,
-            payload_hash=b"\\x11" * 32, primary_stride=3037,
-            compact_stride=5, nonce=0, target=b"\\xff" * 32,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
         )
         receipt = self.engine.mine(
             PROFILE_HCCGN_WORK, header=header, network_id=network_id,
@@ -109,9 +110,9 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         network_id = "cryptic-unified-testnet"
         header = HCCGNWorkHeader(
             network_id_hash=network_hash(network_id), height=1, sequence=1,
-            timestamp=1_800_000_000, parent_hash=b"\\x00" * 32,
-            payload_hash=b"\\x11" * 32, primary_stride=3037,
-            compact_stride=5, nonce=0, target=b"\\xff" * 32,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
         )
         with self.assertRaisesRegex(MiningEngineError, "symplectic_schedule_parameters_invalid"):
             self.engine.mine(
