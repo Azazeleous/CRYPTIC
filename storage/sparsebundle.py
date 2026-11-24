@@ -191,7 +191,7 @@ class SparseBundle:
                 raise SparseBundleError("partition_id_invalid_or_duplicate")
             if not isinstance(name, str) or not name or name in names:
                 raise SparseBundleError("partition_name_invalid_or_duplicate")
-            if role not in PARTITION_ROLES:
+            if not isinstance(role, str) or role not in PARTITION_ROLES:
                 raise SparseBundleError("partition_role_invalid")
             size = _uint(row["size"], "partition_size", 1, MAX_PARTITION_SIZE)
             extents = row["extents"]
