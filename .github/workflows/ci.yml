@@ -35,12 +35,12 @@ jobs:
         run: python -m unittest discover -s tests -v
 
   supervised-http-platform:
-    name: supervised-http (\${{ matrix.os }})
+    name: supervised-http (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: \${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - name: Check out source
@@ -55,12 +55,12 @@ jobs:
         run: python -m unittest discover -s tests -p "test_supervised_http.py" -v
 
   sos-process-platform:
-    name: sos-process (\${{ matrix.os }})
+    name: sos-process (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: \${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - name: Check out source
