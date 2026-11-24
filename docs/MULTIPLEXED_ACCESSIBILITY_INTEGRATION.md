@@ -142,7 +142,7 @@ A wallpaper can be an optional presentation surface. It cannot host the S.O.S. k
 
 The pool service creates signed HCCGN jobs, assigns them to authenticated workers, independently verifies submitted proofs against the current active target, and records accepted shares in a durable hash-chained ledger.
 
-Pool settlement is a separate stage. PoolSettlementLedger accepts a finality verifier callback and fails closed unless it returns both valid=true and finalized=true. Production composition must inject the real GCF verifier configured with the active validator set, HCCGN proof trust root, GAIA-JUSTICE providers, and required sequence anchor. A test callback is not production authority.
+Pool settlement is a separate stage. PoolSettlementLedger accepts a finality verifier callback and fails closed unless it returns both valid=true and finalized=true. The pool runtime composition requires two distinct proofs: independent GCF certificate verification and an ADAM commit-store check that revalidates the contiguous height/parent chain and matches the exact candidate digest, parent hash, payload/state hash, and certificate digest. If the proposal carries an external anchor sequence, that exact sequence must also be confirmed. A quorum certificate alone cannot manufacture canonical-commit evidence. Production composition must use the real GCF verifier configured with the active validator set, HCCGN proof trust root, GAIA-JUSTICE providers, and required sequence anchor. Test callbacks are not production authority.
 
 Accepted shares are evidence of work only. Current settlement records internal, nonredeemable credits and does not implement wallet transfers or payouts.
 
