@@ -219,17 +219,19 @@ class UnifiedMiningEngine:
         )
 
     def _mine_hccgn(
-        self, *, header: HCCGNWorkHeader, start_nonce: int = 0,
-        max_attempts: int,
+        self, *, header: HCCGNWorkHeader, network_id: str,
+        start_nonce: int = 0, max_attempts: int,
     ) -> MiningReceipt:
         if not isinstance(header, HCCGNWorkHeader):
             raise MiningEngineError("hccgn_header_object_required")
+        if not isinstance(network_id, str) or not network_id:
+            raise MiningEngineError("hccgn_network_id_required")
         started = time.perf_counter()
         solved, digest, proof, proof_hash, attempts, _kernel_seconds = mine_nonce(
             header, start_nonce=start_nonce, max_attempts=max_attempts,
         )
         checked = verify_proof(
-            proof, expected_network_id=_network_id_from_header_input(header),
+            proof, expected_network_id=network_id,
             expected_target=solved.target,
         )
         valid = (
@@ -257,10 +259,3 @@ class UnifiedMiningEngine:
             metrics={"nonce_start": start_nonce, "nonce_end": solved.nonce},
         )
 
-
-def _network_id_from_header_input(header: HCCGNWorkHeader) -> str:
-    """Require caller-supplied network identity; never infer it from a hash."""
-    value = getattr(header, "network_id", None)
-    if not isinstance(value, str) or not value:
-        raise MiningEngineError("hccgn_network_id_required")
-    return value
