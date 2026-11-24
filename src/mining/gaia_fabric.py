@@ -252,3 +252,46 @@ def build_lane_plan(start: int, stop: int, seed: str) -> dict[str, Any]:
         "search_space_partition": "L1 and L3 are disjoint; L2 and L4 independently verify their paired candidates",
         "routing_effect": "metadata_only_no_nonce_candidates_are_skipped",
     }
+
+
+def v5_node_id(coordinates: tuple[int, int, int, int] | list[int]) -> int:
+    """Encode a four-dimensional V5 lattice coordinate into ID 0..624."""
+    if not isinstance(coordinates, (tuple, list)) or len(coordinates) != 4:
+        raise ValueError("V5 coordinates must contain four integers")
+    if any(isinstance(value, bool) or not isinstance(value, int) or not -2 <= value <= 2
+           for value in coordinates):
+        raise ValueError("V5 coordinates must be integers in [-2, 2]")
+    x, y, z, t = coordinates
+    return 125 * (x + 2) + 25 * (y + 2) + 5 * (z + 2) + (t + 2)
+
+
+def v5_neighbors(node_id: int) -> tuple[int, ...]:
+    """Return sorted nearest-neighbor IDs in the 5^4 lattice."""
+    point = list(v5_coordinates(node_id))
+    neighbors = []
+    for axis in range(4):
+        for delta in (-1, 1):
+            candidate = point.copy()
+            candidate[axis] += delta
+            if -2 <= candidate[axis] <= 2:
+                neighbors.append(v5_node_id(candidate))
+    return tuple(sorted(neighbors))
+
+
+def v5_lattice_summary() -> dict[str, Any]:
+    """Return exact finite-lattice topology counts and degree distribution."""
+    degree_counts = {degree: 0 for degree in range(4, 9)}
+    directed_edges = 0
+    for node_id in range(V5_NODE_COUNT):
+        degree = len(v5_neighbors(node_id))
+        degree_counts[degree] += 1
+        directed_edges += degree
+    origin = v5_node_id((0, 0, 0, 0))
+    return {
+        "dimensions": 4, "side_length": V5_SIDE, "node_count": V5_NODE_COUNT,
+        "undirected_edge_count": directed_edges // 2,
+        "degree_distribution": {str(k): v for k, v in degree_counts.items() if v},
+        "origin_node_id": origin, "origin_coordinates": list(v5_coordinates(origin)),
+        "verified": directed_edges % 2 == 0 and directed_edges // 2 == 2000
+            and sum(degree_counts.values()) == V5_NODE_COUNT,
+    }

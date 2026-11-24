@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping
 
+from src.verification.unbound_inverse import UnboundInverseModule, verify_left_inverse
+
 PROFILE_ID = "HCCGN-WORK/1"
 HEADER_MAGIC = b"HCCGNW01"
 PROOF_MAGIC = b"HCCGN-PROOF/1\x00"
@@ -152,16 +154,28 @@ def verify_proof(proof: bytes, *, expected_network_id: str, expected_target: byt
     compact_inverse = pow(header.compact_stride, -1, COMPACT_MODULUS)
     primary_index = ((header.nonce % PRIMARY_MODULUS) * header.primary_stride) % PRIMARY_MODULUS
     compact_index = ((header.nonce % COMPACT_MODULUS) * header.compact_stride) % COMPACT_MODULUS
-    if (primary_index * primary_inverse) % PRIMARY_MODULUS != header.nonce % PRIMARY_MODULUS:
+    primary_forward = lambda value: (value * header.primary_stride) % PRIMARY_MODULUS
+    primary_reverse = lambda value: (value * primary_inverse) % PRIMARY_MODULUS
+    compact_forward = lambda value: (value * header.compact_stride) % COMPACT_MODULUS
+    compact_reverse = lambda value: (value * compact_inverse) % COMPACT_MODULUS
+    primary_receipt = UnboundInverseModule(primary_reverse, primary_forward).solve(primary_index)
+    compact_receipt = UnboundInverseModule(compact_reverse, compact_forward).solve(compact_index)
+    primary_left = verify_left_inverse(header.nonce % PRIMARY_MODULUS, primary_forward, primary_reverse)
+    compact_left = verify_left_inverse(header.nonce % COMPACT_MODULUS, compact_forward, compact_reverse)
+    if not primary_receipt.accepted or not primary_left:
         raise HCCGNWorkError("primary_inverse_identity_failed")
-    if (compact_index * compact_inverse) % COMPACT_MODULUS != header.nonce % COMPACT_MODULUS:
+    if not compact_receipt.accepted or not compact_left:
         raise HCCGNWorkError("compact_inverse_identity_failed")
     return {'valid': True, 'profile_id': PROFILE_ID, 'work_digest': actual_digest.hex(),
         'proof_hash': proof_commitment(proof), 'primary_quotient': projection // PRIMARY_MODULUS,
         'primary_residue': projection % PRIMARY_MODULUS, 'compact_quotient': projection // COMPACT_MODULUS,
         'compact_residue': projection % COMPACT_MODULUS, 'primary_index': primary_index,
         'compact_index': compact_index, 'primary_inverse': primary_inverse,
-        'compact_inverse': compact_inverse, 'nonce': header.nonce, 'target': expected_target.hex()}
+        'compact_inverse': compact_inverse, 'nonce': header.nonce, 'target': expected_target.hex(),
+        'inverse_verification': {
+            'primary_right_inverse': primary_receipt.accepted, 'primary_left_inverse': primary_left,
+            'compact_right_inverse': compact_receipt.accepted, 'compact_left_inverse': compact_left,
+        }}
 
 class HCCGNWorkProofProvider:
     def __init__(self, resolve_proof: Callable[[str], bytes | None],

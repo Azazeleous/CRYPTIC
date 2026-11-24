@@ -28,6 +28,10 @@ class HCCGNWorkProfileTests(unittest.TestCase):
             self.proof, expected_network_id='gaia-testnet', expected_target=self.target
         )
         self.assertTrue(result['valid'])
+        self.assertEqual(result['inverse_verification'], {
+            'primary_right_inverse': True, 'primary_left_inverse': True,
+            'compact_right_inverse': True, 'compact_left_inverse': True,
+        })
         self.assertEqual(result['profile_id'], 'HCCGN-WORK/1')
         self.assertEqual(result['work_digest'],
             'c823ee2a5d77e8576b1b4213bcdcca983b31c8b1c55743059f240957d9467f71')
