@@ -36,6 +36,7 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(receipt.metrics["nonce_range"], [0, 32])
         self.assertEqual(receipt.metrics["retained_candidate_count"], 1)
         self.assertEqual(receipt.candidate["nonce"], 0)
+        self.assertEqual(receipt.metrics["schedule_profile"], "sequential-v1")
         self.assertEqual(receipt.verification["method"], "independent_full_header_sha256d")
 
     def test_four_lane_profile_uses_disjoint_lane_scheduler_and_reverifies(self):
@@ -81,6 +82,44 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(receipt.candidate["nonce"], 0)
 
 
+    def test_hccgn_symplectic_schedule_is_exposed_and_receipted(self):
+        network_id = "cryptic-unified-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id), height=1, sequence=1,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
+        )
+        receipt = self.engine.mine(
+            PROFILE_HCCGN_WORK, header=header, network_id=network_id,
+            start_nonce=900, max_attempts=17,
+            schedule_profile="symplectic-phase-space-v1",
+        )
+        self.assertTrue(receipt.verified)
+        self.assertEqual(receipt.candidate["nonce"], 900)
+        self.assertEqual(receipt.metrics["schedule_profile"], "symplectic-phase-space-v1")
+        self.assertEqual(receipt.metrics["nonce_end_exclusive"], 917)
+        self.assertEqual(receipt.metrics["phase_space"]["candidate_window"], 17)
+
+    def test_symplectic_schedule_rejected_for_other_profiles_and_oversized_windows(self):
+        with self.assertRaisesRegex(MiningEngineError, "not_supported_for_mining_profile"):
+            self.engine.mine(
+                PROFILE_FOUR_LANE_SHA256, header=b"x", target=(1 << 256) - 1,
+                max_attempts=1, schedule_profile="symplectic-phase-space-v1",
+            )
+        network_id = "cryptic-unified-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id), height=1, sequence=1,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
+        )
+        with self.assertRaisesRegex(MiningEngineError, "symplectic_schedule_parameters_invalid"):
+            self.engine.mine(
+                PROFILE_HCCGN_WORK, header=header, network_id=network_id,
+                max_attempts=10_000_001, schedule_profile="symplectic-phase-space-v1",
+            )
+
     def test_hccgn_exhausted_budget_returns_verified_no_candidate_receipt(self):
         network_id = "cryptic-unified-testnet"
         header = HCCGNWorkHeader(
@@ -101,12 +140,14 @@ class UnifiedMiningEngineTests(unittest.TestCase):
             network_id=network_id,
             start_nonce=0,
             max_attempts=8,
+            schedule_profile="symplectic-phase-space-v1",
         )
         self.assertEqual(receipt.status, "no_candidate")
         self.assertTrue(receipt.verified)
         self.assertIsNone(receipt.candidate)
         self.assertEqual(receipt.attempts, 8)
         self.assertEqual(receipt.metrics["termination"], "attempt_budget_exhausted")
+        self.assertEqual(receipt.metrics["schedule_profile"], "symplectic-phase-space-v1")
 
     def test_profile_mismatch_and_unknown_profile_fail_closed(self):
         with self.assertRaises(MiningEngineError):

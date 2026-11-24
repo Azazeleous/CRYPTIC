@@ -26,6 +26,7 @@ from src.extensions.manifest import (
     canonical_json,
     verify_extension_manifest,
 )
+from src.sos.sparsebundle_mount import SparseBundleMountManager
 
 GRANT_SCHEMA = "CRYPTIC-SOS-CAPABILITY-GRANT/1"
 GRANT_DOMAIN = b"CRYPTIC-SOS-CAPABILITY-GRANT/1\x00"
@@ -180,6 +181,7 @@ class VirtualComputer:
         authority_trust: Mapping[str, bytes | Ed25519PublicKey],
         clock=time.time,
         command_budget_seconds: float = 0.25,
+        mount_provider: SparseBundleMountManager | None = None,
     ):
         self.database = Path(database).expanduser()
         if self.database.exists() and self.database.is_symlink():
@@ -193,6 +195,9 @@ class VirtualComputer:
             raise VirtualComputerError("command_budget_invalid")
         self.publisher_trust = dict(publisher_trust)
         self.authority_trust = dict(authority_trust)
+        if mount_provider is not None and not isinstance(mount_provider, SparseBundleMountManager):
+            raise VirtualComputerError("sparsebundle_mount_provider_invalid")
+        self.mount_provider = mount_provider
         self.clock = clock
         self.command_budget_seconds = float(command_budget_seconds)
         with closing(self._connect()) as connection:
@@ -485,6 +490,19 @@ class VirtualComputer:
             if not _scope_allows(normalized, grant.resources):
                 raise VirtualComputerError("resource_scope_denied")
 
+    def _mounted_record(self, extension_id: str, path: str) -> dict:
+        if self.mount_provider is None:
+            raise VirtualComputerError("sparsebundle_mount_provider_unavailable")
+        target = "/" + path
+        rows = self.mount_provider.status()["mounts"]
+        record = next((
+            row for row in rows
+            if row["principal"] == extension_id and row["mountpoint"] == target
+        ), None)
+        if record is None:
+            raise VirtualComputerError("sparsebundle_mount_not_found")
+        return record
+
     def _dispatch(
         self, connection: sqlite3.Connection, extension_id: str,
         grant: VerifiedGrant, args: tuple[str, ...],
@@ -493,11 +511,97 @@ class VirtualComputer:
         if command == "help":
             if len(args) != 1:
                 raise VirtualComputerError("help_arguments_invalid")
-            return "help pwd ls cat write sha256 rm"
+            return "help pwd ls cat write sha256 rm mounts mount mread mwrite umount"
         if command == "pwd":
             if len(args) != 1:
                 raise VirtualComputerError("pwd_arguments_invalid")
             return "/extensions/" + extension_id
+        if command == "mounts":
+            if len(args) != 1:
+                raise VirtualComputerError("mounts_arguments_invalid")
+            self._require(grant, "filesystem.mount.list")
+            if self.mount_provider is None:
+                raise VirtualComputerError("sparsebundle_mount_provider_unavailable")
+            rows = [
+                row for row in self.mount_provider.status()["mounts"]
+                if row["principal"] == extension_id
+            ]
+            return "\n".join(
+                f'{row["mount_id"]} {row["mountpoint"]} {row["mode"]} {row["expires_at"]}'
+                for row in rows
+            )
+        if command == "mount":
+            if len(args) != 5:
+                raise VirtualComputerError("mount_arguments_invalid")
+            if self.mount_provider is None:
+                raise VirtualComputerError("sparsebundle_mount_provider_unavailable")
+            path = _path(args[2])
+            mode = args[3]
+            capability = "filesystem.mount.write" if mode == "rw" else "filesystem.mount.read"
+            self._require(grant, capability, path)
+            try:
+                lease_seconds = int(args[4], 10)
+            except ValueError as exc:
+                raise VirtualComputerError("mount_lease_invalid") from exc
+            record = self.mount_provider.mount(
+                principal=extension_id,
+                partition_id=args[1],
+                mountpoint="/" + path,
+                mode=mode,
+                lease_seconds=lease_seconds,
+            )
+            return f"mounted {record.mount_id} {record.mountpoint} {record.mode}"
+        if command == "umount":
+            if len(args) != 2:
+                raise VirtualComputerError("umount_arguments_invalid")
+            if self.mount_provider is None:
+                raise VirtualComputerError("sparsebundle_mount_provider_unavailable")
+            rows = self.mount_provider.status()["mounts"]
+            record = next((
+                row for row in rows
+                if row["mount_id"] == args[1] and row["principal"] == extension_id
+            ), None)
+            if record is None:
+                raise VirtualComputerError("sparsebundle_mount_not_found")
+            path = record["mountpoint"].lstrip("/")
+            self._require(grant, "filesystem.mount.unmount", path)
+            self.mount_provider.unmount(args[1], principal=extension_id)
+            return "unmounted " + args[1]
+        if command == "mread":
+            if len(args) != 4:
+                raise VirtualComputerError("mread_arguments_invalid")
+            path = _path(args[1])
+            self._require(grant, "filesystem.mount.read", path)
+            record = self._mounted_record(extension_id, path)
+            try:
+                offset, length = int(args[2], 10), int(args[3], 10)
+            except ValueError as exc:
+                raise VirtualComputerError("mread_range_invalid") from exc
+            if not 0 <= length <= (MAX_OUTPUT_BYTES * 3 // 4):
+                raise VirtualComputerError("mread_size_invalid")
+            data = self.mount_provider.read(
+                record["mount_id"], principal=extension_id,
+                offset=offset, length=length,
+            )
+            return base64.b64encode(data).decode("ascii")
+        if command == "mwrite":
+            if len(args) != 4:
+                raise VirtualComputerError("mwrite_arguments_invalid")
+            path = _path(args[1])
+            self._require(grant, "filesystem.mount.write", path)
+            record = self._mounted_record(extension_id, path)
+            try:
+                offset = int(args[2], 10)
+                data = base64.b64decode(args[3], validate=True)
+            except (ValueError, TypeError) as exc:
+                raise VirtualComputerError("mwrite_payload_invalid") from exc
+            if len(data) > MAX_COMMAND_BYTES:
+                raise VirtualComputerError("mwrite_size_invalid")
+            generation = self.mount_provider.write(
+                record["mount_id"], principal=extension_id,
+                offset=offset, data=data,
+            )
+            return f"written {len(data)} bytes generation {generation}"
         if command == "ls":
             if len(args) != 2:
                 raise VirtualComputerError("ls_arguments_invalid")

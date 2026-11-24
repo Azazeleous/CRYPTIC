@@ -16,6 +16,11 @@ from typing import Any, Mapping
 from mining.miner import mine_four_lane, verify_candidate as verify_four_lane
 from src.consensus.hccgn_work import HCCGNWorkHeader, mine_nonce, verify_proof
 from src.mining.sha256d import scan_nonce_range, verify_candidate as verify_sha256d
+from src.mining.symplectic import (
+    SCHEDULE_SEQUENTIAL,
+    SCHEDULE_SYMPLECTIC,
+    phase_space_parameters,
+)
 
 PROFILE_SHA256D_80 = "sha256d-80-v1"
 PROFILE_FOUR_LANE_SHA256 = "four-lane-sha256-v1"
@@ -125,10 +130,15 @@ class UnifiedMiningEngine:
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         workers: int = 1,
         chunk_size: int = 50_000,
+        schedule_profile: str = SCHEDULE_SEQUENTIAL,
         **inputs: Any,
     ) -> MiningReceipt:
         if profile_id not in SUPPORTED_PROFILES:
             raise MiningEngineError("mining_profile_unsupported")
+        if schedule_profile not in (SCHEDULE_SEQUENTIAL, SCHEDULE_SYMPLECTIC):
+            raise MiningEngineError("nonce_schedule_profile_unsupported")
+        if profile_id != PROFILE_HCCGN_WORK and schedule_profile != SCHEDULE_SEQUENTIAL:
+            raise MiningEngineError("nonce_schedule_profile_not_supported_for_mining_profile")
         bound = _bounded_attempts(max_attempts)
         worker_count = _workers(workers)
         if profile_id == PROFILE_SHA256D_80:
@@ -143,7 +153,7 @@ class UnifiedMiningEngine:
         if worker_count != 1:
             raise MiningEngineError("hccgn_work_v1_requires_single_worker")
         return self._mine_hccgn(
-            max_attempts=bound, **inputs,
+            max_attempts=bound, schedule_profile=schedule_profile, **inputs,
         )
 
     def _mine_sha256d(
@@ -224,15 +234,27 @@ class UnifiedMiningEngine:
     def _mine_hccgn(
         self, *, header: HCCGNWorkHeader, network_id: str,
         start_nonce: int = 0, max_attempts: int,
+        schedule_profile: str = SCHEDULE_SEQUENTIAL,
     ) -> MiningReceipt:
         if not isinstance(header, HCCGNWorkHeader):
             raise MiningEngineError("hccgn_header_object_required")
         if not isinstance(network_id, str) or not network_id:
             raise MiningEngineError("hccgn_network_id_required")
+        if schedule_profile not in (SCHEDULE_SEQUENTIAL, SCHEDULE_SYMPLECTIC):
+            raise MiningEngineError("nonce_schedule_profile_unsupported")
+        phase_space = None
+        if schedule_profile == SCHEDULE_SYMPLECTIC:
+            try:
+                phase_space = phase_space_parameters(
+                    max_attempts, drift=header.primary_stride, kick=header.compact_stride,
+                )
+            except (TypeError, ValueError) as exc:
+                raise MiningEngineError("symplectic_schedule_parameters_invalid") from exc
         started = time.perf_counter()
         try:
             solved, digest, proof, proof_hash, attempts, _kernel_seconds = mine_nonce(
                 header, start_nonce=start_nonce, max_attempts=max_attempts,
+                schedule_profile=schedule_profile,
             )
         except RuntimeError as exc:
             # The canonical kernel uses RuntimeError only when the bounded
@@ -252,6 +274,8 @@ class UnifiedMiningEngine:
                     "nonce_start": start_nonce,
                     "nonce_end_exclusive": start_nonce + max_attempts,
                     "termination": "attempt_budget_exhausted",
+                    "schedule_profile": schedule_profile,
+                    "phase_space": phase_space,
                 },
             )
         checked = verify_proof(
@@ -280,5 +304,11 @@ class UnifiedMiningEngine:
                 "method": "canonical_hccgn_work_v1_proof_verifier",
                 "proof_hash": proof_hash,
             },
-            metrics={"nonce_start": start_nonce, "nonce_end": solved.nonce},
+            metrics={
+                "nonce_start": start_nonce,
+                "nonce_end": solved.nonce,
+                "nonce_end_exclusive": start_nonce + max_attempts,
+                "schedule_profile": schedule_profile,
+                "phase_space": phase_space,
+            },
         )

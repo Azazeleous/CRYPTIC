@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping
 
 from src.consensus.pool_admission import PoolAdmissionError, admit_pool_submission
 from src.consensus.pool_ledger import PoolShareLedger, PoolLedgerError
-from src.mining.pool_protocol import PoolJobError, issue_pool_job
+from src.mining.pool_protocol import PoolJobError, issue_pool_job, verify_pool_job
 
 
 class PoolServiceError(ValueError):

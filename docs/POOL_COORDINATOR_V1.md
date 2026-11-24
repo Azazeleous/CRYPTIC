@@ -121,3 +121,8 @@ Unit tests and CI do not prove independent policy-key custody, HSM deployment, h
 
 
 The coordinator also exposes `configure_settlement_ledger(...)`, which binds the settlement ledger to its own issuer-verifying historical job resolver. This avoids a caller-supplied untrusted job lookup when wiring settlement.
+
+
+## Symplectic worker traversal and nonce admission
+
+The pool worker executes the signed nonce interval with the versioned symplectic-phase-space-v1 traversal. The scheduler is a bijection of the bounded interval, derived from the signed primary and compact stride values. Admission independently checks that the proof's decoded nonce satisfies nonce_start <= nonce < nonce_start + max_attempts; worker telemetry is ignored. See SYMPLECTIC_PHASE_SPACE_MINING_V1.md for the mathematical specification and invariants.

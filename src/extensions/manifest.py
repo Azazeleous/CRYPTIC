@@ -23,6 +23,8 @@ CAPABILITY = re.compile(r"^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){1,3}$")
 SUPPORTED_CAPABILITIES = frozenset({
     "filesystem.read", "filesystem.write", "filesystem.list",
     "filesystem.delete", "process.invoke",
+    "filesystem.mount.list", "filesystem.mount.read",
+    "filesystem.mount.write", "filesystem.mount.unmount",
 })
 
 

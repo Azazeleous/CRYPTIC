@@ -7,6 +7,7 @@ from src.consensus.hccgn_work import (
     build_proof, mine_nonce, network_hash, proof_commitment, verify_proof, work_digest,
 )
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
+from src.mining.symplectic import SCHEDULE_SYMPLECTIC, iter_symplectic_ordinals
 
 
 class HCCGNWorkProfileTests(unittest.TestCase):
@@ -95,6 +96,29 @@ class HCCGNWorkProfileTests(unittest.TestCase):
             proof, expected_network_id='gaia-testnet', expected_target=self.target
         )
         self.assertTrue(result['valid'])
+
+    def test_symplectic_miner_uses_complete_bounded_nonce_permutation(self):
+        offsets = tuple(iter_symplectic_ordinals(
+            8, drift=self.header.primary_stride, kick=self.header.compact_stride,
+        ))
+        self.assertEqual(set(offsets), set(range(8)))
+        solved, digest, proof, proof_hash, attempts, _elapsed = mine_nonce(
+            self.header, start_nonce=200, max_attempts=8,
+            schedule_profile=SCHEDULE_SYMPLECTIC,
+        )
+        self.assertEqual(solved.nonce, 200 + offsets[0])
+        self.assertGreaterEqual(solved.nonce, 200)
+        self.assertLess(solved.nonce, 208)
+        self.assertEqual(digest, work_digest(solved.encode()))
+        self.assertEqual(proof_hash, proof_commitment(proof))
+        self.assertEqual(attempts, 1)
+        self.assertTrue(verify_proof(
+            proof, expected_network_id="gaia-testnet", expected_target=self.target,
+        )["valid"])
+
+    def test_unknown_nonce_schedule_profile_is_rejected(self):
+        with self.assertRaisesRegex(HCCGNWorkError, "nonce_schedule_profile_unsupported"):
+            mine_nonce(self.header, start_nonce=42, max_attempts=1, schedule_profile="unknown")
 
     def test_miner_rejects_nonce_range_wraparound(self):
         with self.assertRaisesRegex(HCCGNWorkError, 'nonce_range_overflow'):
