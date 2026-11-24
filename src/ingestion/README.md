@@ -35,4 +35,4 @@ The runtime coordinates deadline-aware adapters with bounded workers, queue admi
 
 ## Canonical asset identity
 
-The asset_identity module provides network-scoped canonical asset identifiers and collision-safe symbol, name, and provider-ID aliases. Symbols are never treated as globally unique identifiers. See docs/CANONICAL_ASSET_IDENTITY_V1_10.md for the schema and boundaries.
+The asset_identity module provides SQLite-backed network-scoped canonical asset identifiers and collision-safe symbol, name, and provider-ID aliases. File-backed registries persist across process restarts. Symbols are never treated as globally unique identifiers. See docs/CANONICAL_ASSET_IDENTITY_V1_10.md for the schema and boundaries.
