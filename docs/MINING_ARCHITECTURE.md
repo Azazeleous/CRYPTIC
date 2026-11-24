@@ -63,3 +63,8 @@ Compare against a sequential baseline using the same candidate bytes, hash funct
 - A mining result is independently checked before ledger commitment.
 - A custom scheduler or reversible transform cannot change consensus rules.
 - Network/pool integration remains a separate adapter with explicit authorization and protocol-specific tests.
+
+
+## Symplectic phase-space scheduling
+
+The optional HCCGN mining traversal symplectic-phase-space-v1 uses the exact finite modular symplectic permutation described in SYMPLECTIC_PHASE_SPACE_MINING_V1.md. It only reorders the signed finite nonce window; it does not alter proof bytes, target comparison, or candidate coverage. The pool worker selects this schedule, and independent pool admission enforces the signed half-open nonce range. This is not a claim of faster hashing.
