@@ -45,11 +45,15 @@ def load_pinned_ed25519_public_key(path: str | os.PathLike[str]) -> bytes:
         if hasattr(os, "getuid") and info.st_uid != os.getuid():
             raise RuntimeConfigurationError("god_trust_root_owner_mismatch")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            raw = stream.read(4097).strip()
+            raw = stream.read(4097)
         if len(raw) > 4096:
             raise RuntimeConfigurationError("god_trust_root_file_too_large")
     finally:
         os.close(descriptor)
+    # Raw Ed25519 public keys are binary. Preserve all 32 bytes, even when
+    # an edge byte happens to be ASCII whitespace. Trim only textual framing.
+    if len(raw) != 32:
+        raw = raw.strip()
     if len(raw) == 64:
         try:
             raw = bytes.fromhex(raw.decode("ascii"))
