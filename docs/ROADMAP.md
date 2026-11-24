@@ -51,7 +51,7 @@
 - Direct health probes use one-shot workers and close them on every exit path.
 - Four-lane FGR-ICE regtest with independent center verification and optional ML-DSA-65 receipt signing inside the acceptance budget.
 - Explicit PQ transport adapter manifests, pinned signer trust, declared KEM/signature capabilities, and revocation-aware adapter invalidation.
-- Provider interoperability, Windows spawn verification, production trust-root operation, and live endpoint verification remain open.
+- Windows spawn/cleanup verification is CI-verified in PR #39 on Ubuntu and Windows (8 focused tests per platform); provider interoperability, production trust-root operation, and live endpoint verification remain open.
 
 ## Phase 8 — GCF consensus, HCCGN proof, and ADAM/APEX finality
 - Independent GCF/1 certificate verifier reconstructs canonical serialization, checks Ed25519 signatures, validator-set digest, PREVOTE/PRECOMMIT weighted quorum, lock references, and certificate metadata.

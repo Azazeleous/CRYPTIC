@@ -43,7 +43,7 @@
 | PQ key lifecycle/runtime | proposed | protected key store, rotation, revocation, replay, and recovery tests |
 | BLE/home automation | proposed | device-specific authorization and safety tests |
 
-| Supervised whole-request HTTP transport | implemented (E3) | PR #21 mainline integration; spawn-isolated worker covers DNS, TCP, TLS, headers, and body reads; parent-side absolute monotonic deadline, redirect denial, bounded response IPC, worker termination and poisoning; CI evidence required on the rebased branch |
+| Supervised whole-request HTTP transport | implemented (E3; PR #39 cross-platform CI-verified) | PR #21 mainline integration; spawn-isolated worker covers DNS, TCP, TLS, headers, and body reads; parent-side absolute monotonic deadline, redirect denial, bounded response IPC, worker termination and poisoning. PR #39 CI run 45217841723 passed 8 focused tests on Ubuntu and 8 on Windows; full suite passed 369 tests. Live provider interoperability remains open. |
 | Four-lane FGR-ICE SHA-256d regtest | implemented (E3 reference) | Four disjoint nonce lanes, center recomputation, finite time budget, optional ML-DSA-65 signed receipt; signing/self-verification are inside the acceptance deadline; no HCCGN network consensus claim |
 | PQ transport adapter registry | implemented (E2) | ML-DSA-signed manifests, pinned trust store, explicit KEM/signature capability declarations, authenticated/deadline-gated selection, and signer-revocation invalidation; real network adapters and external trust operations remain unintegrated |
 | Negacyclic ring and SHA-256 inverse research | research implementation (E2) | finite arithmetic/research prototypes with tests; not a cryptographic hash inversion claim and not a consensus primitive |
