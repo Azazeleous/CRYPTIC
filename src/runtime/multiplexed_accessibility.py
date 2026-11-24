@@ -21,8 +21,8 @@ from src.sos.sparsebundle_mount import SparseBundleMountManager
 SCHEMA = "GAIA-MULTIPLEXED-COMMAND/1"
 COMMAND_ID = re.compile(r"^[0-9a-f]{32}$")
 MAX_ENVELOPE_BYTES = 65_536
-MAX_READ_BYTES = 1_048_576
-MAX_WRITE_BYTES = 1_048_576
+MAX_READ_BYTES = 32 * 1024
+MAX_WRITE_BYTES = 32 * 1024
 
 CAPABILITIES = {
     "pool.issue_job": "pool.job.issue",
@@ -282,15 +282,33 @@ class MultiplexedAccessibilityRuntime:
             raise MultiplexedCommandError("authenticated_principal_mismatch")
         operation = envelope["operation"]
         capability = envelope["capability"]
-        if operation not in CAPABILITIES or capability != CAPABILITIES[operation]:
-            raise MultiplexedCommandError("command_capability_mismatch")
+        if operation not in CAPABILITIES:
+            raise MultiplexedCommandError("command_operation_not_allowed")
         payload = envelope["payload"]
         if not isinstance(payload, Mapping):
             raise MultiplexedCommandError("command_payload_invalid")
+        expected_capability = CAPABILITIES[operation]
+        if operation == "sos.mount":
+            expected_capability = (
+                "sos.mount.write" if payload.get("mode") == "rw"
+                else "sos.mount.read"
+            )
+        if capability != expected_capability:
+            raise MultiplexedCommandError("command_capability_mismatch")
         raw = _canonical(dict(envelope))
         if len(raw) > MAX_ENVELOPE_BYTES:
             raise MultiplexedCommandError("command_envelope_too_large")
-        resource = str(payload.get("mountpoint", self.pool.pool_id))
+        if operation == "sos.mount":
+            resource = str(payload.get("mountpoint", ""))
+        elif operation.startswith("sos."):
+            mount_id = payload.get("mount_id")
+            active = self.mounts.status()["mounts"]
+            mounted = next((row for row in active if row["mount_id"] == mount_id), None)
+            if mounted is None:
+                raise MultiplexedCommandError("mount_not_found")
+            resource = mounted["mountpoint"]
+        else:
+            resource = self.pool.pool_id
         self._authorize(principal, capability, resource)
         now = self.clock()
         if isinstance(now, bool) or not isinstance(now, int) or now < 0:
