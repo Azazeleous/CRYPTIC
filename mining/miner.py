@@ -60,7 +60,10 @@ def _mine_lane(header: bytes, start_nonce: int, count: int, target: int, lane_id
     return best_hit, attempts
 
 
-def mine_four_lane(header: bytes, start_nonce: int, count: int, target: int) -> MiningResult | None:
+def mine_four_lane(
+    header: bytes, start_nonce: int, count: int, target: int, *,
+    workers: int = LANE_COUNT,
+) -> MiningResult | None:
     """Search a finite candidate window; return the earliest scheduled valid hit.
 
     All lanes evaluate their disjoint ordinals. The result is independently
@@ -75,9 +78,11 @@ def mine_four_lane(header: bytes, start_nonce: int, count: int, target: int) -> 
         raise ValueError("count must be non-negative")
     if not isinstance(target, int) or not 0 <= target <= MAX_TARGET:
         raise ValueError("target must be a 256-bit unsigned integer")
+    if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
+        raise ValueError("workers must be a positive integer")
     if count == 0:
         return None
-    with ThreadPoolExecutor(max_workers=LANE_COUNT) as pool:
+    with ThreadPoolExecutor(max_workers=min(workers, LANE_COUNT)) as pool:
         futures = [pool.submit(_mine_lane, header, start_nonce, count, target, lane) for lane in range(LANE_COUNT)]
         lane_results = [future.result() for future in futures]
     hits = [hit for hit, _ in lane_results if hit is not None]
