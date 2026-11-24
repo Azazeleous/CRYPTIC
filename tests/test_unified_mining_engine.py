@@ -88,12 +88,12 @@ class UnifiedMiningEngineTests(unittest.TestCase):
             height=1,
             sequence=1,
             timestamp=1_800_000_000,
-            parent_hash=b"\\x00" * 32,
-            payload_hash=b"\\x11" * 32,
+            parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32,
             primary_stride=3037,
             compact_stride=5,
             nonce=0,
-            target=b"\\x00" * 32,
+            target=b"\x00" * 32,
         )
         receipt = self.engine.mine(
             PROFILE_HCCGN_WORK,
