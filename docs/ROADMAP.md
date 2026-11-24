@@ -27,11 +27,11 @@
 - Learning from curated, licensed, privacy-reviewed evidence.
 
 ## Phase 4 — Error correction and storage
-- GF(256) primitives and Reed–Solomon implementation.
-- Berlekamp–Welch decoder and adversarial tests.
-- QC-LDPC encoder/decoder with documented parity-check construction.
-- Three-lane correction and independent reverification.
-- Chunk manifests, content addressing, integrity, recovery.
+- GF(256) arithmetic, Berlekamp–Welch, and a Reed–Solomon evaluation-code profile — implementation and tests CI-verified in PR #36.
+- QC-LDPC encoder with a structured circulant-shift base matrix, normalized min-sum decoder, and a verified single-bit syndrome path — implementation and tests CI-verified in PR #36.
+- Layered QC-LDPC → Reed–Solomon correction with independent syndrome and re-encoding checks — implementation and tests CI-verified in PR #36.
+- Content-addressed chunk objects and canonical integrity manifests — implementation and tamper tests added in PR #36; physical power-loss durability remains unverified.
+- Three-lane correction now has three paths: layered QC-LDPC/production-RS, direct production-RS, and an independently written bitwise-GF(256) reference-RS decoder. Two matching lanes are required; every accepted result is re-encoded by both RS implementations and the QC encoder. Deterministic tests added in PR #36; CI-verified in PR #36 source commit db726ee: 393 tests passed in CRYPTIC CI and mining-engine CI; Go conformance vectors and bounded benchmarks passed. Independent third-party implementation and formal verification remain open.
 
 ## Phase 5 — Extensions and SOS
 - Extension manifest and sandbox.
