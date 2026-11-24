@@ -17,6 +17,11 @@ jobs:
   python-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Public read-only RPCs make the live adapter smoke tests execute instead of skip.
+    # These endpoints require no wallet, signer, or account credentials.
+    env:
+      CRYPTIC_EVM_RPC_URL: https://ethereum-rpc.publicnode.com
+      CRYPTIC_SOLANA_RPC_URL: https://api.mainnet-beta.solana.com
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -30,12 +35,12 @@ jobs:
         run: python -m unittest discover -s tests -v
 
   supervised-http-platform:
-    name: supervised-http (${{ matrix.os }})
+    name: supervised-http (\${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: \${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - name: Check out source
@@ -50,12 +55,12 @@ jobs:
         run: python -m unittest discover -s tests -p "test_supervised_http.py" -v
 
   sos-process-platform:
-    name: sos-process (${{ matrix.os }})
+    name: sos-process (\${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: \${{ matrix.os }}
     timeout-minutes: 10
     steps:
       - name: Check out source
