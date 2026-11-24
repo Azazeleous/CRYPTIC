@@ -6,6 +6,7 @@ GCF/2 certificates require a separate verifier and are not silently accepted.
 """
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any, Callable, Mapping
 
@@ -39,8 +40,8 @@ def build_adam_finalized_state_verifier(
             committed = getter(height)
             if not isinstance(committed, Mapping):
                 return False
-            certificate_digest = __import__("hashlib").sha256(
-                b"GCF/1|FINALITY-CERTIFICATE\\x00" + canonical_bytes(dict(certificate))
+            certificate_digest = hashlib.sha256(
+                b"GCF/1|FINALITY-CERTIFICATE" + bytes([0]) + canonical_bytes(dict(certificate))
             ).hexdigest()
             return (
                 committed.get("height") == height
