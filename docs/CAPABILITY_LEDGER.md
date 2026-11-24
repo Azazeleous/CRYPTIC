@@ -31,9 +31,9 @@
 | Three-lane correction | proposed | fault injection and independent re-verification |
 | Chunked sparse storage | proposed | layout benchmark, crash recovery, integrity tests |
 | Virtual computer/SOS | proposed | isolation and escape-resistance tests |
-| SOS allowlisted process supervisor | implemented (E2 reference; PR #40 CI-verified) | Fresh spawn worker, strict operation allowlist, bounded payloads, absolute monotonic deadline, terminate/kill and join; 6 focused tests passed on Ubuntu and Windows. Same OS identity; no privilege-separated sandbox or arbitrary extension execution. |
 | Device assistant | proposed | enrollment, scope, revoke, audit tests |
 | Local seed and Merkle ledger CLI | implemented (E2) | seven local unit tests pass; repository commit and runtime integration still require CI/integration evidence |
+| SOS allowlisted process supervisor | implemented (E2 reference; PR #40 CI-verified) | Fresh spawn worker, strict operation allowlist, bounded payloads, absolute monotonic deadline, terminate/kill and join; 6 focused tests passed on Ubuntu and Windows. Same OS identity; no privilege-separated sandbox or arbitrary extension execution. |
 | Crystalline admission lifecycle | proposed (E1) | schemas, deterministic ADAM policy evaluator, signed decisions, negative tests, independent verifier, external checkpoint |
 | Four-lane SHA-256 reference mining | implemented (E3 reference) | four disjoint lanes, deterministic affine traversal, independently verified SHA-256 candidates, bounded per-lane hit retention; chain-specific header adapter and production benchmark remain |
 | Reversible barrel-roll framing | implemented (E3 reference) | bit/byte/lane inverse and round-trip tests; transforms remain outside consensus preimage |
