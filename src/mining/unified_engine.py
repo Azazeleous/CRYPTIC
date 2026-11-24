@@ -8,10 +8,13 @@ versioned algorithms with their own serialization and target semantics.
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import math
 import os
 import time
-from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from dataclasses import asdict, dataclass, is_dataclass, replace
+from typing import Any, Callable, Mapping
 
 from mining.miner import mine_four_lane, verify_candidate as verify_four_lane
 from src.consensus.hccgn_work import HCCGNWorkHeader, mine_nonce, verify_proof
@@ -111,6 +114,26 @@ def _receipt(
     )
 
 
+
+def _ledger_normalize(value: Any) -> Any:
+    """Convert a request into a deterministic fingerprint representation."""
+    if is_dataclass(value):
+        return _ledger_normalize(asdict(value))
+    if isinstance(value, bytes):
+        return {"encoding": "hex", "value": value.hex()}
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise MiningEngineError("ledger_request_key_invalid")
+        return {key: _ledger_normalize(value[key]) for key in sorted(value)}
+    if isinstance(value, (tuple, list)):
+        return [_ledger_normalize(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise MiningEngineError("ledger_request_value_unsupported")
+
+
 class UnifiedMiningEngine:
     """Explicit profile router for the repository's three proof pipelines.
 
@@ -118,6 +141,11 @@ class UnifiedMiningEngine:
     and no fallback between profiles because their wire formats are not
     interchangeable.
     """
+
+    def __init__(self, ledger_append: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None):
+        if ledger_append is not None and not callable(ledger_append):
+            raise MiningEngineError("ledger_append_must_be_callable")
+        self._ledger_append = ledger_append
 
     @staticmethod
     def profiles() -> tuple[str, ...]:
@@ -142,19 +170,63 @@ class UnifiedMiningEngine:
         bound = _bounded_attempts(max_attempts)
         worker_count = _workers(workers)
         if profile_id == PROFILE_SHA256D_80:
-            return self._mine_sha256d(
+            receipt = self._mine_sha256d(
                 max_attempts=bound, workers=worker_count,
                 chunk_size=chunk_size, **inputs,
             )
+            return self._commit_receipt(receipt, profile_id, bound, worker_count, schedule_profile, inputs)
         if profile_id == PROFILE_FOUR_LANE_SHA256:
-            return self._mine_four_lane(
+            receipt = self._mine_four_lane(
                 max_attempts=bound, workers=min(worker_count, 4), **inputs,
             )
+            return self._commit_receipt(receipt, profile_id, bound, min(worker_count, 4), schedule_profile, inputs)
         if worker_count != 1:
             raise MiningEngineError("hccgn_work_v1_requires_single_worker")
-        return self._mine_hccgn(
+        receipt = self._mine_hccgn(
             max_attempts=bound, schedule_profile=schedule_profile, **inputs,
         )
+        return self._commit_receipt(receipt, profile_id, bound, 1, schedule_profile, inputs)
+
+
+    def _commit_receipt(
+        self, receipt: MiningReceipt, profile_id: str, max_attempts: int,
+        workers: int, schedule_profile: str, inputs: Mapping[str, Any],
+    ) -> MiningReceipt:
+        """Append a measured receipt before returning when a ledger is configured."""
+        if self._ledger_append is None:
+            return receipt
+        normalized = _ledger_normalize(dict(inputs))
+        fingerprint = hashlib.sha256(json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        payload = {
+            "schema": "CRYPTIC-MINING-LEDGER-EVENT/1",
+            "profile_id": profile_id,
+            "request_fingerprint": fingerprint,
+            "request": {
+                "max_attempts": max_attempts,
+                "workers": workers,
+                "schedule_profile": schedule_profile,
+            },
+            "receipt": receipt.to_dict(),
+        }
+        try:
+            committed = self._ledger_append("mining.receipt", payload)
+        except Exception as exc:
+            raise MiningEngineError("receipt_ledger_commit_failed") from exc
+        if (not isinstance(committed, Mapping)
+                or not isinstance(committed.get("record_hash"), str)
+                or len(committed["record_hash"]) != 64):
+            raise MiningEngineError("receipt_ledger_commit_unconfirmed")
+        metrics = dict(receipt.metrics)
+        metrics["ledger"] = {
+            "provider": "configured_append_only_ledger",
+            "persistence_status": "committed",
+            "sequence": committed.get("sequence"),
+            "record_hash": committed["record_hash"],
+        }
+        return replace(receipt, metrics=metrics)
 
     def _mine_sha256d(
         self, *, header: bytes, target: int, start_nonce: int = 0,

@@ -1,4 +1,7 @@
+import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.consensus.hccgn_work import HCCGNWorkHeader, network_hash
 from src.mining.unified_engine import (
@@ -119,6 +122,36 @@ class UnifiedMiningEngineTests(unittest.TestCase):
                 PROFILE_HCCGN_WORK, header=header, network_id=network_id,
                 max_attempts=10_000_001, schedule_profile="symplectic-phase-space-v1",
             )
+
+    def test_receipt_is_committed_to_real_seed_ledger_before_return(self):
+        network_id = "cryptic-ledger-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id), height=1, sequence=1,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
+        )
+        script = Path(__file__).resolve().parents[1] / "scripts" / "cryptic-seed-ledger.py"
+        spec = importlib.util.spec_from_file_location("cryptic_seed_ledger_runtime", script)
+        ledger_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ledger_module)
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / ".cryptic"
+            ledger_module.init_state(state)
+            engine = UnifiedMiningEngine(
+                ledger_append=lambda event_type, payload:
+                    ledger_module.append_event(state, event_type, payload)
+            )
+            receipt = engine.mine(
+                PROFILE_HCCGN_WORK, header=header, network_id=network_id,
+                max_attempts=4, schedule_profile="symplectic-phase-space-v1",
+            )
+            audit = ledger_module.verify_state(state)
+            self.assertTrue(audit["valid"])
+            self.assertEqual(audit["records"], 1)
+            self.assertEqual(receipt.metrics["ledger"]["persistence_status"], "committed")
+            self.assertEqual(receipt.metrics["ledger"]["sequence"], 0)
+            self.assertEqual(len(receipt.metrics["ledger"]["record_hash"]), 64)
 
     def test_hccgn_exhausted_budget_returns_verified_no_candidate_receipt(self):
         network_id = "cryptic-unified-testnet"
