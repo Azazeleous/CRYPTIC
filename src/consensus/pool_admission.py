@@ -45,6 +45,10 @@ def admit_pool_submission(submission:Mapping[str,Any],*,trusted_issuer_public_ke
     try: verified=verify_proof(proof,expected_network_id=expected_network_id,expected_target=active_target,proposal=proposal)
     except Exception as exc: raise PoolAdmissionError("hccgn_proof_rejected:"+type(exc).__name__) from exc
     if verified.get("valid") is not True or verified.get("proof_hash")!=proof_hash: raise PoolAdmissionError("hccgn_proof_rejected")
+    nonce=verified.get("nonce")
+    nonce_start=job["nonce_start"]
+    nonce_stop=nonce_start+job["max_attempts"]
+    if isinstance(nonce,bool) or not isinstance(nonce,int) or not nonce_start<=nonce<nonce_stop: raise PoolAdmissionError("proof_nonce_outside_assigned_job_range")
     identity={"network_id":expected_network_id,"pool_id":expected_pool_id,"job_id":job["job_id"],"worker_id":worker_id,"proof_hash":proof_hash}
     share_id=hashlib.sha256(repr(sorted(identity.items())).encode("utf-8")).hexdigest()
     return {"accepted":True,"share_id":share_id,**identity,"work_digest":verified["work_digest"],"nonce":verified["nonce"],"target":verified["target"],"accepted_at":now,"profile_id":verified["profile_id"]}
