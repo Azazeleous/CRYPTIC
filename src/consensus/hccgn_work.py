@@ -191,34 +191,47 @@ def mine_nonce(
     *,
     start_nonce: int = 0,
     max_attempts: int = 10_000_000,
+    schedule_profile: str = "sequential-v1",
 ) -> tuple[HCCGNWorkHeader, bytes, bytes, str, int, float]:
-    """Mine a bounded nonce interval using a reusable SHA-256 midstate.
+    """Mine a bounded nonce interval and independently preserve HCCGN-WORK/1.
 
-    The first 128 bytes of WORK_DOMAIN || header are invariant across nonces.
-    The nonce begins at absolute stream offset len(WORK_DOMAIN)+144 == 157,
-    hence byte offset 29 in the tail after the first 128 bytes.
-    No nonce wrap is allowed: a range crossing 2**64 fails rather than
-    revisiting nonce values.
-    Returns (solved_header, digest, proof, proof_hash_hex, attempts, seconds).
+    The optional symplectic schedule changes only candidate visitation order.
+    Every visited nonce remains inside the caller's signed half-open interval;
+    the encoded header, work digest, and consensus target are unchanged.
     """
     _u(start_nonce, 64, "start_nonce")
     _u(max_attempts, 64, "max_attempts", 1)
     if start_nonce + max_attempts > (1 << 64):
         raise HCCGNWorkError("nonce_range_overflow")
 
+    if schedule_profile == "sequential-v1":
+        nonce_offsets = range(max_attempts)
+    elif schedule_profile == "symplectic-phase-space-v1":
+        try:
+            from src.mining.symplectic import iter_symplectic_ordinals
+            nonce_offsets = iter_symplectic_ordinals(
+                max_attempts,
+                drift=header.primary_stride,
+                kick=header.compact_stride,
+            )
+        except Exception as exc:
+            raise HCCGNWorkError("symplectic_schedule_invalid") from exc
+    else:
+        raise HCCGNWorkError("nonce_schedule_profile_unsupported")
+
     raw = header.encode()
     target_int = int.from_bytes(header.target, "big")
     stream = bytearray(WORK_DOMAIN + raw)
-    nonce_offset = len(WORK_DOMAIN) + 144
+    nonce_field_offset = len(WORK_DOMAIN) + 144
     prefix_size = 128
     midstate = hashlib.sha256(stream[:prefix_size])
     tail = stream[prefix_size:]
-    tail_nonce_offset = nonce_offset - prefix_size
+    tail_nonce_offset = nonce_field_offset - prefix_size
     pack_u64_into = struct.Struct(">Q").pack_into
     started = time.perf_counter()
 
-    for attempt in range(max_attempts):
-        nonce = start_nonce + attempt
+    for attempts, offset in enumerate(nonce_offsets, start=1):
+        nonce = start_nonce + offset
         pack_u64_into(tail, tail_nonce_offset, nonce)
         current = midstate.copy()
         current.update(tail)
@@ -228,6 +241,6 @@ def mine_nonce(
             proof = build_proof(solved)
             proof_hash = proof_commitment(proof)
             elapsed = time.perf_counter() - started
-            return solved, digest, proof, proof_hash, attempt + 1, elapsed
+            return solved, digest, proof, proof_hash, attempts, elapsed
 
     raise RuntimeError(f"No valid nonce found within {max_attempts:,} attempts.")
