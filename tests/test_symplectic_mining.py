@@ -87,6 +87,12 @@ class SymplecticPhaseSpaceTests(unittest.TestCase):
         errors = [abs(system.energy(state) - initial_energy) for state in states]
         self.assertLess(max(errors), 1e-4)
 
+    def test_boolean_and_noninteger_schedule_parameters_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "drift_must_be_integer"):
+            phase_space_parameters(8, drift=True, kick=5)
+        with self.assertRaisesRegex(ValueError, "kick_must_be_integer"):
+            phase_space_parameters(8, drift=3, kick=5.5)
+
     def test_invalid_phase_parameters_fail_closed(self):
         with self.assertRaises(ValueError):
             DiscreteSymplecticMap(1, 1, 1)
