@@ -36,7 +36,6 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(receipt.metrics["nonce_range"], [0, 32])
         self.assertEqual(receipt.metrics["retained_candidate_count"], 1)
         self.assertEqual(receipt.candidate["nonce"], 0)
-        self.assertEqual(receipt.metrics["schedule_profile"], "sequential-v1")
         self.assertEqual(receipt.verification["method"], "independent_full_header_sha256d")
 
     def test_four_lane_profile_uses_disjoint_lane_scheduler_and_reverifies(self):
@@ -80,6 +79,7 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(receipt.verification["method"], "canonical_hccgn_work_v1_proof_verifier")
         self.assertEqual(len(receipt.candidate["proof_hash"]), 64)
         self.assertEqual(receipt.candidate["nonce"], 0)
+        self.assertEqual(receipt.metrics["schedule_profile"], "sequential-v1")
 
 
     def test_hccgn_symplectic_schedule_is_exposed_and_receipted(self):
