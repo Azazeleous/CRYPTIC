@@ -167,3 +167,8 @@ At source commit db726ee691c292df4e84777a6ed9f16c604e2206:
 | Three-lane correction | implemented and CI-verified in PR #36 | Layered QC-LDPC/production-RS, direct production-RS, and separately written bitwise-GF(256) reference-RS decoder. Two-of-three agreement is required; both RS implementations and the QC encoder independently re-encode accepted output. A third-party implementation and formal proof remain open. |
 
 This CI evidence verifies the repository test profile only; it does not establish production deployment, constant-time behavior, formal proof, hardware durability, or cross-platform storage power-loss guarantees.
+
+| Symplectic continuous phase-space engine | Implemented in PR #42 branch; Störmer-Verlet reversible step, bounded trajectory, finite-step energy-error tests | Not merged; no production Hamiltonian model supplied |
+| Discrete symplectic mining scheduler | Implemented in PR #42 branch; exact modular shear permutation, exhaustive finite-window coverage, HCCGN worker integration | Not merged; traversal-only, no hash-rate acceleration claim |
+| Pool nonce-range enforcement | Implemented in PR #42 branch; admission rejects proofs outside signed half-open job interval | Not merged; awaiting CI and independent review |
+| Pool canonical settlement gate | PR #42 branch requires GCF certificate plus exact durable ADAM commit match and optional sequence-anchor confirmation | Not merged; test authorities are not production authorities |
