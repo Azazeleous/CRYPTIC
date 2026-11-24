@@ -36,12 +36,19 @@ class HCCGNRegistryTests(unittest.TestCase):
         self.temp.cleanup()
 
     class MemoryAnchor:
-        def __init__(self): self.values = {}
+        def __init__(self):
+            self.values = {}
+            self.certificates = {}
+            self.advance_calls = 0
         def read_sequence(self, network_id): return self.values.get(network_id)
-        def advance_sequence(self, network_id, sequence, policy_hash):
+        def advance_sequence(self, network_id, sequence, policy_hash, *, certificate=None):
+            self.advance_calls += 1
+            if not isinstance(certificate, dict):
+                return False
             current = self.values.get(network_id)
             if current is not None and sequence <= current[0]: return False
             self.values[network_id] = (sequence, policy_hash)
+            self.certificates[network_id] = certificate
             return True
 
     def signed_policy(self, **overrides):
@@ -87,7 +94,12 @@ class HCCGNRegistryTests(unittest.TestCase):
             clock=lambda: self.now, sequence_anchor=anchor,
             require_external_anchor=True,
         )
-        anchored.install(self.signed_policy())
+        snapshot = self.signed_policy()
+        certificate = {"schema": "GCF/1", "candidate_digest": "c" * 64}
+        with self.assertRaisesRegex(HCCGNRegistryError, "gcf_finality_certificate_required"):
+            anchored.install(snapshot)
+        anchored.install(snapshot, finality_certificate=certificate)
+        self.assertEqual(anchor.certificates["gaia-testnet"], certificate)
         self.assertEqual(anchored.resolve({
             "network_id": "gaia-testnet", "height": 1, "epoch": 1,
             "issued_at": self.now,
@@ -137,6 +149,21 @@ class HCCGNRegistryTests(unittest.TestCase):
         self.policy.install(self.signed_policy(sequence=2))
         with self.assertRaisesRegex(HCCGNRegistryError, "policy_rollback_or_sequence_reuse"):
             self.policy.install(self.signed_policy(sequence=1))
+
+    def test_local_rollback_is_rejected_before_external_anchor_mutation(self):
+        anchor = self.MemoryAnchor()
+        anchored = HCCGNActiveTargetPolicy(
+            Path(self.temp.name) / "rollback-preflight.sqlite3",
+            trusted_public_key=self.public, trusted_signer_id="GOD-ROOT-1",
+            clock=lambda: self.now, sequence_anchor=anchor,
+            require_external_anchor=True,
+        )
+        anchored.install(self.signed_policy(sequence=2), finality_certificate={"schema": "GCF/1"})
+        calls_before = anchor.advance_calls
+        with self.assertRaisesRegex(HCCGNRegistryError, "policy_rollback_or_sequence_reuse"):
+            anchored.install(self.signed_policy(sequence=1), finality_certificate={"schema": "GCF/1"})
+        self.assertEqual(anchor.advance_calls, calls_before)
+        self.assertEqual(anchor.read_sequence("gaia-testnet")[0], 2)
 
     def test_target_policy_rejects_same_sequence_different_content(self):
         self.policy.install(self.signed_policy())

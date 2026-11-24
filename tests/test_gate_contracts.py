@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import stat
 import tempfile
@@ -7,7 +9,8 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from src.consensus.gcf import GCFEngine, GateResult, _require_int
+from src.consensus.gcf import GCFEngine, GateResult, ValidatorSet, _require_int
+from src.governance.god_adapter import ValidatorSetProposalAuthorizer
 from src.consensus.independent_verifier import _integer, IndependentVerificationError
 from src.consensus.runtime import (
     RuntimeConfigurationError, build_consensus_runtime,
@@ -34,6 +37,32 @@ class GateContractTests(unittest.TestCase):
         self.assertTrue(engine._gate(lambda: GateResult(True, "authorized")).allowed)
         self.assertFalse(engine._gate(lambda: GateResult(1, "bad")).allowed)
         self.assertFalse(engine._gate(lambda: (_ for _ in ()).throw(RuntimeError())).allowed)
+
+
+    def test_validator_set_policy_admits_only_active_validators_and_leaves_finality_to_gcf(self):
+        validator_set = ValidatorSet("gaia-testnet", 7, {
+            "validator-a": {"public_key_hex": "11" * 32, "weight": 2},
+            "validator-b": {"public_key_hex": "22" * 32, "weight": 1},
+        })
+        authorize = ValidatorSetProposalAuthorizer(validator_set)
+        proposal = {
+            "network_id": "gaia-testnet", "epoch": 7,
+            "proposer_id": "validator-a", "proposer_public_key": "11" * 32,
+        }
+        self.assertTrue(authorize("gcf.propose", proposal).allowed)
+        self.assertEqual(authorize("gcf.propose", proposal).reason,
+                         "ACTIVE_VALIDATOR_PROPOSER")
+        self.assertFalse(authorize("other.capability", proposal).allowed)
+        self.assertFalse(authorize("gcf.propose", {
+            **proposal, "proposer_id": "unlisted",
+        }).allowed)
+        self.assertFalse(authorize("gcf.propose", {
+            **proposal, "proposer_public_key": "33" * 32,
+        }).allowed)
+        self.assertFalse(authorize("gcf.propose", {
+            **proposal, "epoch": 8,
+        }).allowed)
+        self.assertEqual(validator_set.quorum_weight(), 3)
 
     def test_justice_verifiers_must_return_exact_true(self):
         commitment = {
@@ -76,6 +105,7 @@ class GateContractTests(unittest.TestCase):
         )(proposal).allowed)
 
 
+@unittest.skipUnless(os.name == "posix", "runtime filesystem permission assertions require POSIX mode semantics")
 class RuntimeCompositionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -84,9 +114,17 @@ class RuntimeCompositionTests(unittest.TestCase):
         public = private.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw
         )
+        self.public_key = public
         self.key_path = self.root / "god-root.pub"
         self.key_path.write_bytes(public)
         os.chmod(self.key_path, 0o600)
+        self.root_pin_path = self.root / "god-root-pin.json"
+        self.root_pin_path.write_text(json.dumps({
+            "schema": "CRYPTIC-GOD-ROOT-PIN/1",
+            "signer_id": "GOD-ROOT-1",
+            "public_key_hex": public.hex(),
+        }))
+        os.chmod(self.root_pin_path, 0o600)
 
     def tearDown(self):
         self.temp.cleanup()
@@ -108,7 +146,8 @@ class RuntimeCompositionTests(unittest.TestCase):
                 "public_key_hex": "11" * 32, "weight": 1,
             }},
             data_dir=self.root / "data",
-            god_trust_root_path=self.key_path,
+            god_trust_root_path=self.root_pin_path,
+            god_trust_root_fingerprint=hashlib.sha256(self.public_key).hexdigest(),
             god_signer_id="GOD-ROOT-1",
             sequence_anchor=self.Anchor(),
             god_gate=None,
@@ -124,10 +163,11 @@ class RuntimeCompositionTests(unittest.TestCase):
 
     def test_runtime_data_directory_is_private(self):
         private_dir = self.root / "private-data"
-        runtime = build_consensus_runtime(
+        build_consensus_runtime(
             network_id="gaia-testnet", epoch=1,
             validators={"validator-a": {"public_key_hex": "11" * 32, "weight": 1}},
-            data_dir=private_dir, god_trust_root_path=self.key_path,
+            data_dir=private_dir, god_trust_root_path=self.root_pin_path,
+            god_trust_root_fingerprint=hashlib.sha256(self.public_key).hexdigest(),
             god_signer_id="GOD-ROOT-1", sequence_anchor=self.Anchor(),
             god_gate=None, policy_evidence_verifier=None,
             justice_evidence_verifier=None,
@@ -142,9 +182,30 @@ class RuntimeCompositionTests(unittest.TestCase):
             build_consensus_runtime(
                 network_id="gaia-testnet", epoch=1, validators={},
                 data_dir=self.root / "data2",
-                god_trust_root_path=self.key_path, god_signer_id="GOD-ROOT-1",
+                god_trust_root_path=self.root_pin_path, god_signer_id="GOD-ROOT-1",
+                god_trust_root_fingerprint=hashlib.sha256(self.public_key).hexdigest(),
                 sequence_anchor=None, god_gate=None,
                 policy_evidence_verifier=None, justice_evidence_verifier=None,
+                consensus_endpoint="https://consensus.invalid",
+            )
+
+    def test_raw_trust_root_preserves_leading_and_trailing_whitespace_bytes(self):
+        key = b" " + bytes([1]) * 30 + bytes([10])
+        self.key_path.write_bytes(key)
+        os.chmod(self.key_path, 0o600)
+        self.assertEqual(load_pinned_ed25519_public_key(self.key_path), key)
+
+    def test_production_runtime_rejects_missing_independent_root_pin(self):
+        with self.assertRaisesRegex(RuntimeConfigurationError, "independent_god_root_fingerprint_required"):
+            build_consensus_runtime(
+                network_id="gaia-testnet", epoch=1,
+                validators={"validator-a": {"public_key_hex": "11" * 32, "weight": 1}},
+                data_dir=self.root / "missing-pin",
+                god_trust_root_path=self.root_pin_path,
+                god_signer_id="GOD-ROOT-1",
+                sequence_anchor=self.Anchor(),
+                god_gate=None, policy_evidence_verifier=None,
+                justice_evidence_verifier=None,
                 consensus_endpoint="https://consensus.invalid",
             )
 
