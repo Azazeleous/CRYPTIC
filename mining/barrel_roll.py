@@ -54,6 +54,16 @@ def deinterleave_lanes(lanes: Sequence[bytes]) -> bytes:
     if not lanes or any(not isinstance(lane, bytes) for lane in lanes):
         raise ValueError("lanes must be a non-empty sequence of bytes")
     lane_count = len(lanes)
+    lengths = [len(lane) for lane in lanes]
+    longest, shortest = max(lengths), min(lengths)
+    if longest - shortest > 1:
+        raise ValueError("lane_lengths_not_round_robin")
+    shorter_seen = False
+    for length in lengths:
+        if length == shortest:
+            shorter_seen = True
+        elif shorter_seen:
+            raise ValueError("lane_lengths_not_round_robin")
     out = bytearray()
     max_len = max(map(len, lanes), default=0)
     for column in range(max_len):
@@ -87,11 +97,11 @@ def roll_frame(
 def unroll_frame(
     lanes: Sequence[bytes],
     *,
-    bit_shift: int = 0,
-    byte_shift: int = 0,
-    lane_shift: int = 0,
+    bit_shift: int,
+    byte_shift: int,
+    lane_shift: int,
 ) -> bytes:
-    """Invert roll_frame, reversing operation order."""
+    """Invert roll_frame; all transform metadata must be supplied explicitly."""
     if not lanes:
         return b""
     lane_shift %= len(lanes)
