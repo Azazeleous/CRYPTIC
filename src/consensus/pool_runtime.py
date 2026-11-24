@@ -18,12 +18,49 @@ class PoolRuntimeConfigurationError(ValueError):
     """The consensus-to-pool composition is incomplete or inconsistent."""
 
 
+
+def build_adam_finalized_state_verifier(
+    adam_store: Any,
+) -> Callable[[Mapping[str, Any], Mapping[str, Any]], bool]:
+    """Verify that the exact GCF certificate was durably committed by ADAM.
+
+    AdamCommitStore.get_commit() revalidates the full append-only height/parent
+    chain and the stored state bytes before returning a commitment.
+    """
+    getter = getattr(adam_store, "get_commit", None)
+    if not callable(getter):
+        raise PoolRuntimeConfigurationError("adam_commit_store_required")
+
+    def verify(certificate: Mapping[str, Any], proposal: Mapping[str, Any]) -> bool:
+        try:
+            height = proposal.get("height")
+            if isinstance(height, bool) or not isinstance(height, int) or height < 1:
+                return False
+            committed = getter(height)
+            if not isinstance(committed, Mapping):
+                return False
+            certificate_digest = __import__("hashlib").sha256(
+                b"GCF/1|FINALITY-CERTIFICATE\\x00" + canonical_bytes(dict(certificate))
+            ).hexdigest()
+            return (
+                committed.get("height") == height
+                and committed.get("candidate_digest") == certificate.get("candidate_digest")
+                and committed.get("parent_hash") == proposal.get("parent_hash")
+                and committed.get("state_hash") == proposal.get("payload_hash")
+                and committed.get("certificate_digest") == certificate_digest
+            )
+        except Exception:
+            return False
+
+    return verify
+
 def build_gcf1_pool_finality_verifier(
     *,
     hccgn_verifier: Callable,
     god_authorizer: Callable,
     justice_verifier: Callable,
     clock: Callable[[], float] = time.time,
+    finalized_state_verifier: Callable[[Mapping[str, Any], Mapping[str, Any]], bool] | None = None,
     anchor_verifier: Callable[[Mapping[str, Any], Mapping[str, Any]], bool] | None = None,
 ) -> Callable[[Mapping[str, Any], Mapping[str, Any]], Mapping[str, Any]]:
     """Create the independent GCF/1 certificate verifier used by pool settlement.
@@ -31,13 +68,14 @@ def build_gcf1_pool_finality_verifier(
     GCF's cryptographic verifier checks the validator-set digest, proposer and
     vote signatures, proof-of-lock, and strictly greater-than-two-thirds
     PREVOTE/PRECOMMIT weights. The injected HCCGN, governance, and justice
-    gates are required. If a proposal binds an anchor sequence, a separate
-    anchor verifier is mandatory.
+    gates and a separate durable ADAM/APEX state-commit verifier are required.
+    If a proposal binds an external anchor sequence, that anchor is checked too.
     """
     for name, provider in (
         ("hccgn_verifier", hccgn_verifier),
         ("god_authorizer", god_authorizer),
         ("justice_verifier", justice_verifier),
+        ("finalized_state_verifier", finalized_state_verifier),
         ("clock", clock),
     ):
         if not callable(provider):
@@ -80,7 +118,16 @@ def build_gcf1_pool_finality_verifier(
         if not isinstance(result, Mapping) or result.get("valid") is not True:
             reason = result.get("reason", "finality_certificate_invalid") if isinstance(result, Mapping) else "finality_verifier_response_invalid"
             return fail(str(reason))
-        return {**dict(result), "valid": True, "finalized": True}
+        try:
+            committed = finalized_state_verifier(certificate, proposal)
+        except Exception:
+            return fail("canonical_state_commit_verification_failed")
+        if committed is not True:
+            return fail("canonical_state_commit_not_confirmed")
+        response = {**dict(result), "valid": True, "finalized": True}
+        if "anchor_sequence" in proposal:
+            response["anchor_sequence"] = proposal["anchor_sequence"]
+        return response
 
     return verify
 
@@ -126,6 +173,9 @@ def build_pool_coordinator(
         god_authorizer=consensus_runtime.proposal_authorizer,
         justice_verifier=consensus_runtime.justice_gate,
         clock=effective_clock,
+        finalized_state_verifier=build_adam_finalized_state_verifier(
+            getattr(consensus_runtime, "adam_store", None)
+        ),
         anchor_verifier=anchor_verifier,
     )
     coordinator = PoolCoordinator(
