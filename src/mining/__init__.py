@@ -11,6 +11,7 @@ from .gaia_fabric import (
     v5_node_id,
     v5_neighbors,
     v5_lattice_summary,
+    verify_lane_plan,
 )
 from .trophy_solver import mine_trophy_ladder, target_for_difficulty
 from .unified_engine import (
@@ -46,6 +47,7 @@ __all__ = [
     "v5_node_id",
     "v5_neighbors",
     "v5_lattice_summary",
+    "verify_lane_plan",
     "mine_trophy_ladder",
     "target_for_difficulty",
     "MiningEngineError",

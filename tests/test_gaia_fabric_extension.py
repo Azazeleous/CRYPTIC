@@ -2,7 +2,7 @@ import unittest
 from src.mining.gaia_fabric import (
     COMPACT_MODULUS, COMPACT_TOTIENT, PRIMARY_MODULUS, PRIMARY_TOTIENT,
     reduced_residues, verify_arithmetic_fabric, v5_coordinates,
-    v5_lattice_summary, v5_neighbors, v5_node_id,
+    v5_lattice_summary, v5_neighbors, v5_node_id, verify_lane_plan, build_lane_plan,
 )
 
 
@@ -36,6 +36,23 @@ class GaiaFabricExtensionTests(unittest.TestCase):
         self.assertEqual(summary["origin_node_id"], 312)
         self.assertEqual(summary["degree_distribution"],
             {"4": 16, "5": 96, "6": 216, "7": 216, "8": 81})
+
+    def test_four_lane_plan_has_independent_ticket_and_route_verification(self):
+        plan = build_lane_plan(100, 1000, "lane-seed-01")
+        self.assertTrue(verify_lane_plan(plan, start=100, stop=1000, seed="lane-seed-01")["valid"])
+        self.assertEqual(plan["lanes"]["L1"]["start_nonce"], plan["lanes"]["L2"]["start_nonce"])
+        self.assertEqual(plan["lanes"]["L3"]["stop_nonce"], plan["lanes"]["L4"]["stop_nonce"])
+        damaged = {**plan, "lanes": {key: dict(value) for key, value in plan["lanes"].items()}}
+        damaged["lanes"]["L2"]["ticket"] = "0" * 64
+        result = verify_lane_plan(damaged, start=100, stop=1000, seed="lane-seed-01")
+        self.assertFalse(result["valid"])
+        self.assertIn("L2_ticket_or_metadata_mismatch", result["failures"])
+
+    def test_lane_plan_rejects_boolean_bounds_and_empty_seed(self):
+        with self.assertRaises(ValueError):
+            build_lane_plan(True, 100, "seed")
+        with self.assertRaises(ValueError):
+            build_lane_plan(0, 100, "")
 
     def test_invalid_lattice_values_are_rejected(self):
         for value in (-1, 625, True, 1.5):

@@ -49,7 +49,9 @@ def select_coprime_stride(modulus: int, seed: str | bytes) -> int:
     """Choose a deterministic stride coprime to modulus."""
     if isinstance(modulus, bool) or not isinstance(modulus, int) or modulus < 2:
         raise ValueError("modulus must be an integer >= 2")
-    raw = seed.encode("utf-8") if isinstance(seed, str) else bytes(seed)
+    if not isinstance(seed, (str, bytes)) or not seed:
+        raise ValueError("seed must be a non-empty string or bytes")
+    raw = seed.encode("utf-8") if isinstance(seed, str) else seed
     candidate = int.from_bytes(hashlib.sha256(raw).digest()[:8], "big") % modulus
     candidate = max(1, candidate)
     for _ in range(modulus):
@@ -63,8 +65,11 @@ def select_coprime_stride(modulus: int, seed: str | bytes) -> int:
 
 def route_ordinal(ordinal: int, anchor: int, stride: int, modulus: int = PRIMARY_TOTIENT) -> dict[str, int]:
     """Map a nonnegative ordinal bijectively within each residue epoch."""
-    if ordinal < 0:
-        raise ValueError("ordinal must be nonnegative")
+    for name, value in (("ordinal", ordinal), ("anchor", anchor), ("stride", stride), ("modulus", modulus)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer")
+    if ordinal < 0 or modulus < 2:
+        raise ValueError("ordinal must be nonnegative and modulus must be >= 2")
     if not 0 <= anchor < modulus:
         raise ValueError("anchor is outside the routing modulus")
     if gcd(stride, modulus) != 1:
@@ -76,9 +81,13 @@ def route_ordinal(ordinal: int, anchor: int, stride: int, modulus: int = PRIMARY
 
 def inverse_route(route: dict[str, int], anchor: int, stride: int, modulus: int = PRIMARY_TOTIENT) -> int:
     """Recover the original ordinal from a route record."""
-    epoch = int(route["epoch"])
-    residue = int(route["residue"])
-    if epoch < 0 or not 0 <= residue < modulus or gcd(stride, modulus) != 1:
+    if not isinstance(route, dict) or set(route) != {"epoch", "residue"}:
+        raise ValueError("route must contain exactly epoch and residue")
+    epoch, residue = route["epoch"], route["residue"]
+    for name, value in (("epoch", epoch), ("residue", residue), ("anchor", anchor), ("stride", stride), ("modulus", modulus)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer")
+    if modulus < 2 or epoch < 0 or not 0 <= anchor < modulus or not 0 <= residue < modulus or gcd(stride, modulus) != 1:
         raise ValueError("invalid route record or non-coprime stride")
     offset = ((residue - anchor) * pow(stride, -1, modulus)) % modulus
     return epoch * modulus + offset
@@ -86,6 +95,9 @@ def inverse_route(route: dict[str, int], anchor: int, stride: int, modulus: int 
 
 def cayley_position(ordinal: int, step: int = CAYLEY_STEP, modulus: int = CAYLEY_MODULUS) -> int:
     """Return a deterministic Cayley-cycle position."""
+    for name, value in (("ordinal", ordinal), ("step", step), ("modulus", modulus)):
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{name} must be an integer")
     if ordinal < 0 or modulus < 2 or gcd(step, modulus) != 1:
         raise ValueError("ordinal must be nonnegative and step coprime to modulus")
     return (ordinal * step) % modulus
@@ -204,8 +216,12 @@ def compute_difficulty_stratified_guarantees(
 
 def build_lane_plan(start: int, stop: int, seed: str) -> dict[str, Any]:
     """Create two disjoint compute ranges and two paired shadow-verification lanes."""
-    if not 0 <= start <= stop <= (1 << 32):
+    if (isinstance(start, bool) or not isinstance(start, int)
+            or isinstance(stop, bool) or not isinstance(stop, int)
+            or not 0 <= start <= stop <= (1 << 32)):
         raise ValueError("nonce interval must satisfy 0 <= start <= stop <= 2**32")
+    if not isinstance(seed, str) or not seed:
+        raise ValueError("seed must be a non-empty string")
     midpoint = start + (stop - start) // 2
     ranges = {
         "L1": (start, midpoint),
@@ -295,3 +311,35 @@ def v5_lattice_summary() -> dict[str, Any]:
         "verified": directed_edges % 2 == 0 and directed_edges // 2 == 2000
             and sum(degree_counts.values()) == V5_NODE_COUNT,
     }
+
+
+def verify_lane_plan(plan: dict[str, Any], *, start: int, stop: int, seed: str) -> dict[str, Any]:
+    """Independently verify all four lane tickets, pairings, routes, and lattice IDs."""
+    failures: list[str] = []
+    try:
+        expected = build_lane_plan(start, stop, seed)
+        if not isinstance(plan, dict) or set(plan) != set(expected):
+            return {"valid": False, "failures": ["plan_schema_mismatch"]}
+        for key in ("primary_modulus", "primary_totient", "compact_modulus",
+                    "compact_totient", "anchor", "stride", "stride_inverse",
+                    "search_space_partition", "routing_effect"):
+            if plan.get(key) != expected[key]:
+                failures.append(f"{key}_mismatch")
+        lanes = plan.get("lanes")
+        if not isinstance(lanes, dict) or set(lanes) != {"L1", "L2", "L3", "L4"}:
+            return {"valid": False, "failures": failures + ["lane_registry_mismatch"]}
+        for lane_id, expected_lane in expected["lanes"].items():
+            actual = lanes.get(lane_id)
+            if not isinstance(actual, dict) or actual != expected_lane:
+                failures.append(f"{lane_id}_ticket_or_metadata_mismatch")
+        if lanes.get("L1", {}).get("ticket") != lanes.get("L2", {}).get("ticket"):
+            failures.append("L1_L2_shadow_ticket_mismatch")
+        if lanes.get("L3", {}).get("ticket") != lanes.get("L4", {}).get("ticket"):
+            failures.append("L3_L4_shadow_ticket_mismatch")
+        if lanes.get("L1", {}).get("stop_nonce") != lanes.get("L3", {}).get("start_nonce"):
+            failures.append("compute_ranges_not_contiguous")
+        if lanes.get("L1", {}).get("start_nonce") != start or lanes.get("L3", {}).get("stop_nonce") != stop:
+            failures.append("compute_ranges_do_not_cover_request")
+    except (KeyError, TypeError, ValueError) as exc:
+        failures.append(f"verification_error:{type(exc).__name__}")
+    return {"valid": not failures, "failures": failures, "lane_count": 4}
