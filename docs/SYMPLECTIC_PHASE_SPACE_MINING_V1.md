@@ -75,7 +75,10 @@ telemetry only and are not trusted for acceptance.
 
 The HCCGN miner retains sequential-v1 as its direct-call default; callers
 must explicitly request the symplectic schedule. The pool worker opts into it
-as a fixed implementation profile. No pool-job wire fields or HCCGN proof
+as a fixed implementation profile. The UnifiedMiningEngine exposes the same
+explicit selector for HCCGN requests, records the chosen profile and phase-space
+parameters in its receipt, and rejects unsupported profile combinations or
+windows beyond the symplectic bound. No pool-job wire fields or HCCGN proof
 fields are added for this scheduling-only change.
 
 ## Verification
@@ -96,4 +99,4 @@ attempt count before any throughput claim is made.
 
 ## Remaining API integration
 
-The HCCGN core miner exposes the schedule_profile argument and the pool worker selects the symplectic profile. The broader UnifiedMiningEngine wrapper is not yet wired to surface that optional selector; its HCCGN route therefore remains sequential by default. Exposing the selector through that wrapper is a follow-up integration, not a claim of completion in this change set. The generic Hamiltonian API also requires a caller-supplied separable potential, gradient, and masses; no project-specific physical Hamiltonian was present in the source specification.
+The HCCGN core miner exposes the schedule_profile argument and the pool worker selects the symplectic profile. The UnifiedMiningEngine wrapper now exposes the optional selector. Its HCCGN route remains sequential by default, while explicit symplectic selection is validated, bounded, and recorded in the normalized mining receipt. The generic Hamiltonian API also requires a caller-supplied separable potential, gradient, and masses; no project-specific physical Hamiltonian was present in the source specification.

@@ -10,6 +10,10 @@ from .gaia_fabric import (
     verify_arithmetic_fabric,
 )
 from .trophy_solver import mine_trophy_ladder, target_for_difficulty
+from .unified_engine import (
+    MiningEngineError, MiningReceipt, UnifiedMiningEngine,
+    PROFILE_SHA256D_80, PROFILE_FOUR_LANE_SHA256, PROFILE_HCCGN_WORK,
+)
 from .symplectic import (
     SCHEDULE_SEQUENTIAL,
     SCHEDULE_SYMPLECTIC,
@@ -38,6 +42,12 @@ __all__ = [
     "verify_arithmetic_fabric",
     "mine_trophy_ladder",
     "target_for_difficulty",
+    "MiningEngineError",
+    "MiningReceipt",
+    "UnifiedMiningEngine",
+    "PROFILE_SHA256D_80",
+    "PROFILE_FOUR_LANE_SHA256",
+    "PROFILE_HCCGN_WORK",
     "SCHEDULE_SEQUENTIAL",
     "SCHEDULE_SYMPLECTIC",
     "DiscretePhasePoint",
