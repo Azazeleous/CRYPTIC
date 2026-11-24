@@ -1,0 +1,12 @@
+name = "cryptic-production-sequence-anchor"
+main = "src/index.js"
+compatibility_date = "2026-11-22"
+account_id = "bc67ed84864df46b05d196cff28126bb"
+workers_dev = false
+send_metrics = false
+
+[[d1_databases]]
+binding = "ANCHOR_DB"
+database_name = "cryptic-production-sequence-anchor"
+database_id = "1d6199f8-8a49-45c4-abd6-ac816a91a487"
+migrations_dir = "migrations"

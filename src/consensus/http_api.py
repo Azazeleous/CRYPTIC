@@ -16,9 +16,10 @@ MAX_BODY_BYTES = 1_048_576
 
 
 class GCFWSGI:
-    def __init__(self, engine: GCFEngine, apex_validator=None):
+    def __init__(self, engine: GCFEngine, apex_validator=None, gcf2_vote_store=None):
         self.engine = engine
         self.apex_validator = apex_validator
+        self.gcf2_vote_store = gcf2_vote_store
 
     @staticmethod
     def _response(start_response: Callable, status: str, payload: dict):
@@ -65,6 +66,51 @@ class GCFWSGI:
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "")
         try:
+            if method == "POST" and path == "/v2/consensus/votes":
+                if self.gcf2_vote_store is None:
+                    raise GCFError("GCF2_NOT_ENABLED")
+                result = self.gcf2_vote_store.submit_vote(self._read_json(environ))
+                return self._response(start_response, "202 Accepted", result)
+            if method == "GET" and path.startswith("/v2/consensus/finality/"):
+                if self.gcf2_vote_store is None:
+                    raise GCFError("GCF2_NOT_ENABLED")
+                raw_height = path.rsplit("/", 1)[-1]
+                if not raw_height.isascii() or not raw_height.isdigit() or int(raw_height) < 1:
+                    raise GCFError("GCF2_HEIGHT_INVALID")
+                certificate = self.gcf2_vote_store.get_finality_certificate(
+                    height=int(raw_height)
+                )
+                if certificate is None:
+                    return self._response(
+                        start_response, "404 Not Found",
+                        {"error": "GCF2_FINALITY_CERTIFICATE_NOT_FOUND"},
+                    )
+                return self._response(start_response, "200 OK", certificate)
+            if method == "POST" and path.startswith("/v2/consensus/activate/"):
+                if self.gcf2_vote_store is None:
+                    raise GCFError("GCF2_NOT_ENABLED")
+                raw_height = path.rsplit("/", 1)[-1]
+                if not raw_height.isascii() or not raw_height.isdigit() or int(raw_height) < 1:
+                    raise GCFError("GCF2_HEIGHT_INVALID")
+                result = self.gcf2_vote_store.activate_finality_certificate(
+                    height=int(raw_height)
+                )
+                return self._response(start_response, "200 OK", result)
+            if method == "GET" and path.startswith("/v2/consensus/activation/"):
+                if self.gcf2_vote_store is None:
+                    raise GCFError("GCF2_NOT_ENABLED")
+                raw_height = path.rsplit("/", 1)[-1]
+                if not raw_height.isascii() or not raw_height.isdigit() or int(raw_height) < 1:
+                    raise GCFError("GCF2_HEIGHT_INVALID")
+                activation = self.gcf2_vote_store.get_finality_activation(
+                    height=int(raw_height)
+                )
+                if activation is None:
+                    return self._response(
+                        start_response, "404 Not Found",
+                        {"error": "GCF2_FINALITY_ACTIVATION_NOT_FOUND"},
+                    )
+                return self._response(start_response, "200 OK", activation)
             if method == "POST" and path == "/v1/consensus/proposals":
                 result = self.engine.submit_proposal(self._read_json(environ))
                 return self._response(start_response, "202 Accepted", result)

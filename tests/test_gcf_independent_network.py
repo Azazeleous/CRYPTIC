@@ -4,6 +4,7 @@ import hashlib
 import io
 import ipaddress
 import json
+import sqlite3
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -16,11 +17,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from src.consensus.gcf import (
-    CERT_DOMAIN, GateResult, GCFEngine, ValidatorSet,
+    CERT_DOMAIN, GCFError, GateResult, GCFEngine, ValidatorSet,
     canonical_bytes, make_proposal, make_vote, sha256_hex,
 )
 from src.consensus.hccgn_adapter import HCCGNVerifierAdapter
 from src.consensus.independent_verifier import verify_certificate
+from src.consensus.round_change import make_round_change_message, make_round_change_certificate
 from src.consensus.peer_transport import (
     GCFPeerNode, PeerTransportError, build_client_ssl_context,
     build_server_ssl_context,
@@ -44,7 +46,6 @@ class IndependentVerifierTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.now = 1_800_000_000
-        self.proposer_private, _ = keypair()
         self.keys = {f"v{i}": keypair() for i in range(4)}
         self.validators = {
             name: {"public_key_hex": pair[1], "weight": 1}
@@ -71,7 +72,7 @@ class IndependentVerifierTests(unittest.TestCase):
                 "value_accounting_hash": "5" * 64,
                 "challenge_state_hash": "6" * 64,
             },
-            proposer_id="proposer-1", proposer_private_key_hex=self.proposer_private,
+            proposer_id="v0", proposer_private_key_hex=self.keys["v0"][0],
             nonce="0123456789abcdef0123456789abcdef",
             issued_at=self.now, expires_at=self.now + 300,
         )
@@ -101,6 +102,20 @@ class IndependentVerifierTests(unittest.TestCase):
                 polc_digest=polc, issued_at=self.now,
             ))
         return self.engine.finalize(digest)["certificate"]
+
+    def test_proposal_can_bind_anchor_sequence_independently_of_block_height(self):
+        base = self.proposal
+        proposal = make_proposal(
+            network_id=base["network_id"], epoch=base["epoch"], height=17, round=base["round"],
+            parent_hash=base["parent_hash"], payload_hash=base["payload_hash"],
+            proof_hash=base["proof_hash"], justice_commitment=base["justice_commitment"],
+            proposer_id=base["proposer_id"], proposer_private_key_hex=self.keys["v0"][0],
+            nonce=base["nonce"], issued_at=base["issued_at"], expires_at=base["expires_at"],
+            anchor_sequence=3,
+        )
+        _digest, normalized = self.engine._validate_proposal(proposal)
+        self.assertEqual(normalized["height"], 17)
+        self.assertEqual(normalized["anchor_sequence"], 3)
 
     def test_independent_verifier_accepts_engine_certificate(self):
         cert = self.build_certificate()
@@ -443,6 +458,143 @@ class StrictHTTPJSONTests(unittest.TestCase):
         self.assertEqual(response["status"], "400 Bad Request")
         self.assertIn("ADAM_APEX_NOT_CONFIGURED", body)
 
+
+class CrossRoundVoteLockTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.now = 1_800_000_000
+        self.keys = {f"v{i}": keypair() for i in range(4)}
+        self.vset = ValidatorSet("gaia-cross-round", 7, {
+            name: {"public_key_hex": pair[1], "weight": 1}
+            for name, pair in self.keys.items()
+        })
+        allow = lambda *_: GateResult(True, "verified")
+        self.db_path = Path(self.temp.name) / "gcf.sqlite3"
+        self.engine = GCFEngine(
+            self.db_path, self.vset, hccgn_verifier=allow,
+            god_authorizer=allow, justice_verifier=allow,
+            clock=lambda: self.now,
+        )
+        common = {
+            "network_id": self.vset.network_id, "epoch": self.vset.epoch,
+            "height": 9, "parent_hash": "0" * 64,
+            "payload_hash": hashlib.sha256(b"payload").hexdigest(),
+            "proof_hash": hashlib.sha256(b"proof").hexdigest(),
+            "justice_commitment": {"policy_hash": "1" * 64},
+            "proposer_id": "v0", "proposer_private_key_hex": self.keys["v0"][0],
+            "issued_at": self.now, "expires_at": self.now + 300,
+        }
+        self.proposal_round_0 = make_proposal(
+            **common, round=0, nonce="round-zero-nonce-0000000000000001",
+        )
+        round_change_messages = [
+            make_round_change_message(
+                validator_id=name, private_key_hex=self.keys[name][0],
+                network_id=self.vset.network_id, epoch=self.vset.epoch, height=9,
+                source_round=0, target_round=1, issued_at=self.now,
+                expires_at=self.now + 300, nonce=f"{index + 1:032x}",
+            )
+            for index, name in enumerate(("v1", "v2", "v3"))
+        ]
+        round_change_certificate = make_round_change_certificate(
+            round_change_messages, network_id=self.vset.network_id,
+            epoch=self.vset.epoch, height=9, target_round=1,
+        )
+        round_one_common = {
+            **common, "payload_hash": hashlib.sha256(b"different-round-one-value").hexdigest(),
+        }
+        self.proposal_round_1 = make_proposal(
+            **round_one_common, round=1, nonce="round-one-nonce-0000000000000002",
+            round_change_certificate=round_change_certificate,
+        )
+        self.digest_round_0 = self.engine.submit_proposal(self.proposal_round_0)["candidate_digest"]
+        self.digest_round_1 = self.engine.submit_proposal(self.proposal_round_1)["candidate_digest"]
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def _prevote(self, proposal, validator_id="v0"):
+        return make_vote(
+            validator_id=validator_id,
+            validator_private_key_hex=self.keys[validator_id][0],
+            proposal=proposal, vote_type="PREVOTE", issued_at=self.now,
+        )
+
+    def test_validator_cannot_change_candidate_between_rounds_at_same_height(self):
+        self.engine.submit_vote(self._prevote(self.proposal_round_0))
+        with self.assertRaisesRegex(GCFError, "ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED"):
+            self.engine.submit_vote(self._prevote(self.proposal_round_1))
+
+    def test_vote_lock_is_phase_specific_but_round_independent(self):
+        self.engine.submit_vote(self._prevote(self.proposal_round_0))
+        # PRECOMMIT is a distinct phase and is not conflated with PREVOTE.
+        # Its own cross-round lock is enforced once a valid POLC exists.
+        with self.engine._db() as db:
+            columns = db.execute("PRAGMA table_info(vote_locks)").fetchall()
+        primary = {row["name"] for row in columns if row["pk"]}
+        self.assertEqual(
+            primary,
+            {"network_id", "epoch", "height", "vote_type", "validator_id"},
+        )
+
+    def test_legacy_round_scoped_database_is_migrated_without_dropping_lock(self):
+        legacy = Path(self.temp.name) / "legacy.sqlite3"
+        with sqlite3.connect(legacy) as db:
+            db.execute("""
+                CREATE TABLE vote_locks(
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, round INTEGER NOT NULL,
+                  vote_type TEXT NOT NULL, validator_id TEXT NOT NULL,
+                  candidate_digest TEXT NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,round,vote_type,validator_id)
+                )
+            """)
+            db.execute(
+                "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
+                ("gaia-cross-round", 7, 9, 0, "PREVOTE", "v0", self.digest_round_0),
+            )
+        db.close()
+        migrated = GCFEngine(
+            legacy, self.vset,
+            hccgn_verifier=lambda *_: True, god_authorizer=lambda *_: True,
+            justice_verifier=lambda *_: True, clock=lambda: self.now,
+        )
+        with migrated._db() as db:
+            columns = db.execute("PRAGMA table_info(vote_locks)").fetchall()
+            primary = {row["name"] for row in columns if row["pk"]}
+            lock = db.execute(
+                "SELECT candidate_digest FROM vote_locks WHERE network_id=? AND epoch=? AND height=? AND vote_type=? AND validator_id=?",
+                ("gaia-cross-round", 7, 9, "PREVOTE", "v0"),
+            ).fetchone()
+        self.assertEqual(primary, {"network_id", "epoch", "height", "vote_type", "validator_id"})
+        self.assertEqual(lock["candidate_digest"], self.digest_round_0)
+
+    def test_legacy_cross_round_conflict_fails_closed_during_migration(self):
+        legacy = Path(self.temp.name) / "legacy-conflict.sqlite3"
+        with sqlite3.connect(legacy) as db:
+            db.execute("""
+                CREATE TABLE vote_locks(
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, round INTEGER NOT NULL,
+                  vote_type TEXT NOT NULL, validator_id TEXT NOT NULL,
+                  candidate_digest TEXT NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,round,vote_type,validator_id)
+                )
+            """)
+            db.executemany(
+                "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
+                [
+                    ("gaia-cross-round", 7, 9, 0, "PREVOTE", "v0", self.digest_round_0),
+                    ("gaia-cross-round", 7, 9, 1, "PREVOTE", "v0", self.digest_round_1),
+                ],
+            )
+        db.close()
+        with self.assertRaisesRegex(GCFError, "PERSISTED_CROSS_ROUND_EQUIVOCATION"):
+            GCFEngine(
+                legacy, self.vset,
+                hccgn_verifier=lambda *_: True, god_authorizer=lambda *_: True,
+                justice_verifier=lambda *_: True, clock=lambda: self.now,
+            )
 
 if __name__ == "__main__":
     unittest.main()

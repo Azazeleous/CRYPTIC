@@ -23,6 +23,8 @@ VOTE_DOMAIN = b"GCF/1|VOTE|ED25519\x00"
 CERT_DOMAIN = b"GCF/1|FINALITY-CERTIFICATE\x00"
 ZERO_HASH = "0" * 64
 MAX_SQLITE_INT = (1 << 63) - 1
+MAX_ROUND_CHANGE_MESSAGE_BYTES = 1_048_576
+MAX_PROPOSAL_BYTES = 4_194_304
 
 
 class GCFError(ValueError):
@@ -251,16 +253,79 @@ class GCFEngine:
               network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
               round INTEGER NOT NULL, vote_type TEXT NOT NULL,
               validator_id TEXT NOT NULL, candidate_digest TEXT NOT NULL,
-              PRIMARY KEY(network_id, epoch, height, round, vote_type, validator_id)
+              PRIMARY KEY(network_id, epoch, height, vote_type, validator_id)
             );
             CREATE TABLE IF NOT EXISTS certificates(
               candidate_digest TEXT PRIMARY KEY REFERENCES proposals(candidate_digest),
               certificate_json TEXT NOT NULL, certificate_digest TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS round_change_messages(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              target_round INTEGER NOT NULL, validator_id TEXT NOT NULL, nonce TEXT NOT NULL,
+              message_json TEXT NOT NULL, received_at INTEGER NOT NULL,
+              PRIMARY KEY(network_id,epoch,height,target_round,validator_id),
+              UNIQUE(network_id,epoch,height,validator_id,nonce)
+            );
+            CREATE TABLE IF NOT EXISTS round_change_certificates(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              target_round INTEGER NOT NULL, certificate_json TEXT NOT NULL,
+              certificate_digest TEXT NOT NULL,
+              PRIMARY KEY(network_id,epoch,height,target_round)
+            );
+            CREATE TABLE IF NOT EXISTS round_change_message_history(
+              network_id TEXT NOT NULL, epoch INTEGER NOT NULL, height INTEGER NOT NULL,
+              target_round INTEGER NOT NULL, validator_id TEXT NOT NULL, nonce TEXT NOT NULL,
+              message_json TEXT NOT NULL, received_at INTEGER NOT NULL,
+              PRIMARY KEY(network_id,epoch,height,target_round,validator_id,nonce),
+              UNIQUE(network_id,epoch,height,validator_id,nonce)
+            );
+            INSERT OR IGNORE INTO round_change_message_history
+              SELECT network_id,epoch,height,target_round,validator_id,nonce,message_json,received_at
+              FROM round_change_messages;
             INSERT OR IGNORE INTO vote_locks
               SELECT p.network_id,p.epoch,p.height,p.round,v.vote_type,v.validator_id,v.candidate_digest
               FROM votes v JOIN proposals p ON p.candidate_digest=v.candidate_digest;
             """)
+            # Upgrade databases created by the earlier round-scoped lock schema.
+            # If historical records show cross-round conflicting votes, refuse to
+            # start rather than silently choosing one lock and masking equivocation.
+            lock_columns = db.execute("PRAGMA table_info(vote_locks)").fetchall()
+            round_is_primary = any(row["name"] == "round" and row["pk"] for row in lock_columns)
+            if round_is_primary:
+                conflict = db.execute("""
+                    SELECT network_id,epoch,height,vote_type,validator_id
+                    FROM vote_locks
+                    GROUP BY network_id,epoch,height,vote_type,validator_id
+                    HAVING COUNT(DISTINCT candidate_digest) > 1
+                    LIMIT 1
+                """).fetchone()
+                if conflict is not None:
+                    raise GCFError("PERSISTED_CROSS_ROUND_EQUIVOCATION")
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    db.execute("""
+                        CREATE TABLE vote_locks_v2(
+                          network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                          height INTEGER NOT NULL, round INTEGER NOT NULL,
+                          vote_type TEXT NOT NULL, validator_id TEXT NOT NULL,
+                          candidate_digest TEXT NOT NULL,
+                          PRIMARY KEY(network_id,epoch,height,vote_type,validator_id)
+                        )
+                    """)
+                    db.execute("""
+                        INSERT INTO vote_locks_v2
+                        SELECT network_id,epoch,height,MIN(round),vote_type,
+                               validator_id,candidate_digest
+                        FROM vote_locks
+                        GROUP BY network_id,epoch,height,vote_type,
+                                 validator_id,candidate_digest
+                    """)
+                    db.execute("DROP TABLE vote_locks")
+                    db.execute("ALTER TABLE vote_locks_v2 RENAME TO vote_locks")
+                    db.execute("COMMIT")
+                except Exception:
+                    db.execute("ROLLBACK")
+                    raise
 
     def _gate(self, gate: Callable, *args) -> GateResult:
         try:
@@ -277,13 +342,16 @@ class GCFEngine:
             return GateResult(False, "DENIED")
         return GateResult(False, "GATE_RESPONSE_INVALID")
 
-    def _validate_proposal(self, proposal: Mapping[str, Any]) -> tuple[str, dict]:
+    def _validate_proposal(self, proposal: Mapping[str, Any], *,
+                           _proof_depth: int = 0) -> tuple[str, dict]:
         required = {
             "schema", "network_id", "epoch", "height", "round", "parent_hash",
             "payload_hash", "proof_hash", "justice_commitment", "issued_at",
             "expires_at", "proposer_id", "proposer_public_key", "nonce", "signature",
         }
-        if not isinstance(proposal, Mapping) or set(proposal) != required:
+        allowed = required | {"anchor_sequence", "round_change_certificate"}
+        if (not isinstance(proposal, Mapping) or not required.issubset(proposal)
+                or not set(proposal).issubset(allowed)):
             raise GCFError("proposal_fields_invalid")
         if proposal["schema"] != SCHEMA:
             raise GCFError("schema_unsupported")
@@ -292,6 +360,8 @@ class GCFEngine:
         if _require_int(proposal["epoch"], "epoch", 1) != self.validator_set.epoch:
             raise GCFError("VALIDATOR_EPOCH_MISMATCH")
         _require_int(proposal["height"], "height", 1)
+        if "anchor_sequence" in proposal:
+            _require_int(proposal["anchor_sequence"], "anchor_sequence", 1)
         _require_int(proposal["round"], "round")
         _require_hash(proposal["parent_hash"], "parent_hash")
         _require_hash(proposal["payload_hash"], "payload_hash")
@@ -317,7 +387,36 @@ class GCFEngine:
         body = _unsigned(proposal)
         if not verify_object(public, proposal["signature"], PROPOSAL_DOMAIN, body):
             raise GCFError("PROPOSER_SIGNATURE_INVALID")
-        digest = sha256_hex(canonical_bytes(dict(proposal)))
+        proposer = self.validator_set.validators.get(proposal["proposer_id"])
+        if proposer is None or proposer.public_key_hex != public:
+            raise GCFError("PROPOSER_NOT_IN_ACTIVE_VALIDATOR_SET")
+        encoded_proposal = canonical_bytes(dict(proposal))
+        if len(encoded_proposal) > MAX_PROPOSAL_BYTES:
+            raise GCFError("PROPOSAL_TOO_LARGE")
+        digest = sha256_hex(encoded_proposal)
+        if proposal["round"] == 0:
+            if "round_change_certificate" in proposal:
+                raise GCFError("ROUND_ZERO_MUST_NOT_CARRY_ROUND_CHANGE_CERTIFICATE")
+        else:
+            certificate = proposal.get("round_change_certificate")
+            if not isinstance(certificate, Mapping):
+                raise GCFError("ROUND_CHANGE_CERTIFICATE_REQUIRED")
+            from src.consensus.round_change import (
+                value_digest, verify_round_change_certificate,
+            )
+            checked = verify_round_change_certificate(
+                certificate, validator_set=self.validator_set,
+                height=proposal["height"], clock=self.clock,
+                proof_depth=_proof_depth,
+            )
+            if not checked["valid"]:
+                raise GCFError("ROUND_CHANGE_CERTIFICATE_INVALID:" + checked["reason"])
+            if checked["target_round"] != proposal["round"]:
+                raise GCFError("ROUND_CHANGE_TARGET_PROPOSAL_ROUND_MISMATCH")
+            highest = checked["highest_polc"]
+            if highest is not None:
+                if value_digest(highest["proposal"]) != value_digest(proposal):
+                    raise GCFError("PROPOSAL_CONFLICTS_WITH_HIGHEST_POLC")
         return digest, dict(proposal)
 
     def submit_proposal(self, proposal: Mapping[str, Any]) -> dict:
@@ -430,27 +529,81 @@ class GCFEngine:
             try:
                 proposal = self._proposal(db, digest)
                 normalized = self._verify_vote(vote, proposal)
+                # GCF/1 and GCF/2 share one durable height/phase/validator
+                # anti-equivocation boundary. A GCF/2 slot blocks GCF/1 signing.
+                gcf2_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gcf2_vote_slots'"
+                ).fetchone()
+                if gcf2_table is not None:
+                    cross_version = db.execute(
+                        """SELECT 1 FROM gcf2_vote_slots
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND vote_type=? AND validator_id=? LIMIT 1""",
+                        (normalized["network_id"], normalized["epoch"],
+                         normalized["height"], normalized["vote_type"],
+                         normalized["validator_id"]),
+                    ).fetchone()
+                    if cross_version is not None:
+                        raise GCFError("GCF1_CROSS_VERSION_VOTE_SLOT_ALREADY_USED")
                 if normalized["vote_type"] == "PRECOMMIT" and normalized["approve"]:
                     _, polc_digest = self._polc(db, digest)
                     if normalized["polc_digest"] != polc_digest:
                         raise GCFError("PRECOMMIT_POLC_MISMATCH")
-                lock = db.execute(
-                    """SELECT candidate_digest FROM vote_locks
-                       WHERE network_id=? AND epoch=? AND height=? AND round=?
-                         AND vote_type=? AND validator_id=?""",
+                from src.consensus.round_change import value_digest, verify_round_change_certificate
+                prior_locks = db.execute(
+                    """SELECT vote_type,round,candidate_digest FROM vote_locks
+                       WHERE network_id=? AND epoch=? AND height=? AND validator_id=?""",
                     (normalized["network_id"], normalized["epoch"], normalized["height"],
-                     normalized["round"], normalized["vote_type"], normalized["validator_id"]),
-                ).fetchone()
-                if lock is not None:
-                    if lock["candidate_digest"] != digest:
-                        raise GCFError("VALIDATOR_EQUIVOCATION_DETECTED")
-                    raise GCFError("DUPLICATE_VOTE_OR_EQUIVOCATION")
-                db.execute(
-                    "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
-                    (normalized["network_id"], normalized["epoch"], normalized["height"],
-                     normalized["round"], normalized["vote_type"],
-                     normalized["validator_id"], digest),
+                     normalized["validator_id"]),
+                ).fetchall()
+                next_value = value_digest(proposal)
+                transition_result = None
+                for prior_lock in prior_locks:
+                    if (prior_lock["vote_type"] == normalized["vote_type"]
+                            and prior_lock["candidate_digest"] == digest):
+                        raise GCFError("DUPLICATE_VOTE_OR_EQUIVOCATION")
+                    prior_proposal = self._proposal(db, prior_lock["candidate_digest"])
+                    prior_value = value_digest(prior_proposal)
+                    if proposal["round"] < prior_lock["round"]:
+                        raise GCFError("VOTE_ROUND_REGRESSION")
+                    if (proposal["round"] == prior_lock["round"]
+                            and prior_lock["candidate_digest"] != digest):
+                        raise GCFError("VOTE_EQUIVOCATION_SAME_ROUND")
+                    if prior_value != next_value:
+                        if transition_result is None:
+                            certificate = proposal.get("round_change_certificate")
+                            transition_result = verify_round_change_certificate(
+                                certificate, validator_set=self.validator_set,
+                                height=proposal["height"], clock=self.clock,
+                            ) if isinstance(certificate, Mapping) else {"valid": False}
+                        highest = transition_result.get("highest_polc")
+                        if (not transition_result.get("valid")
+                                or transition_result.get("target_round") != proposal["round"]
+                                or transition_result.get("highest_polc_round") is None
+                                or transition_result["highest_polc_round"] <= prior_lock["round"]
+                                or highest is None
+                                or value_digest(highest["proposal"]) != next_value):
+                            raise GCFError("ROUND_CHANGE_LOCK_TRANSITION_NOT_AUTHORIZED")
+                current_lock = next(
+                    (item for item in prior_locks if item["vote_type"] == normalized["vote_type"]),
+                    None,
                 )
+                if current_lock is not None:
+                    db.execute(
+                        """UPDATE vote_locks SET round=?,candidate_digest=?
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND vote_type=? AND validator_id=?""",
+                        (normalized["round"], digest, normalized["network_id"],
+                         normalized["epoch"], normalized["height"],
+                         normalized["vote_type"], normalized["validator_id"]),
+                    )
+                else:
+                    db.execute(
+                        "INSERT INTO vote_locks VALUES(?,?,?,?,?,?,?)",
+                        (normalized["network_id"], normalized["epoch"], normalized["height"],
+                         normalized["round"], normalized["vote_type"],
+                         normalized["validator_id"], digest),
+                    )
                 try:
                     db.execute(
                         "INSERT INTO votes VALUES(?,?,?,?,?,?)",
@@ -474,11 +627,188 @@ class GCFEngine:
                 "quorum_reached": reached, "voting_weight": weight,
                 "quorum_weight": self.validator_set.quorum_weight()}
 
+    def submit_round_change(self, message: Mapping[str, Any]) -> dict:
+        """Persist authenticated round-change evidence and cache a verified quorum certificate.
+
+        This records proof evidence only. It deliberately does not mutate vote
+        locks, authorize a conflicting signature, or advance proposal admission.
+        """
+        from src.consensus.round_change import (
+            make_round_change_certificate, verify_round_change_message,
+            verify_round_change_certificate,
+        )
+        if not isinstance(message, Mapping):
+            raise GCFError("ROUND_CHANGE_MESSAGE_INVALID")
+        try:
+            encoded_message = canonical_bytes(dict(message))
+        except (TypeError, ValueError, GCFError) as exc:
+            raise GCFError("ROUND_CHANGE_MESSAGE_INVALID") from exc
+        if len(encoded_message) > MAX_ROUND_CHANGE_MESSAGE_BYTES:
+            raise GCFError("ROUND_CHANGE_MESSAGE_TOO_LARGE")
+        height, target = message.get("height"), message.get("target_round")
+        checked = verify_round_change_message(
+            message, validator_set=self.validator_set, height=height,
+            target_round=target, clock=self.clock,
+        )
+        if not checked.get("valid"):
+            raise GCFError("ROUND_CHANGE_REJECTED:" + str(checked.get("reason")))
+        with self._lock, self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                encoded = encoded_message.decode()
+                prior_rows = db.execute("""
+                    SELECT message_json FROM round_change_message_history
+                    WHERE network_id=? AND epoch=? AND height=?
+                      AND target_round=? AND validator_id=?
+                """, (self.validator_set.network_id, self.validator_set.epoch,
+                      height, target, checked["validator_id"])).fetchall()
+                for prior_row in prior_rows:
+                    prior_message = json.loads(prior_row["message_json"])
+                    prior_check = verify_round_change_message(
+                        prior_message, validator_set=self.validator_set,
+                        height=height, target_round=target, clock=self.clock,
+                    )
+                    if prior_check.get("valid"):
+                        if prior_row["message_json"] == encoded:
+                            raise GCFError("ROUND_CHANGE_DUPLICATE")
+                        raise GCFError("ROUND_CHANGE_EQUIVOCATION")
+                db.execute("""
+                    INSERT INTO round_change_message_history VALUES(?,?,?,?,?,?,?,?)
+                """, (self.validator_set.network_id, self.validator_set.epoch,
+                      height, target, checked["validator_id"], message["nonce"],
+                      encoded, int(self.clock())))
+                rows = db.execute("""
+                    SELECT validator_id,message_json FROM round_change_message_history
+                    WHERE network_id=? AND epoch=? AND height=? AND target_round=?
+                    ORDER BY validator_id,received_at DESC,nonce DESC
+                """, (self.validator_set.network_id, self.validator_set.epoch,
+                      height, target)).fetchall()
+                active_by_validator = {}
+                for row in rows:
+                    prior_message = json.loads(row["message_json"])
+                    prior_check = verify_round_change_message(
+                        prior_message, validator_set=self.validator_set,
+                        height=height, target_round=target, clock=self.clock,
+                    )
+                    if not prior_check.get("valid"):
+                        continue
+                    validator_id = row["validator_id"]
+                    if validator_id in active_by_validator:
+                        raise GCFError("ROUND_CHANGE_ACTIVE_MESSAGE_CONFLICT")
+                    active_by_validator[validator_id] = prior_message
+                messages = [active_by_validator[key] for key in sorted(active_by_validator)]
+                certificate = make_round_change_certificate(
+                    messages, network_id=self.validator_set.network_id,
+                    epoch=self.validator_set.epoch, height=height, target_round=target,
+                )
+                result = verify_round_change_certificate(
+                    certificate, validator_set=self.validator_set, height=height,
+                    clock=self.clock,
+                )
+                if result["valid"]:
+                    db.execute("""
+                        INSERT INTO round_change_certificates
+                        VALUES(?,?,?,?,?,?)
+                        ON CONFLICT(network_id,epoch,height,target_round)
+                        DO UPDATE SET certificate_json=excluded.certificate_json,
+                                      certificate_digest=excluded.certificate_digest
+                    """, (self.validator_set.network_id, self.validator_set.epoch,
+                          height, target, canonical_bytes(certificate).decode(),
+                          result["digest"]))
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        observed_weight = self.validator_set.weight_of({
+            item["validator_id"] for item in messages
+        })
+        certificate_status = (
+            "verified" if result["valid"] else
+            "awaiting_quorum" if result["reason"] == "round_change_quorum_missing" else
+            "rejected"
+        )
+        return {
+            "accepted": True, "validator_id": checked["validator_id"],
+            "height": height, "target_round": target,
+            "quorum_reached": bool(result["valid"]),
+            "certificate_status": certificate_status,
+            "certificate_reason": result["reason"],
+            "voting_weight": observed_weight,
+            "quorum_weight": self.validator_set.quorum_weight(),
+            "message_count": len(messages),
+            "certificate": certificate if result["valid"] else None,
+        }
+
+    def get_round_change_message(self, *, height: int, target_round: int,
+                                 validator_id: str) -> dict | None:
+        """Read and re-verify one persisted validator message for safe retry."""
+        from src.consensus.round_change import verify_round_change_message
+        _require_int(height, "height", 1)
+        _require_int(target_round, "target_round", 1)
+        if validator_id not in self.validator_set.validators:
+            raise GCFError("ROUND_CHANGE_UNKNOWN_VALIDATOR")
+        with self._db() as db:
+            row = db.execute("""
+                SELECT message_json FROM round_change_message_history
+                WHERE network_id=? AND epoch=? AND height=?
+                  AND target_round=? AND validator_id=?
+                ORDER BY received_at DESC,nonce DESC
+            """, (self.validator_set.network_id, self.validator_set.epoch,
+                  height, target_round, validator_id)).fetchone()
+        if row is None:
+            return None
+        message = json.loads(row["message_json"])
+        checked = verify_round_change_message(
+            message, validator_set=self.validator_set, height=height,
+            target_round=target_round, clock=self.clock,
+        )
+        if not checked.get("valid"):
+            if checked.get("reason") == "round_change_expired_or_future":
+                return None
+            raise GCFError("PERSISTED_ROUND_CHANGE_MESSAGE_INVALID")
+        if checked["validator_id"] != validator_id:
+            raise GCFError("PERSISTED_ROUND_CHANGE_MESSAGE_INVALID")
+        return message
+
+    def get_round_change_certificate(self, *, height: int, target_round: int) -> dict | None:
+        """Return a cached certificate only after re-verifying it against current trust."""
+        from src.consensus.round_change import verify_round_change_certificate
+        with self._db() as db:
+            row = db.execute("""
+                SELECT certificate_json,certificate_digest FROM round_change_certificates
+                WHERE network_id=? AND epoch=? AND height=? AND target_round=?
+            """, (self.validator_set.network_id, self.validator_set.epoch,
+                  height, target_round)).fetchone()
+        if row is None:
+            return None
+        certificate = json.loads(row["certificate_json"])
+        checked = verify_round_change_certificate(
+            certificate, validator_set=self.validator_set, height=height,
+            clock=self.clock,
+        )
+        if not checked["valid"]:
+            raise GCFError("PERSISTED_ROUND_CHANGE_CERTIFICATE_INVALID:" + checked["reason"])
+        if checked["digest"] != row["certificate_digest"]:
+            raise GCFError("PERSISTED_ROUND_CHANGE_CERTIFICATE_DIGEST_MISMATCH")
+        return certificate
+
     def finalize(self, candidate_digest: str) -> dict:
         with self._lock, self._db() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 proposal = self._proposal(db, candidate_digest)
+                gcf2_table = db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gcf2_finality_certificates'"
+                ).fetchone()
+                if gcf2_table is not None:
+                    gcf2_finality = db.execute(
+                        """SELECT 1 FROM gcf2_finality_certificates
+                           WHERE network_id=? AND epoch=? AND height=? LIMIT 1""",
+                        (proposal["network_id"], proposal["epoch"], proposal["height"]),
+                    ).fetchone()
+                    if gcf2_finality is not None:
+                        raise GCFError("GCF1_GCF2_FINALITY_CONFLICT")
                 prevotes, polc_digest = self._polc(db, candidate_digest)
                 precommits = self._votes(db, candidate_digest, "PRECOMMIT")
                 for vote in precommits:
@@ -624,7 +954,8 @@ def make_proposal(*, network_id: str, epoch: int, height: int, round: int,
                   parent_hash: str, payload_hash: str, proof_hash: str,
                   justice_commitment: Mapping[str, Any], proposer_id: str,
                   proposer_private_key_hex: str, nonce: str, issued_at: int,
-                  expires_at: int) -> dict:
+                  expires_at: int, anchor_sequence: int | None = None,
+                  round_change_certificate: Mapping[str, Any] | None = None) -> dict:
     body = {
         "schema": SCHEMA, "network_id": network_id, "epoch": epoch,
         "height": height, "round": round, "parent_hash": parent_hash,
@@ -635,6 +966,10 @@ def make_proposal(*, network_id: str, epoch: int, height: int, round: int,
         "proposer_public_key": public_key_hex(proposer_private_key_hex),
         "nonce": nonce,
     }
+    if anchor_sequence is not None:
+        body["anchor_sequence"] = _require_int(anchor_sequence, "anchor_sequence", 1)
+    if round_change_certificate is not None:
+        body["round_change_certificate"] = dict(round_change_certificate)
     return {**body, "signature": sign_object(proposer_private_key_hex, PROPOSAL_DOMAIN, body)}
 
 

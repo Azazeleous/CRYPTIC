@@ -1,0 +1,527 @@
+"""Persistent cross-version anti-equivocation guard for consensus signing.
+
+A deployment supplies an HSM/KMS-backed Ed25519 signing callback. This module
+never creates or stores private key material. It reserves a logical vote slot
+before calling the provider and only retries the exact same signed payload.
+"""
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any, Callable, Mapping
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+GCF1_VOTE_DOMAIN = b"GCF/1|VOTE|ED25519\x00"
+GCF2_VOTE_DOMAIN = b"GCF/2|VOTE|ED25519\x00"
+GCF1_ROUND_CHANGE_DOMAIN = b"GCF/1|ROUND-CHANGE|ED25519\x00"
+
+
+class ConsensusSigningError(ValueError):
+    pass
+
+
+def _canonical(value: Any) -> bytes:
+    try:
+        return json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ConsensusSigningError("signing_payload_not_canonical") from exc
+
+
+class ConsensusSigningGuard:
+    """One logical signature slot across GCF versions, backed by SQLite."""
+
+    def __init__(
+        self, *, database: str | Path, network_id: str, epoch: int,
+        validator_id: str, public_key_hex: str,
+        sign_bytes: Callable[[bytes], bytes],
+        verify_lock_transition: Callable[[str, int, Mapping[str, Any], Mapping[str, Any]], bool] | None = None,
+    ):
+        if not callable(sign_bytes):
+            raise ConsensusSigningError("hardware_signing_provider_required")
+        if not isinstance(network_id, str) or not network_id:
+            raise ConsensusSigningError("network_id_invalid")
+        if isinstance(epoch, bool) or not isinstance(epoch, int) or epoch < 1:
+            raise ConsensusSigningError("epoch_invalid")
+        if not isinstance(validator_id, str) or not validator_id:
+            raise ConsensusSigningError("validator_id_invalid")
+        try:
+            public = bytes.fromhex(public_key_hex)
+            if len(public) != 32:
+                raise ValueError("key_length")
+        except (TypeError, ValueError) as exc:
+            raise ConsensusSigningError("public_key_invalid") from exc
+        path = Path(database).expanduser()
+        if str(database) == ":memory:" or (path.exists() and path.is_symlink()):
+            raise ConsensusSigningError("persistent_non_symlink_database_required")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.database = str(path)
+        self.network_id = network_id
+        self.epoch = epoch
+        self.validator_id = validator_id
+        self.public_key_hex = public.hex()
+        self.sign_bytes = sign_bytes
+        if verify_lock_transition is not None and not callable(verify_lock_transition):
+            raise ConsensusSigningError("lock_transition_verifier_invalid")
+        self.verify_lock_transition = verify_lock_transition
+        with self._db() as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS consensus_signing_slots (
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, round INTEGER NOT NULL,
+                  signed_round INTEGER NOT NULL,
+                  slot_type TEXT NOT NULL,
+                  validator_id TEXT NOT NULL,
+                  protocol_schema TEXT NOT NULL,
+                  payload_digest TEXT NOT NULL,
+                  payload_json BLOB NOT NULL,
+                  signature_b64 TEXT,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,round,slot_type,validator_id)
+                )
+            """)
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS consensus_signing_protocol_locks (
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, slot_type TEXT NOT NULL,
+                  validator_id TEXT NOT NULL, protocol_schema TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,slot_type,validator_id)
+                );
+                CREATE TABLE IF NOT EXISTS consensus_signing_candidate_locks (
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, slot_type TEXT NOT NULL,
+                  validator_id TEXT NOT NULL, candidate_digest TEXT NOT NULL,
+                  locked_round INTEGER NOT NULL,
+                  PRIMARY KEY(network_id,epoch,height,slot_type,validator_id)
+                );
+                CREATE TABLE IF NOT EXISTS consensus_signing_lock_history (
+                  event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  height INTEGER NOT NULL, slot_type TEXT NOT NULL,
+                  validator_id TEXT NOT NULL, protocol_schema TEXT NOT NULL,
+                  previous_digest TEXT, candidate_digest TEXT NOT NULL,
+                  round INTEGER NOT NULL, transition_kind TEXT NOT NULL,
+                  evidence_digest TEXT, created_at INTEGER NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS consensus_signing_lock_history_no_update
+                  BEFORE UPDATE ON consensus_signing_lock_history
+                  BEGIN SELECT RAISE(ABORT,'consensus_signing_lock_history_immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS consensus_signing_lock_history_no_delete
+                  BEFORE DELETE ON consensus_signing_lock_history
+                  BEGIN SELECT RAISE(ABORT,'consensus_signing_lock_history_immutable'); END;
+            """)
+            slot_pk = [
+                row[1] for row in sorted(
+                    (row for row in db.execute("PRAGMA table_info(consensus_signing_slots)")
+                     if row[5] > 0), key=lambda item: item[5]
+                )
+            ]
+            if "round" not in slot_pk:
+                db.execute("DROP TRIGGER IF EXISTS consensus_signing_slots_no_delete")
+                db.execute("DROP TRIGGER IF EXISTS consensus_signing_slots_guard_update")
+                db.execute("""
+                    CREATE TABLE consensus_signing_slots_v2 (
+                      network_id TEXT NOT NULL, epoch INTEGER NOT NULL,
+                      height INTEGER NOT NULL, round INTEGER NOT NULL,
+                      signed_round INTEGER NOT NULL, slot_type TEXT NOT NULL,
+                      validator_id TEXT NOT NULL, protocol_schema TEXT NOT NULL,
+                      payload_digest TEXT NOT NULL, payload_json BLOB NOT NULL,
+                      signature_b64 TEXT, created_at INTEGER NOT NULL,
+                      PRIMARY KEY(network_id,epoch,height,round,slot_type,validator_id)
+                    )
+                """)
+                db.execute("""
+                    INSERT INTO consensus_signing_slots_v2
+                    SELECT network_id,epoch,height,signed_round,signed_round,
+                           slot_type,validator_id,protocol_schema,payload_digest,
+                           payload_json,signature_b64,created_at
+                    FROM consensus_signing_slots
+                """)
+                db.execute("DROP TABLE consensus_signing_slots")
+                db.execute("ALTER TABLE consensus_signing_slots_v2 RENAME TO consensus_signing_slots")
+            legacy_rows = db.execute(
+                """SELECT network_id,epoch,height,signed_round,slot_type,
+                          validator_id,protocol_schema,payload_json,created_at
+                   FROM consensus_signing_slots
+                   WHERE slot_type IN ('PREVOTE','PRECOMMIT')
+                   ORDER BY height,signed_round"""
+            ).fetchall()
+            for row in legacy_rows:
+                try:
+                    legacy_body = json.loads(bytes(row[7]).decode("utf-8"))
+                except (ValueError, UnicodeDecodeError, TypeError) as exc:
+                    raise ConsensusSigningError("legacy_signing_slot_payload_invalid") from exc
+                db.execute(
+                    """INSERT OR IGNORE INTO consensus_signing_protocol_locks
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (row[0], row[1], row[2], row[4], row[5], row[6], row[8]),
+                )
+                legacy_digest = legacy_body.get("candidate_digest")
+                if isinstance(legacy_digest, str):
+                    existing_lock = db.execute(
+                        """SELECT locked_round FROM consensus_signing_candidate_locks
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND slot_type=? AND validator_id=?""",
+                        (row[0], row[1], row[2], row[4], row[5]),
+                    ).fetchone()
+                    if existing_lock is None:
+                        db.execute(
+                            """INSERT INTO consensus_signing_candidate_locks
+                               VALUES(?,?,?,?,?,?,?)""",
+                            (row[0], row[1], row[2], row[4], row[5],
+                             legacy_digest, row[3]),
+                        )
+                        db.execute(
+                            """INSERT INTO consensus_signing_lock_history
+                               (network_id,epoch,height,slot_type,validator_id,
+                                protocol_schema,previous_digest,candidate_digest,
+                                round,transition_kind,evidence_digest,created_at)
+                               VALUES(?,?,?,?,?,?,NULL,?,?,?,NULL,?)""",
+                            (row[0], row[1], row[2], row[4], row[5], row[6],
+                             legacy_digest, row[3], "MIGRATED_EXISTING_LOCK", row[8]),
+                        )
+                    elif row[3] > existing_lock[0]:
+                        db.execute(
+                            """UPDATE consensus_signing_candidate_locks
+                               SET candidate_digest=?,locked_round=?
+                               WHERE network_id=? AND epoch=? AND height=?
+                                 AND slot_type=? AND validator_id=?""",
+                            (legacy_digest, row[3], row[0], row[1], row[2],
+                             row[4], row[5]),
+                        )
+            db.execute("""
+                CREATE TRIGGER IF NOT EXISTS consensus_signing_slots_no_delete
+                BEFORE DELETE ON consensus_signing_slots
+                BEGIN SELECT RAISE(ABORT,'consensus_signing_slot_immutable'); END
+            """)
+            db.execute("""
+                CREATE TRIGGER IF NOT EXISTS consensus_signing_slots_guard_update
+                BEFORE UPDATE ON consensus_signing_slots
+                WHEN OLD.signature_b64 IS NOT NULL
+                  OR NEW.network_id IS NOT OLD.network_id
+                  OR NEW.epoch IS NOT OLD.epoch
+                  OR NEW.height IS NOT OLD.height
+                  OR NEW.round IS NOT OLD.round
+                  OR NEW.signed_round IS NOT OLD.signed_round
+                  OR NEW.slot_type IS NOT OLD.slot_type
+                  OR NEW.validator_id IS NOT OLD.validator_id
+                  OR NEW.protocol_schema IS NOT OLD.protocol_schema
+                  OR NEW.payload_digest IS NOT OLD.payload_digest
+                  OR NEW.payload_json IS NOT OLD.payload_json
+                  OR NEW.created_at IS NOT OLD.created_at
+                  OR NEW.signature_b64 IS NULL
+                BEGIN SELECT RAISE(ABORT,'consensus_signing_slot_immutable'); END
+            """)
+        try:
+            os.chmod(self.database, 0o600)
+        except OSError as exc:
+            raise ConsensusSigningError("signer_database_permissions_failed") from exc
+
+    @contextmanager
+    def _db(self):
+        db = sqlite3.connect(self.database, timeout=15, isolation_level=None)
+        db.execute("PRAGMA busy_timeout=15000")
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("PRAGMA synchronous=FULL")
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def sign_vote(
+        self, unsigned_vote: Mapping[str, Any], *, created_at: int,
+        lock_transition_evidence: Mapping[str, Any] | None = None,
+    ) -> dict:
+        if not isinstance(unsigned_vote, Mapping) or "signature" in unsigned_vote:
+            raise ConsensusSigningError("unsigned_vote_required")
+        body = dict(unsigned_vote)
+        schema = body.get("schema")
+        if schema == "GCF/1":
+            domain = GCF1_VOTE_DOMAIN
+            required = {"network_id", "epoch", "height", "round", "vote_type",
+                        "validator_id", "candidate_digest", "approve", "polc_digest"}
+        elif schema == "GCF/2":
+            domain = GCF2_VOTE_DOMAIN
+            required = {"network_id", "epoch", "height", "round", "vote_type",
+                        "validator_id", "vote_kind", "candidate_digest",
+                        "approve", "polc_digest", "parent_hash", "issued_at", "expires_at"}
+        else:
+            raise ConsensusSigningError("consensus_vote_schema_unsupported")
+        if not required.issubset(body):
+            raise ConsensusSigningError("consensus_vote_fields_missing")
+        if body["network_id"] != self.network_id or body["epoch"] != self.epoch:
+            raise ConsensusSigningError("consensus_vote_scope_mismatch")
+        if body["validator_id"] != self.validator_id:
+            raise ConsensusSigningError("consensus_vote_signer_mismatch")
+        height, round_number = body["height"], body["round"]
+        if (isinstance(height, bool) or not isinstance(height, int) or height < 1
+                or isinstance(round_number, bool) or not isinstance(round_number, int) or round_number < 0):
+            raise ConsensusSigningError("consensus_vote_slot_invalid")
+        if body["vote_type"] not in ("PREVOTE", "PRECOMMIT"):
+            raise ConsensusSigningError("consensus_vote_phase_invalid")
+        if isinstance(created_at, bool) or not isinstance(created_at, int) or created_at < 0:
+            raise ConsensusSigningError("signing_timestamp_invalid")
+        candidate_digest = body.get("candidate_digest")
+        vote_kind = body.get("vote_kind", "CANDIDATE")
+        if schema == "GCF/2" and vote_kind == "NIL":
+            if candidate_digest is not None or body.get("approve") is not None or body.get("polc_digest") is not None:
+                raise ConsensusSigningError("consensus_nil_vote_fields_invalid")
+        else:
+            if (not isinstance(candidate_digest, str) or len(candidate_digest) != 64
+                    or not re.fullmatch(r"[0-9a-fA-F]{64}", candidate_digest)):
+                raise ConsensusSigningError("consensus_candidate_digest_invalid")
+            if not isinstance(body.get("approve"), bool):
+                raise ConsensusSigningError("consensus_vote_approval_invalid")
+        if schema == "GCF/2" and vote_kind not in {"NIL", "CANDIDATE"}:
+            raise ConsensusSigningError("consensus_vote_kind_invalid")
+        if schema == "GCF/2" and vote_kind == "CANDIDATE":
+            if body["vote_type"] == "PREVOTE" and body.get("polc_digest") is not None:
+                raise ConsensusSigningError("consensus_prevote_polc_forbidden")
+            if body["vote_type"] == "PRECOMMIT" and body.get("approve") is True:
+                if not isinstance(body.get("polc_digest"), str) or not re.fullmatch(r"[0-9a-fA-F]{64}", body["polc_digest"]):
+                    raise ConsensusSigningError("consensus_precommit_polc_required")
+        self._reserve_vote_locks(
+            body=body, protocol_schema=schema, height=height,
+            round_number=round_number, created_at=created_at,
+            lock_transition_evidence=lock_transition_evidence,
+        )
+        return self._sign_slot(
+            body=body, domain=domain, slot_type=body["vote_type"],
+            protocol_schema=schema, height=height, round_number=round_number,
+            created_at=created_at,
+        )
+
+    def _reserve_vote_locks(
+        self, *, body: Mapping[str, Any], protocol_schema: str,
+        height: int, round_number: int, created_at: int,
+        lock_transition_evidence: Mapping[str, Any] | None,
+    ) -> None:
+        slot_type = body["vote_type"]
+        candidate_digest = body.get("candidate_digest")
+        vote_kind = body.get("vote_kind", "CANDIDATE")
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                protocol = db.execute(
+                    """SELECT protocol_schema FROM consensus_signing_protocol_locks
+                       WHERE network_id=? AND epoch=? AND height=?
+                         AND slot_type=? AND validator_id=?""",
+                    (self.network_id, self.epoch, height, slot_type, self.validator_id),
+                ).fetchone()
+                if protocol is not None and protocol[0] != protocol_schema:
+                    raise ConsensusSigningError("consensus_signing_slot_conflict")
+                if protocol is None:
+                    db.execute(
+                        "INSERT INTO consensus_signing_protocol_locks VALUES(?,?,?,?,?,?,?)",
+                        (self.network_id, self.epoch, height, slot_type,
+                         self.validator_id, protocol_schema, created_at),
+                    )
+                if vote_kind != "NIL":
+                    lock = db.execute(
+                        """SELECT candidate_digest,locked_round
+                           FROM consensus_signing_candidate_locks
+                           WHERE network_id=? AND epoch=? AND height=?
+                             AND slot_type=? AND validator_id=?""",
+                        (self.network_id, self.epoch, height, slot_type, self.validator_id),
+                    ).fetchone()
+                    if lock is None:
+                        db.execute(
+                            "INSERT INTO consensus_signing_candidate_locks VALUES(?,?,?,?,?,?,?)",
+                            (self.network_id, self.epoch, height, slot_type,
+                             self.validator_id, candidate_digest, round_number),
+                        )
+                        db.execute(
+                            """INSERT INTO consensus_signing_lock_history
+                               (network_id,epoch,height,slot_type,validator_id,
+                                protocol_schema,previous_digest,candidate_digest,
+                                round,transition_kind,evidence_digest,created_at)
+                               VALUES(?,?,?,?,?,?,NULL,?,?,?,NULL,?)""",
+                            (self.network_id, self.epoch, height, slot_type,
+                             self.validator_id, protocol_schema, candidate_digest,
+                             round_number, "INITIAL_LOCK", created_at),
+                        )
+                    else:
+                        prior_digest, prior_round = lock[0], lock[1]
+                        if round_number < prior_round:
+                            raise ConsensusSigningError("consensus_candidate_lock_round_regression")
+                        if candidate_digest != prior_digest:
+                            if round_number <= prior_round:
+                                raise ConsensusSigningError("consensus_signing_slot_conflict")
+                            if (self.verify_lock_transition is None
+                                    or lock_transition_evidence is None
+                                    or self.verify_lock_transition(
+                                        prior_digest, prior_round, body,
+                                        lock_transition_evidence,
+                                    ) is not True):
+                                raise ConsensusSigningError("consensus_candidate_lock_transition_unauthorized")
+                            evidence_digest = hashlib.sha256(
+                                _canonical(lock_transition_evidence)
+                            ).hexdigest()
+                            transition_kind = "PROOF_BOUND_VALUE_CHANGE"
+                        else:
+                            evidence_digest = None
+                            transition_kind = "SAME_VALUE_ROUND_ADVANCE"
+                        if round_number > prior_round:
+                            db.execute(
+                                """UPDATE consensus_signing_candidate_locks
+                                   SET candidate_digest=?,locked_round=?
+                                   WHERE network_id=? AND epoch=? AND height=?
+                                     AND slot_type=? AND validator_id=?""",
+                                (candidate_digest, round_number, self.network_id,
+                                 self.epoch, height, slot_type, self.validator_id),
+                            )
+                            db.execute(
+                                """INSERT INTO consensus_signing_lock_history
+                                   (network_id,epoch,height,slot_type,validator_id,
+                                    protocol_schema,previous_digest,candidate_digest,
+                                    round,transition_kind,evidence_digest,created_at)
+                                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                                (self.network_id, self.epoch, height, slot_type,
+                                 self.validator_id, protocol_schema, prior_digest,
+                                 candidate_digest, round_number, transition_kind,
+                                 evidence_digest, created_at),
+                            )
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+
+    def sign_round_change(self, unsigned_message: Mapping[str, Any], *, created_at: int) -> dict:
+        if not isinstance(unsigned_message, Mapping) or "signature" in unsigned_message:
+            raise ConsensusSigningError("unsigned_round_change_required")
+        body = dict(unsigned_message)
+        if body.get("schema") != "GCF-ROUND-CHANGE/1":
+            raise ConsensusSigningError("round_change_schema_unsupported")
+        if body.get("network_id") != self.network_id or body.get("epoch") != self.epoch:
+            raise ConsensusSigningError("round_change_scope_mismatch")
+        if body.get("validator_id") != self.validator_id:
+            raise ConsensusSigningError("round_change_signer_mismatch")
+        height, target = body.get("height"), body.get("target_round")
+        if (isinstance(height, bool) or not isinstance(height, int) or height < 1
+                or isinstance(target, bool) or not isinstance(target, int) or target < 1):
+            raise ConsensusSigningError("round_change_slot_invalid")
+        return self._sign_slot(
+            body=body, domain=GCF1_ROUND_CHANGE_DOMAIN,
+            slot_type="ROUND_CHANGE:" + str(target),
+            protocol_schema=body["schema"], height=height,
+            round_number=target, created_at=created_at,
+        )
+
+    def _sign_slot(
+        self, *, body: dict, domain: bytes, slot_type: str,
+        protocol_schema: str, height: int, round_number: int,
+        created_at: int,
+    ) -> dict:
+        if isinstance(created_at, bool) or not isinstance(created_at, int) or created_at < 0:
+            raise ConsensusSigningError("signing_timestamp_invalid")
+        payload = domain + _canonical(body)
+        digest = hashlib.sha256(payload).hexdigest()
+        encoded_body = _canonical(body)
+        # The protocol lock excludes cross-version signing; candidate locks
+        # separately enforce safe value continuity across rounds.
+        slot_round = round_number
+        key = (self.network_id, self.epoch, height, slot_round,
+               slot_type, self.validator_id)
+        with self._db() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    """SELECT payload_digest,payload_json,signature_b64
+                       FROM consensus_signing_slots
+                       WHERE network_id=? AND epoch=? AND height=? AND round=?
+                         AND slot_type=? AND validator_id=?""", key,
+                ).fetchone()
+                if row is None:
+                    db.execute(
+                        """INSERT INTO consensus_signing_slots
+                           (network_id,epoch,height,round,signed_round,slot_type,validator_id,
+                            protocol_schema,payload_digest,payload_json,signature_b64,created_at)
+                           VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?)""",
+                        (key[0], key[1], key[2], key[3], round_number, key[4], key[5],
+                         protocol_schema, digest, encoded_body, created_at),
+                    )
+                    signature_b64 = None
+                else:
+                    if row[0] != digest or bytes(row[1]) != encoded_body:
+                        raise ConsensusSigningError("consensus_signing_slot_conflict")
+                    signature_b64 = row[2]
+                db.execute("COMMIT")
+            except Exception:
+                if db.in_transaction:
+                    db.execute("ROLLBACK")
+                raise
+        if signature_b64 is None:
+            try:
+                signature = self.sign_bytes(payload)
+                if not isinstance(signature, bytes) or len(signature) != 64:
+                    raise ValueError("provider_signature_invalid")
+                Ed25519PublicKey.from_public_bytes(
+                    bytes.fromhex(self.public_key_hex)
+                ).verify(signature, payload)
+            except Exception as exc:
+                raise ConsensusSigningError("hardware_signing_provider_failed") from exc
+            signature_b64 = base64.b64encode(signature).decode("ascii")
+            with self._db() as db:
+                db.execute("BEGIN IMMEDIATE")
+                try:
+                    row = db.execute(
+                        """SELECT payload_digest,signature_b64
+                           FROM consensus_signing_slots
+                           WHERE network_id=? AND epoch=? AND height=? AND round=?
+                             AND slot_type=? AND validator_id=?""", key,
+                    ).fetchone()
+                    if row is None or row[0] != digest:
+                        raise ConsensusSigningError("consensus_signing_reservation_lost")
+                    if row[1] is None:
+                        db.execute(
+                            """UPDATE consensus_signing_slots SET signature_b64=?
+                               WHERE network_id=? AND epoch=? AND height=? AND round=?
+                                 AND slot_type=? AND validator_id=? AND signature_b64 IS NULL""",
+                            (signature_b64, *key),
+                        )
+                    else:
+                        signature_b64 = row[1]
+                    db.execute("COMMIT")
+                except Exception:
+                    if db.in_transaction:
+                        db.execute("ROLLBACK")
+                    raise
+        try:
+            persisted_signature = base64.b64decode(signature_b64, validate=True)
+            if len(persisted_signature) != 64:
+                raise ValueError("persisted_signature_length_invalid")
+            Ed25519PublicKey.from_public_bytes(
+                bytes.fromhex(self.public_key_hex)
+            ).verify(persisted_signature, payload)
+        except Exception as exc:
+            raise ConsensusSigningError("persisted_signer_signature_invalid") from exc
+        return {**body, "signature": signature_b64}
+
+    def slot_status(self) -> list[dict]:
+        with self._db() as db:
+            rows = db.execute(
+                """SELECT height,signed_round,slot_type,protocol_schema,payload_digest,
+                          signature_b64,created_at
+                   FROM consensus_signing_slots
+                   WHERE network_id=? AND epoch=? AND validator_id=?
+                   ORDER BY height,round,slot_type""",
+                (self.network_id, self.epoch, self.validator_id),
+            ).fetchall()
+        return [
+            {"height": row[0], "round": row[1], "slot_type": row[2],
+             "protocol_schema": row[3], "payload_digest": row[4],
+             "signed": row[5] is not None, "created_at": row[6]}
+            for row in rows
+        ]
