@@ -332,10 +332,13 @@ def verify_lane_plan(plan: dict[str, Any], *, start: int, stop: int, seed: str) 
             actual = lanes.get(lane_id)
             if not isinstance(actual, dict) or actual != expected_lane:
                 failures.append(f"{lane_id}_ticket_or_metadata_mismatch")
-        if lanes.get("L1", {}).get("ticket") != lanes.get("L2", {}).get("ticket"):
-            failures.append("L1_L2_shadow_ticket_mismatch")
-        if lanes.get("L3", {}).get("ticket") != lanes.get("L4", {}).get("ticket"):
-            failures.append("L3_L4_shadow_ticket_mismatch")
+        tickets = [lanes[lane_id].get("ticket") for lane_id in ("L1", "L2", "L3", "L4")]
+        if len(set(tickets)) != 4:
+            failures.append("lane_tickets_not_unique")
+        if lanes.get("L2", {}).get("shadow_of") != "L1":
+            failures.append("L2_shadow_pairing_mismatch")
+        if lanes.get("L4", {}).get("shadow_of") != "L3":
+            failures.append("L4_shadow_pairing_mismatch")
         if lanes.get("L1", {}).get("stop_nonce") != lanes.get("L3", {}).get("start_nonce"):
             failures.append("compute_ranges_not_contiguous")
         if lanes.get("L1", {}).get("start_nonce") != start or lanes.get("L3", {}).get("stop_nonce") != stop:
