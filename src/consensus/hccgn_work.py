@@ -208,7 +208,10 @@ def mine_nonce(
         nonce_offsets = range(max_attempts)
     elif schedule_profile == "symplectic-phase-space-v1":
         try:
-            from src.mining.symplectic import iter_symplectic_ordinals
+            from src.mining.symplectic import iter_symplectic_ordinals, phase_space_parameters
+            phase_space_parameters(
+                max_attempts, drift=header.primary_stride, kick=header.compact_stride,
+            )
             nonce_offsets = iter_symplectic_ordinals(
                 max_attempts,
                 drift=header.primary_stride,
