@@ -230,9 +230,30 @@ class UnifiedMiningEngine:
         if not isinstance(network_id, str) or not network_id:
             raise MiningEngineError("hccgn_network_id_required")
         started = time.perf_counter()
-        solved, digest, proof, proof_hash, attempts, _kernel_seconds = mine_nonce(
-            header, start_nonce=start_nonce, max_attempts=max_attempts,
-        )
+        try:
+            solved, digest, proof, proof_hash, attempts, _kernel_seconds = mine_nonce(
+                header, start_nonce=start_nonce, max_attempts=max_attempts,
+            )
+        except RuntimeError as exc:
+            # The canonical kernel uses RuntimeError only when the bounded
+            # nonce interval is exhausted without satisfying the target.
+            if not str(exc).startswith("No valid nonce found within "):
+                raise
+            return _receipt(
+                profile=PROFILE_HCCGN_WORK, started=started,
+                attempts=max_attempts, workers=1,
+                candidate=None, verified=True,
+                verification={
+                    "valid": True,
+                    "method": "canonical_hccgn_work_v1_bounded_search",
+                    "candidate_found": False,
+                },
+                metrics={
+                    "nonce_start": start_nonce,
+                    "nonce_end_exclusive": start_nonce + max_attempts,
+                    "termination": "attempt_budget_exhausted",
+                },
+            )
         checked = verify_proof(
             proof, expected_network_id=network_id,
             expected_target=solved.target,
@@ -261,4 +282,3 @@ class UnifiedMiningEngine:
             },
             metrics={"nonce_start": start_nonce, "nonce_end": solved.nonce},
         )
-
