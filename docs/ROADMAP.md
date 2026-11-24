@@ -34,10 +34,11 @@
 - Three-lane correction now has three paths: layered QC-LDPC/production-RS, direct production-RS, and an independently written bitwise-GF(256) reference-RS decoder. Two matching lanes are required; every accepted result is re-encoded by both RS implementations and the QC encoder. Deterministic tests added in PR #36; CI-verified in PR #36 source commit db726ee: 393 tests passed in CRYPTIC CI and mining-engine CI; Go conformance vectors and bounded benchmarks passed. Independent third-party implementation and formal verification remain open.
 
 ## Phase 5 — Extensions and SOS
-- Extension manifest and sandbox.
-- Virtual computer, terminal, filesystem and process boundaries.
-- Capability grants and audit.
-- Operator-visible virtual computer.
+- Signed declarative extension manifests, publisher trust, and artifact digest binding — implemented and CI-verified in PR #37 (380 tests passed); artifacts are stored as data and are not executed.
+- Short-lived signed capability grants, manifest capability-subset enforcement, explicit virtual-path scopes, and persisted revocation — implemented and CI-verified in PR #37 (380 tests passed).
+- SQLite-backed per-extension virtual filesystem with path-traversal rejection, quotas, content digests, and a hash-linked transactional audit ledger — implemented in PR #37.
+- Operator-visible virtual terminal with a fixed command allowlist and no shell parsing, subprocess, or host-filesystem access — implemented in PR #37.
+- True OS process isolation, hard process termination/resource enforcement, untrusted extension-code execution, independent/WORM audit storage, and physical power-loss review remain open.
 
 ## Phase 6 — Device assistant
 - Device-signed enrollment requests, explicit consent, operator-signed approval certificates, and host/device challenge-response — implemented and CI-verified in PR #38 (379 tests passed).
