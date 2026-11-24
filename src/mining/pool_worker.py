@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from typing import Any,Mapping
 from src.consensus.hccgn_work import HCCGNWorkHeader,mine_nonce,network_hash,proof_commitment
+from src.mining.symplectic import SCHEDULE_SYMPLECTIC, phase_space_parameters
 from src.mining.pool_protocol import verify_pool_job
 
 class PoolWorkerError(ValueError):
@@ -14,6 +15,7 @@ def execute_pool_job(job:Mapping[str,Any],*,trusted_issuer_public_key_hex:str,ex
     body=verify_pool_job(job,trusted_issuer_public_key_hex=trusted_issuer_public_key_hex,expected_issuer_id=expected_issuer_id,expected_pool_id=expected_pool_id,expected_network_id=expected_network_id,now=now)
     try:
         header=HCCGNWorkHeader(network_hash(body["network_id"]),body["height"],body["epoch"],body["issued_at"],bytes.fromhex(body["parent_hash"]),bytes.fromhex(body["payload_hash"]),body["primary_stride"],body["compact_stride"],body["nonce_start"],bytes.fromhex(body["target"]))
-        solved,digest,proof,proof_hash,attempts,elapsed=mine_nonce(header,start_nonce=body["nonce_start"],max_attempts=body["max_attempts"])
+        solved,digest,proof,proof_hash,attempts,elapsed=mine_nonce(header,start_nonce=body["nonce_start"],max_attempts=body["max_attempts"],schedule_profile=SCHEDULE_SYMPLECTIC)
+        phase_space=phase_space_parameters(body["max_attempts"],drift=header.primary_stride,kick=header.compact_stride)
     except Exception as exc: raise PoolWorkerError("bounded_job_execution_failed") from exc
-    return {"schema":"CRYPTIC-POOL-SUBMISSION/1","pool_id":body["pool_id"],"job_id":body["job_id"],"job":dict(job),"worker_id":worker_id,"proof_hash":proof_hash,"proof_b64":base64.b64encode(proof).decode("ascii"),"submitted_at":now,"measurements":{"attempts":attempts,"elapsed_seconds":elapsed,"hashes_per_second":attempts/elapsed if elapsed>0 else None,"nonce":solved.nonce,"work_digest":digest.hex(),"proof_commitment":proof_commitment(proof)}}
+    return {"schema":"CRYPTIC-POOL-SUBMISSION/1","pool_id":body["pool_id"],"job_id":body["job_id"],"job":dict(job),"worker_id":worker_id,"proof_hash":proof_hash,"proof_b64":base64.b64encode(proof).decode("ascii"),"submitted_at":now,"measurements":{"attempts":attempts,"elapsed_seconds":elapsed,"hashes_per_second":attempts/elapsed if elapsed>0 else None,"nonce":solved.nonce,"work_digest":digest.hex(),"proof_commitment":proof_commitment(proof),"schedule_profile":SCHEDULE_SYMPLECTIC,"phase_space":phase_space}}
