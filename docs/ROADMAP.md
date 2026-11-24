@@ -40,9 +40,10 @@
 - Operator-visible virtual computer.
 
 ## Phase 6 — Device assistant
-- Device enrollment and mutual authentication.
-- Scoped network, BLE, and home-automation bridges.
-- Per-device policy, consent, revocation, and audit.
+- Device-signed enrollment requests, explicit consent, operator-signed approval certificates, and host/device challenge-response — implemented and CI-verified in PR #38 (379 tests passed).
+- Per-device read-only capability grants, exact resource scopes, bounded sessions, one-use challenges, and revocation — implemented and CI-verified in PR #38 (379 tests passed).
+- SQLite device registry and hash-linked audit events for enrollment, challenge issuance, authentication, authorization, and revocation — implemented and CI-verified in PR #38 (379 tests passed).
+- Live network, BLE, and home-automation adapters; platform keystore integration; hardware attestation; key rotation; and multi-device interoperability remain open.
 
 ## Phase 7 — Supervised transport and cryptographic binding
 - Whole-request HTTP execution in an isolated, prestarted worker with an absolute monotonic deadline covering DNS, TCP, TLS, headers, and response reads.

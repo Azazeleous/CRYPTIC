@@ -27,7 +27,7 @@ CRYPTIC is a source-grounded, extensible model and runtime. This repository is i
 | `mining` | finite-window four-lane SHA-256 reference miner, reversible barrel-roll framing, and scheduler |
 | `cryptography/pq` | ML-KEM/ML-DSA suite selection and provider boundary |
 | `device` | enrollment, assistant, discovery, BLE, device bridges |
-| `sos` | isolated virtual computer, terminal, filesystem, mounts, process model |
+| `sos` | capability-scoped virtual computer, virtual filesystem, fixed command interpreter, and process records; hard OS isolation remains open |
 | `web` | operator application, visual computer, canvas, assets |
 | `tests` | unit, integration, conformance, security, recovery, property tests |
 | `ops` | deployment, observability, backup, restore, maintenance |
@@ -36,7 +36,11 @@ CRYPTIC is a source-grounded, extensible model and runtime. This repository is i
 
 ## Current status
 
-The four-lane reference miner, reversible barrel-roll framing, post-quantum suite architecture, supervised whole-request HTTP transport, and GCF/1–HCCGN-WORK/1 consensus reference stack are integrated with deterministic conformance tests. External trust-root, anti-rollback, live validator, and durability gates remain fail-closed. The miner is not a coin-specific consensus adapter or production pool client. PQ algorithms are selected, but a vetted provider, official vectors, protected key lifecycle, and runtime interoperability remain follow-on gates. Directory creation does not imply implementation. See the capability ledger, roadmap, mining architecture, and verification policy.
+The four-lane reference miner, reversible barrel-roll framing, post-quantum suite architecture, supervised whole-request HTTP transport, GCF/1–HCCGN-WORK/1 consensus reference stack, and Phase 5 signed extension/SOS foundation are integrated with deterministic tests. The SOS implementation verifies publisher-signed manifests, scoped signed grants, virtual filesystem operations, revocation, and tamper-evident audit records; it does not execute extension artifacts or claim hard OS process isolation. External trust-root, anti-rollback, live validator, and durability gates remain fail-closed. The miner is not a coin-specific consensus adapter or production pool client. PQ algorithms are selected, but a vetted provider, official vectors, protected key lifecycle, and runtime interoperability remain follow-on gates. Directory creation does not imply implementation. See the capability ledger, roadmap, mining architecture, and verification policy.
+
+## Device identity foundation
+
+Phase 6 adds consent-bound device enrollment and mutual authentication: device-signed consent requests, operator-approved certificates, signed host/device challenge-response, read-only capability grants, exact resource scopes, bounded sessions, one-use challenges, signed revocation, and auditable authorization decisions. Live network/BLE/home-automation adapters, platform keystore integration, hardware attestation, key rotation, and multi-device interoperability remain open.
 
 ## Security
 
