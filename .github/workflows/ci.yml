@@ -17,6 +17,11 @@ jobs:
   python-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Public read-only RPCs make the live adapter smoke tests execute instead of skip.
+    # These endpoints require no wallet, signer, or account credentials.
+    env:
+      CRYPTIC_EVM_RPC_URL: https://ethereum-rpc.publicnode.com
+      CRYPTIC_SOLANA_RPC_URL: https://api.mainnet-beta.solana.com
     steps:
       - name: Check out source
         uses: actions/checkout@v4
