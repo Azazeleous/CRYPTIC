@@ -15,6 +15,16 @@ from src.mining.symplectic import (
 
 
 class SymplecticPhaseSpaceTests(unittest.TestCase):
+    def test_public_package_exports_symplectic_engine(self):
+        from src.mining import (
+            SCHEDULE_SYMPLECTIC as public_schedule,
+            DiscreteSymplecticMap as public_map,
+            SeparableHamiltonian as public_hamiltonian,
+        )
+        self.assertEqual(public_schedule, "symplectic-phase-space-v1")
+        self.assertIs(public_map, DiscreteSymplecticMap)
+        self.assertIs(public_hamiltonian, SeparableHamiltonian)
+
     def test_discrete_map_is_bijective_and_inverse_round_trips(self):
         transform = DiscreteSymplecticMap(17, drift=3, kick=5)
         outputs = set()
