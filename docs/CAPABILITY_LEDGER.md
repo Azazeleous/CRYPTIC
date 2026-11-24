@@ -167,3 +167,17 @@ At source commit db726ee691c292df4e84777a6ed9f16c604e2206:
 | Three-lane correction | implemented and CI-verified in PR #36 | Layered QC-LDPC/production-RS, direct production-RS, and separately written bitwise-GF(256) reference-RS decoder. Two-of-three agreement is required; both RS implementations and the QC encoder independently re-encode accepted output. A third-party implementation and formal proof remain open. |
 
 This CI evidence verifies the repository test profile only; it does not establish production deployment, constant-time behavior, formal proof, hardware durability, or cross-platform storage power-loss guarantees.
+
+| Symplectic continuous phase-space engine | Implemented in PR #42 branch; Störmer-Verlet reversible step, bounded trajectory, finite-step energy-error tests | Not merged; no production Hamiltonian model supplied |
+| Discrete symplectic mining scheduler | Implemented in PR #42 branch; exact modular shear permutation, exhaustive finite-window coverage, HCCGN worker integration | Not merged; traversal-only, no hash-rate acceleration claim |
+| Pool nonce-range enforcement | Implemented in PR #42 branch; admission rejects proofs outside signed half-open job interval | Not merged; awaiting CI and independent review |
+| Pool canonical settlement gate | PR #42 branch requires GCF certificate plus exact durable ADAM commit match and optional sequence-anchor confirmation | Not merged; test authorities are not production authorities |
+
+| UnifiedMiningEngine schedule selector | Implemented on PR #42 branch; sequential-v1 default and explicit bounded symplectic HCCGN path | Latest PR head CI pending; not merged |
+| Domain-specific Hamiltonian model | Generic separable Hamiltonian interface implemented; project-specific potential/gradient not supplied in source specification | Requires approved model and invariants |
+
+
+| Unbound inverse verification | Implemented on PR #42 branch and integrated into HCCGN primary/compact stride verification | Both right- and left-inverse identities are recorded; this is modular index reconstruction, not SHA-256 preimage inversion |
+| V5 four-dimensional lattice | Implemented on PR #42 branch; coordinate/ID bijection, nearest-neighbor graph, degree histogram | Exact 625 nodes and 2,000 undirected edges are tested |
+| Four-lane ticket verification | Implemented on PR #42 branch; lane tickets, shadow pairing, range boundaries, residue routes and inverse routes independently checked | Latest PR head CI pending; not merged |
+| Mining receipt memory ledger | Implemented on PR #42 branch as optional injected append-only seed-ledger integration | Receipt return includes sequence and record hash only after confirmed append; local ledger test verifies chain and record count |

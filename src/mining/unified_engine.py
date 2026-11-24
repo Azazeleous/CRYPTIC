@@ -8,14 +8,22 @@ versioned algorithms with their own serialization and target semantics.
 from __future__ import annotations
 
 import base64
+import hashlib
+import json
+import math
 import os
 import time
-from dataclasses import asdict, dataclass
-from typing import Any, Mapping
+from dataclasses import asdict, dataclass, is_dataclass, replace
+from typing import Any, Callable, Mapping
 
 from mining.miner import mine_four_lane, verify_candidate as verify_four_lane
 from src.consensus.hccgn_work import HCCGNWorkHeader, mine_nonce, verify_proof
 from src.mining.sha256d import scan_nonce_range, verify_candidate as verify_sha256d
+from src.mining.symplectic import (
+    SCHEDULE_SEQUENTIAL,
+    SCHEDULE_SYMPLECTIC,
+    phase_space_parameters,
+)
 
 PROFILE_SHA256D_80 = "sha256d-80-v1"
 PROFILE_FOUR_LANE_SHA256 = "four-lane-sha256-v1"
@@ -106,6 +114,26 @@ def _receipt(
     )
 
 
+
+def _ledger_normalize(value: Any) -> Any:
+    """Convert a request into a deterministic fingerprint representation."""
+    if is_dataclass(value):
+        return _ledger_normalize(asdict(value))
+    if isinstance(value, bytes):
+        return {"encoding": "hex", "value": value.hex()}
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise MiningEngineError("ledger_request_key_invalid")
+        return {key: _ledger_normalize(value[key]) for key in sorted(value)}
+    if isinstance(value, (tuple, list)):
+        return [_ledger_normalize(item) for item in value]
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float) and math.isfinite(value):
+        return value
+    raise MiningEngineError("ledger_request_value_unsupported")
+
+
 class UnifiedMiningEngine:
     """Explicit profile router for the repository's three proof pipelines.
 
@@ -113,6 +141,11 @@ class UnifiedMiningEngine:
     and no fallback between profiles because their wire formats are not
     interchangeable.
     """
+
+    def __init__(self, ledger_append: Callable[[str, Mapping[str, Any]], Mapping[str, Any]] | None = None):
+        if ledger_append is not None and not callable(ledger_append):
+            raise MiningEngineError("ledger_append_must_be_callable")
+        self._ledger_append = ledger_append
 
     @staticmethod
     def profiles() -> tuple[str, ...]:
@@ -125,26 +158,75 @@ class UnifiedMiningEngine:
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         workers: int = 1,
         chunk_size: int = 50_000,
+        schedule_profile: str = SCHEDULE_SEQUENTIAL,
         **inputs: Any,
     ) -> MiningReceipt:
         if profile_id not in SUPPORTED_PROFILES:
             raise MiningEngineError("mining_profile_unsupported")
+        if schedule_profile not in (SCHEDULE_SEQUENTIAL, SCHEDULE_SYMPLECTIC):
+            raise MiningEngineError("nonce_schedule_profile_unsupported")
+        if profile_id != PROFILE_HCCGN_WORK and schedule_profile != SCHEDULE_SEQUENTIAL:
+            raise MiningEngineError("nonce_schedule_profile_not_supported_for_mining_profile")
         bound = _bounded_attempts(max_attempts)
         worker_count = _workers(workers)
         if profile_id == PROFILE_SHA256D_80:
-            return self._mine_sha256d(
+            receipt = self._mine_sha256d(
                 max_attempts=bound, workers=worker_count,
                 chunk_size=chunk_size, **inputs,
             )
+            return self._commit_receipt(receipt, profile_id, bound, worker_count, schedule_profile, inputs)
         if profile_id == PROFILE_FOUR_LANE_SHA256:
-            return self._mine_four_lane(
+            receipt = self._mine_four_lane(
                 max_attempts=bound, workers=min(worker_count, 4), **inputs,
             )
+            return self._commit_receipt(receipt, profile_id, bound, min(worker_count, 4), schedule_profile, inputs)
         if worker_count != 1:
             raise MiningEngineError("hccgn_work_v1_requires_single_worker")
-        return self._mine_hccgn(
-            max_attempts=bound, **inputs,
+        receipt = self._mine_hccgn(
+            max_attempts=bound, schedule_profile=schedule_profile, **inputs,
         )
+        return self._commit_receipt(receipt, profile_id, bound, 1, schedule_profile, inputs)
+
+
+    def _commit_receipt(
+        self, receipt: MiningReceipt, profile_id: str, max_attempts: int,
+        workers: int, schedule_profile: str, inputs: Mapping[str, Any],
+    ) -> MiningReceipt:
+        """Append a measured receipt before returning when a ledger is configured."""
+        if self._ledger_append is None:
+            return receipt
+        normalized = _ledger_normalize(dict(inputs))
+        fingerprint = hashlib.sha256(json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")).hexdigest()
+        payload = {
+            "schema": "CRYPTIC-MINING-LEDGER-EVENT/1",
+            "profile_id": profile_id,
+            "request_fingerprint": fingerprint,
+            "request": {
+                "max_attempts": max_attempts,
+                "workers": workers,
+                "schedule_profile": schedule_profile,
+            },
+            "receipt": receipt.to_dict(),
+        }
+        try:
+            committed = self._ledger_append("mining.receipt", payload)
+        except Exception as exc:
+            raise MiningEngineError("receipt_ledger_commit_failed") from exc
+        if (not isinstance(committed, Mapping)
+                or not isinstance(committed.get("record_hash"), str)
+                or len(committed["record_hash"]) != 64):
+            raise MiningEngineError("receipt_ledger_commit_unconfirmed")
+        metrics = dict(receipt.metrics)
+        metrics["ledger"] = {
+            "provider": "configured_append_only_ledger",
+            "persistence_status": "committed",
+            "sequence": committed.get("sequence"),
+            "record_hash": committed["record_hash"],
+        }
+        return replace(receipt, metrics=metrics)
 
     def _mine_sha256d(
         self, *, header: bytes, target: int, start_nonce: int = 0,
@@ -224,15 +306,27 @@ class UnifiedMiningEngine:
     def _mine_hccgn(
         self, *, header: HCCGNWorkHeader, network_id: str,
         start_nonce: int = 0, max_attempts: int,
+        schedule_profile: str = SCHEDULE_SEQUENTIAL,
     ) -> MiningReceipt:
         if not isinstance(header, HCCGNWorkHeader):
             raise MiningEngineError("hccgn_header_object_required")
         if not isinstance(network_id, str) or not network_id:
             raise MiningEngineError("hccgn_network_id_required")
+        if schedule_profile not in (SCHEDULE_SEQUENTIAL, SCHEDULE_SYMPLECTIC):
+            raise MiningEngineError("nonce_schedule_profile_unsupported")
+        phase_space = None
+        if schedule_profile == SCHEDULE_SYMPLECTIC:
+            try:
+                phase_space = phase_space_parameters(
+                    max_attempts, drift=header.primary_stride, kick=header.compact_stride,
+                )
+            except (TypeError, ValueError) as exc:
+                raise MiningEngineError("symplectic_schedule_parameters_invalid") from exc
         started = time.perf_counter()
         try:
             solved, digest, proof, proof_hash, attempts, _kernel_seconds = mine_nonce(
                 header, start_nonce=start_nonce, max_attempts=max_attempts,
+                schedule_profile=schedule_profile,
             )
         except RuntimeError as exc:
             # The canonical kernel uses RuntimeError only when the bounded
@@ -252,6 +346,8 @@ class UnifiedMiningEngine:
                     "nonce_start": start_nonce,
                     "nonce_end_exclusive": start_nonce + max_attempts,
                     "termination": "attempt_budget_exhausted",
+                    "schedule_profile": schedule_profile,
+                    "phase_space": phase_space,
                 },
             )
         checked = verify_proof(
@@ -280,5 +376,11 @@ class UnifiedMiningEngine:
                 "method": "canonical_hccgn_work_v1_proof_verifier",
                 "proof_hash": proof_hash,
             },
-            metrics={"nonce_start": start_nonce, "nonce_end": solved.nonce},
+            metrics={
+                "nonce_start": start_nonce,
+                "nonce_end": solved.nonce,
+                "nonce_end_exclusive": start_nonce + max_attempts,
+                "schedule_profile": schedule_profile,
+                "phase_space": phase_space,
+            },
         )

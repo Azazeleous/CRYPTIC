@@ -1,10 +1,6 @@
 """CRYPTIC mining primitives and GAIA/NEXUS local trophy solver."""
 
 from .sha256d import Candidate, ScanResult, double_sha256, scan_nonce_range, verify_candidate
-from .unified_engine import (
-    MiningEngineError, MiningReceipt, UnifiedMiningEngine,
-    PROFILE_SHA256D_80, PROFILE_FOUR_LANE_SHA256, PROFILE_HCCGN_WORK,
-)
 from .gaia_fabric import (
     build_lane_plan,
     compute_difficulty_stratified_guarantees,
@@ -12,8 +8,29 @@ from .gaia_fabric import (
     hodge_star_sign,
     schlafli_cycle,
     verify_arithmetic_fabric,
+    v5_node_id,
+    v5_neighbors,
+    v5_lattice_summary,
+    verify_lane_plan,
 )
 from .trophy_solver import mine_trophy_ladder, target_for_difficulty
+from .unified_engine import (
+    MiningEngineError, MiningReceipt, UnifiedMiningEngine,
+    PROFILE_SHA256D_80, PROFILE_FOUR_LANE_SHA256, PROFILE_HCCGN_WORK,
+)
+from .symplectic import (
+    SCHEDULE_SEQUENTIAL,
+    SCHEDULE_SYMPLECTIC,
+    DiscretePhasePoint,
+    DiscreteSymplecticMap,
+    PhaseState,
+    SeparableHamiltonian,
+    integrate_trajectory,
+    iter_symplectic_ordinals,
+    leapfrog_step,
+    phase_space_parameters,
+    verify_symplectic_schedule,
+)
 
 __all__ = [
     "Candidate",
@@ -21,18 +38,33 @@ __all__ = [
     "double_sha256",
     "scan_nonce_range",
     "verify_candidate",
-    "MiningEngineError",
-    "MiningReceipt",
-    "UnifiedMiningEngine",
-    "PROFILE_SHA256D_80",
-    "PROFILE_FOUR_LANE_SHA256",
-    "PROFILE_HCCGN_WORK",
     "build_lane_plan",
     "compute_difficulty_stratified_guarantees",
     "discrete_divergence",
     "hodge_star_sign",
     "schlafli_cycle",
     "verify_arithmetic_fabric",
+    "v5_node_id",
+    "v5_neighbors",
+    "v5_lattice_summary",
+    "verify_lane_plan",
     "mine_trophy_ladder",
     "target_for_difficulty",
+    "MiningEngineError",
+    "MiningReceipt",
+    "UnifiedMiningEngine",
+    "PROFILE_SHA256D_80",
+    "PROFILE_FOUR_LANE_SHA256",
+    "PROFILE_HCCGN_WORK",
+    "SCHEDULE_SEQUENTIAL",
+    "SCHEDULE_SYMPLECTIC",
+    "DiscretePhasePoint",
+    "DiscreteSymplecticMap",
+    "PhaseState",
+    "SeparableHamiltonian",
+    "integrate_trajectory",
+    "iter_symplectic_ordinals",
+    "leapfrog_step",
+    "phase_space_parameters",
+    "verify_symplectic_schedule",
 ]

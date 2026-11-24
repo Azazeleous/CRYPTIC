@@ -20,6 +20,8 @@ from src.sos.virtual_computer import (
     VirtualComputerError,
     verify_capability_grant,
 )
+from storage.sparsebundle import SparseBundle
+from src.sos.sparsebundle_mount import SparseBundleMountManager
 
 
 def keypair():
@@ -39,8 +41,9 @@ def signed_manifest(private, artifact, *, now, extension_id="demo.notes"):
         "description": "Declarative test extension",
         "artifact_sha256": hashlib.sha256(artifact).hexdigest(),
         "requested_capabilities": [
-            "filesystem.delete", "filesystem.list", "filesystem.read",
-            "filesystem.write", "process.invoke",
+            "filesystem.delete", "filesystem.list", "filesystem.mount.list",
+            "filesystem.mount.read", "filesystem.mount.unmount", "filesystem.mount.write",
+            "filesystem.read", "filesystem.write", "process.invoke",
         ],
         "issued_at": now - 1,
         "expires_at": now + 3600,
@@ -61,8 +64,9 @@ def signed_grant(private, *, now, extension_id="demo.notes", resources=None,
         "extension_id": extension_id,
         "signer_id": "operator-root",
         "capabilities": capabilities or [
-            "filesystem.delete", "filesystem.list", "filesystem.read",
-            "filesystem.write", "process.invoke",
+            "filesystem.delete", "filesystem.list", "filesystem.mount.list",
+            "filesystem.mount.read", "filesystem.mount.unmount", "filesystem.mount.write",
+            "filesystem.read", "filesystem.write", "process.invoke",
         ],
         "resources": ["docs/"] if resources is None else resources,
         "issued_at": now - 1,
@@ -120,11 +124,28 @@ class VirtualComputerTests(unittest.TestCase):
         self.artifact = b"extension bytes are data, not executable code"
         self.manifest = signed_manifest(self.publisher_private, self.artifact, now=self.now)
         self.grant = signed_grant(self.operator_private, now=self.now)
+        self.bundle = SparseBundle.create(
+            Path(self.temp.name) / "system.bundle",
+            {"data": {"name": "Data", "role": "data", "size": 65536}},
+            chunk_size=4096,
+        )
+        self.mount_events = []
+        self.mount_provider = SparseBundleMountManager(
+            bundle=self.bundle,
+            authorize=lambda principal, capability, _resource: (
+                principal == "demo.notes" and capability in {
+                    "sos.mount.read", "sos.mount.write"
+                }
+            ),
+            audit=lambda event: self.mount_events.append(dict(event)) or True,
+            clock=lambda: self.now,
+        )
         self.computer = VirtualComputer(
             Path(self.temp.name) / "sos.sqlite3",
             publisher_trust={"publisher-test": self.publisher_public},
             authority_trust={"operator-root": self.operator_public},
             clock=lambda: self.now,
+            mount_provider=self.mount_provider,
         )
         self.computer.install_extension(self.manifest, self.artifact)
         self.computer.activate_grant(self.grant)
@@ -144,6 +165,50 @@ class VirtualComputerTests(unittest.TestCase):
         self.assertEqual(digest.stdout, hashlib.sha256(b"hello virtual world").hexdigest())
         self.assertTrue(self.computer.verify_audit_chain())
         self.assertGreaterEqual(len(self.computer.audit_events()), 5)
+
+    def test_sparsebundle_partition_is_mounted_through_virtual_terminal(self):
+        mounted = self.computer.run(
+            "demo.notes", "a" * 32,
+            ["mount", "data", "docs/data", "rw", "60"],
+        )
+        self.assertEqual(mounted.status, "completed", mounted.stderr)
+        mount_id = mounted.stdout.split()[1]
+
+        written = self.computer.run(
+            "demo.notes", "a" * 32,
+            ["mwrite", "docs/data", "12", base64.b64encode(b"HCCGN").decode("ascii")],
+        )
+        self.assertEqual(written.status, "completed", written.stderr)
+
+        read = self.computer.run(
+            "demo.notes", "a" * 32, ["mread", "docs/data", "12", "5"],
+        )
+        self.assertEqual(read.status, "completed", read.stderr)
+        self.assertEqual(base64.b64decode(read.stdout), b"HCCGN")
+
+        listed = self.computer.run("demo.notes", "a" * 32, ["mounts"])
+        self.assertIn(mount_id, listed.stdout)
+        removed = self.computer.run("demo.notes", "a" * 32, ["umount", mount_id])
+        self.assertEqual(removed.status, "completed", removed.stderr)
+        self.assertEqual(self.mount_provider.status()["active_mounts"], 0)
+        self.assertTrue(self.computer.verify_audit_chain())
+        self.assertIn("sos.mount.created", [event["event_type"] for event in self.mount_events])
+
+    def test_virtual_terminal_mount_write_requires_write_capability(self):
+        limited = signed_grant(
+            self.operator_private, now=self.now,
+            capabilities=[
+                "filesystem.mount.read", "process.invoke",
+            ],
+            resources=["docs/"], grant_id="d" * 32,
+        )
+        self.computer.activate_grant(limited)
+        result = self.computer.run(
+            "demo.notes", "d" * 32,
+            ["mount", "data", "docs/data", "rw", "60"],
+        )
+        self.assertEqual(result.status, "denied")
+        self.assertIn("capability_denied:filesystem.mount.write", result.stderr)
 
     def test_resource_scope_and_path_traversal_are_denied(self):
         denied = self.computer.run("demo.notes", "a" * 32, ["cat", "private/secret.txt"])

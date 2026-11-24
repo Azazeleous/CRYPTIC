@@ -1,4 +1,7 @@
+import importlib.util
+import tempfile
 import unittest
+from pathlib import Path
 
 from src.consensus.hccgn_work import HCCGNWorkHeader, network_hash
 from src.mining.unified_engine import (
@@ -79,7 +82,76 @@ class UnifiedMiningEngineTests(unittest.TestCase):
         self.assertEqual(receipt.verification["method"], "canonical_hccgn_work_v1_proof_verifier")
         self.assertEqual(len(receipt.candidate["proof_hash"]), 64)
         self.assertEqual(receipt.candidate["nonce"], 0)
+        self.assertEqual(receipt.metrics["schedule_profile"], "sequential-v1")
 
+
+    def test_hccgn_symplectic_schedule_is_exposed_and_receipted(self):
+        network_id = "cryptic-unified-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id), height=1, sequence=1,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
+        )
+        receipt = self.engine.mine(
+            PROFILE_HCCGN_WORK, header=header, network_id=network_id,
+            start_nonce=900, max_attempts=17,
+            schedule_profile="symplectic-phase-space-v1",
+        )
+        self.assertTrue(receipt.verified)
+        self.assertEqual(receipt.candidate["nonce"], 900)
+        self.assertEqual(receipt.metrics["schedule_profile"], "symplectic-phase-space-v1")
+        self.assertEqual(receipt.metrics["nonce_end_exclusive"], 917)
+        self.assertEqual(receipt.metrics["phase_space"]["candidate_window"], 17)
+
+    def test_symplectic_schedule_rejected_for_other_profiles_and_oversized_windows(self):
+        with self.assertRaisesRegex(MiningEngineError, "not_supported_for_mining_profile"):
+            self.engine.mine(
+                PROFILE_FOUR_LANE_SHA256, header=b"x", target=(1 << 256) - 1,
+                max_attempts=1, schedule_profile="symplectic-phase-space-v1",
+            )
+        network_id = "cryptic-unified-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id), height=1, sequence=1,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
+        )
+        with self.assertRaisesRegex(MiningEngineError, "symplectic_schedule_parameters_invalid"):
+            self.engine.mine(
+                PROFILE_HCCGN_WORK, header=header, network_id=network_id,
+                max_attempts=10_000_001, schedule_profile="symplectic-phase-space-v1",
+            )
+
+    def test_receipt_is_committed_to_real_seed_ledger_before_return(self):
+        network_id = "cryptic-ledger-testnet"
+        header = HCCGNWorkHeader(
+            network_id_hash=network_hash(network_id), height=1, sequence=1,
+            timestamp=1_800_000_000, parent_hash=b"\x00" * 32,
+            payload_hash=b"\x11" * 32, primary_stride=3037,
+            compact_stride=5, nonce=0, target=b"\xff" * 32,
+        )
+        script = Path(__file__).resolve().parents[1] / "scripts" / "cryptic-seed-ledger.py"
+        spec = importlib.util.spec_from_file_location("cryptic_seed_ledger_runtime", script)
+        ledger_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ledger_module)
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp) / ".cryptic"
+            ledger_module.init_state(state)
+            engine = UnifiedMiningEngine(
+                ledger_append=lambda event_type, payload:
+                    ledger_module.append_event(state, event_type, payload)
+            )
+            receipt = engine.mine(
+                PROFILE_HCCGN_WORK, header=header, network_id=network_id,
+                max_attempts=4, schedule_profile="symplectic-phase-space-v1",
+            )
+            audit = ledger_module.verify_state(state)
+            self.assertTrue(audit["valid"])
+            self.assertEqual(audit["records"], 1)
+            self.assertEqual(receipt.metrics["ledger"]["persistence_status"], "committed")
+            self.assertEqual(receipt.metrics["ledger"]["sequence"], 0)
+            self.assertEqual(len(receipt.metrics["ledger"]["record_hash"]), 64)
 
     def test_hccgn_exhausted_budget_returns_verified_no_candidate_receipt(self):
         network_id = "cryptic-unified-testnet"
@@ -101,12 +173,14 @@ class UnifiedMiningEngineTests(unittest.TestCase):
             network_id=network_id,
             start_nonce=0,
             max_attempts=8,
+            schedule_profile="symplectic-phase-space-v1",
         )
         self.assertEqual(receipt.status, "no_candidate")
         self.assertTrue(receipt.verified)
         self.assertIsNone(receipt.candidate)
         self.assertEqual(receipt.attempts, 8)
         self.assertEqual(receipt.metrics["termination"], "attempt_budget_exhausted")
+        self.assertEqual(receipt.metrics["schedule_profile"], "symplectic-phase-space-v1")
 
     def test_profile_mismatch_and_unknown_profile_fail_closed(self):
         with self.assertRaises(MiningEngineError):

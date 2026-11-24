@@ -63,3 +63,41 @@ Compare against a sequential baseline using the same candidate bytes, hash funct
 - A mining result is independently checked before ledger commitment.
 - A custom scheduler or reversible transform cannot change consensus rules.
 - Network/pool integration remains a separate adapter with explicit authorization and protocol-specific tests.
+
+
+## Symplectic phase-space scheduling
+
+The optional HCCGN mining traversal symplectic-phase-space-v1 uses the exact finite modular symplectic permutation described in SYMPLECTIC_PHASE_SPACE_MINING_V1.md. It only reorders the signed finite nonce window; it does not alter proof bytes, target comparison, or candidate coverage. The pool worker selects this schedule, and independent pool admission enforces the signed half-open nonce range. This is not a claim of faster hashing.
+
+
+## Unified orchestration and receipt persistence
+
+The UnifiedMiningEngine exposes an explicit HCCGN schedule_profile selector. The
+default remains sequential-v1; symplectic-phase-space-v1 is opt-in, bounded by
+the symplectic window limit, and records phase-space parameters in its receipt.
+Other mining profiles reject symplectic scheduling.
+
+A caller may inject an append-only ledger callback. When configured, the
+engine fingerprints normalized request inputs, appends a mining.receipt event,
+and returns the sequence and record hash only after the ledger confirms the
+append. Ledger errors or unconfirmed commits fail the request rather than
+claiming persistence. The existing cryptic-seed-ledger.py provides the durable
+hash-chain/Merkle implementation; its checkpoint remains local-unanchored
+until an external trusted checkpoint is established.
+
+## Reversible indexing and V5 lattice
+
+HCCGN verification now uses the generic AE.MINERVA.UNBOUND.INVERSE/1 module
+for both primary and compact coprime-stride projections. The verifier checks
+F(F^-1(Y)) = Y and F^-1(F(X)) = X for the supplied nonce/index values.
+This proves the modular mapping identities for those values; it does not
+invert SHA-256.
+
+The V5 lattice maps coordinates in {-2,-1,0,1,2}^4 bijectively to IDs 0..624.
+Its nearest-neighbor graph has 625 nodes and 2,000 undirected edges, with
+the exact boundary-degree distribution covered by tests.
+
+The four-lane plan exposes distinct per-lane tickets, explicit shadow_of
+relationships, disjoint compute ranges, and reversible residue-route metadata.
+verify_lane_plan recomputes the expected plan from the original request and
+rejects altered tickets, route metadata, lane roles, or range boundaries.
