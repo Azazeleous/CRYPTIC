@@ -115,10 +115,15 @@ def _scan_chunk(
     start_nonce: int,
     stop_nonce: int,
     optimized: bool = True,
+    max_candidates: int | None = None,
 ) -> list[Candidate]:
     _validate_range(start_nonce, stop_nonce)
     header = _validate_header(header)
     target = _validate_target(target)
+    if max_candidates is not None and (
+        isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1
+    ):
+        raise ValueError("max_candidates must be a positive integer or None")
     candidates: list[Candidate] = []
 
     if optimized:
@@ -133,6 +138,8 @@ def _scan_chunk(
             value = int.from_bytes(digest, "little")
             if value <= target:
                 candidates.append(Candidate(nonce, digest.hex(), value, target))
+                if max_candidates is not None and len(candidates) >= max_candidates:
+                    break
     else:
         mutable = bytearray(header)
         for nonce in range(start_nonce, stop_nonce):
@@ -141,6 +148,8 @@ def _scan_chunk(
             value = int.from_bytes(digest, "little")
             if value <= target:
                 candidates.append(Candidate(nonce, digest.hex(), value, target))
+                if max_candidates is not None and len(candidates) >= max_candidates:
+                    break
     return candidates
 
 
@@ -150,9 +159,10 @@ def _scan_chunk_timed(
     start_nonce: int,
     stop_nonce: int,
     optimized: bool,
+    max_candidates: int | None = None,
 ) -> tuple[list[Candidate], float]:
     started = time.perf_counter()
-    found = _scan_chunk(header, target, start_nonce, stop_nonce, optimized)
+    found = _scan_chunk(header, target, start_nonce, stop_nonce, optimized, max_candidates)
     return found, max(time.perf_counter() - started, 1e-12)
 
 
@@ -166,6 +176,7 @@ def scan_nonce_range(
     chunk_size: int = 50_000,
     optimized: bool = True,
     target_chunk_seconds: float = 0.05,
+    max_candidates: int | None = None,
 ) -> ScanResult:
     """Scan a finite half-open nonce range with bounded adaptive scheduling.
 
@@ -182,6 +193,10 @@ def scan_nonce_range(
         raise ValueError("chunk_size must be a positive integer")
     if not isinstance(target_chunk_seconds, (int, float)) or target_chunk_seconds <= 0:
         raise ValueError("target_chunk_seconds must be positive")
+    if max_candidates is not None and (
+        isinstance(max_candidates, bool) or not isinstance(max_candidates, int) or max_candidates < 1
+    ):
+        raise ValueError("max_candidates must be a positive integer or None")
 
     cpu_count = max(1, os.cpu_count() or 1)
     worker_count = min(workers, cpu_count)
@@ -200,7 +215,9 @@ def scan_nonce_range(
         cursor = start_nonce
         while cursor < stop_nonce:
             right = min(cursor + chunk_size, stop_nonce)
-            candidates.extend(_scan_chunk(header, target, cursor, right, optimized))
+            candidates.extend(_scan_chunk(header, target, cursor, right, optimized, max_candidates))
+            if max_candidates is not None and len(candidates) > max_candidates:
+                candidates = sorted(candidates, key=lambda item: item.nonce)[:max_candidates]
             chunks_completed += 1
             cursor = right
         used_workers = 1
@@ -215,7 +232,7 @@ def scan_nonce_range(
             while cursor < stop_nonce and len(pending) < worker_count:
                 right = min(cursor + current_chunk_size, stop_nonce)
                 future = executor.submit(
-                    _scan_chunk_timed, header, target, cursor, right, optimized
+                    _scan_chunk_timed, header, target, cursor, right, optimized, max_candidates
                 )
                 pending[future] = (cursor, right)
                 cursor = right
@@ -226,6 +243,8 @@ def scan_nonce_range(
                     pending.pop(future)
                     found, chunk_elapsed = future.result()
                     candidates.extend(found)
+                    if max_candidates is not None and len(candidates) > max_candidates:
+                        candidates = sorted(candidates, key=lambda item: item.nonce)[:max_candidates]
                     chunks_completed += 1
 
                     scale = float(target_chunk_seconds) / chunk_elapsed
@@ -238,7 +257,7 @@ def scan_nonce_range(
                     if cursor < stop_nonce:
                         right = min(cursor + current_chunk_size, stop_nonce)
                         next_future = executor.submit(
-                            _scan_chunk_timed, header, target, cursor, right, optimized
+                            _scan_chunk_timed, header, target, cursor, right, optimized, max_candidates
                         )
                         pending[next_future] = (cursor, right)
                         cursor = right
