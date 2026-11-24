@@ -1,7 +1,9 @@
 import hashlib
 import unittest
 
-from mining.barrel_roll import roll_frame, unroll_frame, rotl, rotr
+from mining.barrel_roll import (
+    roll_frame, unroll_frame, rotl, rotr, deinterleave_lanes,
+)
 from mining.miner import candidate_digest, mine_four_lane, verify_candidate, _mine_lane
 from mining.scheduler import PROFILE_MODULUS, lane_ordinals, nonce_for_ordinal, traversal_index
 
@@ -20,6 +22,15 @@ class BarrelRollTests(unittest.TestCase):
             for bit_shift, byte_shift, lane_shift in ((0, 0, 0), (3, 5, 2), (7, 19, 3), (4, -2, -1)):
                 lanes = roll_frame(data, bit_shift=bit_shift, byte_shift=byte_shift, lane_shift=lane_shift)
                 self.assertEqual(unroll_frame(lanes, bit_shift=bit_shift, byte_shift=byte_shift, lane_shift=lane_shift), data)
+
+    def test_malformed_round_robin_lane_lengths_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "lane_lengths_not_round_robin"):
+            deinterleave_lanes((b"a", b"", b"b", b""))
+
+    def test_unroll_requires_explicit_transform_metadata(self):
+        lanes = roll_frame(b"metadata", bit_shift=2, byte_shift=3, lane_shift=1)
+        with self.assertRaises(TypeError):
+            unroll_frame(lanes)
 
 
 class SchedulerTests(unittest.TestCase):
