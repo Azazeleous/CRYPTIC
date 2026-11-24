@@ -238,6 +238,20 @@ class PoolConsensusIntegrationTests(unittest.TestCase):
         self.assertTrue(status["share_ledger_chain_valid"])
         self.assertTrue(status["settlement_ledger_chain_valid"])
 
+    def test_gcf_certificate_without_adam_commit_is_not_finalized(self):
+        finality = self.build_finality()
+        verifier = build_gcf1_pool_finality_verifier(
+            hccgn_verifier=self.hccgn_gate,
+            god_authorizer=self.allow_test_gate,
+            justice_verifier=self.allow_test_gate,
+            clock=lambda: self.now,
+            finalized_state_verifier=build_adam_finalized_state_verifier(self.adam_store),
+        )
+        certificate = finality["certificate"]
+        result = verifier(certificate, certificate["proposal"])
+        self.assertFalse(result["valid"])
+        self.assertFalse(result["finalized"])
+        self.assertEqual(result["reason"], "canonical_state_commit_not_confirmed")
     def test_tampered_finality_certificate_is_not_settled(self):
         finality = self.build_finality()
         verifier = build_gcf1_pool_finality_verifier(
