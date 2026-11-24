@@ -1,5 +1,14 @@
 """Read-only ingestion source contracts."""
 
+from .asset_identity import (
+    AmbiguousAssetAliasError,
+    AssetAlias,
+    AssetIdentity,
+    AssetIdentityError,
+    AssetNotFoundError,
+    AssetRecord,
+    AssetRegistry,
+)
 from .replay import ReplayError, replay_journal
 from .runtime import (BoundedIngestionRuntime, DeadlineAwareAdapter, IngestionDeadlineExceeded, IngestionPolicy, IngestionRuntimeError)
 from .normalization import (
@@ -34,6 +43,13 @@ from .source_registry import (
 )
 
 __all__ = [
+    "AmbiguousAssetAliasError",
+    "AssetAlias",
+    "AssetIdentity",
+    "AssetIdentityError",
+    "AssetNotFoundError",
+    "AssetRecord",
+    "AssetRegistry",
     "BoundedIngestionRuntime",
     "DeadlineAwareAdapter",
     "IngestionDeadlineExceeded",
