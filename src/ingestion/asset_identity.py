@@ -1,12 +1,9 @@
-"""Canonical asset identity and collision-safe alias resolution.
-
-Symbols and display names are aliases, never canonical identity. Identity is
-scoped to a normalized network fingerprint and a chain-native asset reference.
-This registry is process-local; persistence and provider enrollment are separate.
-"""
+"""Canonical asset identity and durable, collision-safe alias registry."""
 from __future__ import annotations
+
 from dataclasses import dataclass
 import re
+import sqlite3
 from threading import RLock
 from typing import Iterable, Literal, Mapping
 
@@ -43,7 +40,7 @@ def _decode_base58(value: str) -> bytes:
 
 
 def _normalize_alias(alias_type: str, value: str) -> str:
-    if alias_type not in _ALIAS_TYPES:
+    if not isinstance(alias_type, str) or alias_type not in _ALIAS_TYPES:
         raise AssetIdentityError("unsupported alias_type")
     if not isinstance(value, str) or not value.strip() or len(value) > 256:
         raise AssetIdentityError("alias value must be a non-empty string of at most 256 characters")
@@ -66,7 +63,7 @@ class AssetIdentity:
     asset_reference: str
 
     def validate(self) -> None:
-        if self.network_family not in {"evm", "solana"}:
+        if not isinstance(self.network_family, str) or self.network_family not in {"evm", "solana"}:
             raise AssetIdentityError("network_family must be evm or solana")
         if not isinstance(self.network_identity, str) or not _NETWORK_ID.fullmatch(self.network_identity):
             raise AssetIdentityError("network_identity must be a lowercase SHA-256 fingerprint")
@@ -77,9 +74,8 @@ class AssetIdentity:
         if self.network_family == "evm":
             if not _EVM_ADDRESS.fullmatch(self.asset_reference):
                 raise AssetIdentityError("EVM asset_reference must be a 20-byte contract address")
-        else:
-            if not 32 <= len(self.asset_reference) <= 44 or len(_decode_base58(self.asset_reference)) != 32:
-                raise AssetIdentityError("Solana asset_reference must be a 32-byte base58 mint")
+        elif not 32 <= len(self.asset_reference) <= 44 or len(_decode_base58(self.asset_reference)) != 32:
+            raise AssetIdentityError("Solana asset_reference must be a 32-byte base58 mint")
 
     @property
     def canonical_id(self) -> str:
@@ -130,14 +126,61 @@ class AssetRecord:
 
 
 class AssetRegistry:
-    """Thread-safe, deterministic registry with explicit alias-collision handling."""
-    def __init__(self) -> None:
+    """SQLite-backed, thread-safe registry with atomic alias binding.
+
+    The default database is in-memory. Supply a filesystem path for durable
+    records. File-backed databases use WAL and FULL synchronous commits.
+    """
+    def __init__(self, database_path: str = ":memory:") -> None:
+        if not isinstance(database_path, str) or not database_path:
+            raise AssetIdentityError("database_path must be a non-empty string")
         self._lock = RLock()
-        self._records: dict[str, AssetRecord] = {}
-        self._aliases: dict[tuple[str, str, str, str, str], str] = {}
+        self._closed = False
+        self._db = sqlite3.connect(database_path, timeout=10, isolation_level=None, check_same_thread=False)
+        self._db.execute("PRAGMA foreign_keys=ON")
+        self._db.execute("PRAGMA synchronous=FULL")
+        if database_path != ":memory:":
+            self._db.execute("PRAGMA journal_mode=WAL")
+        self._db.executescript("""
+            CREATE TABLE IF NOT EXISTS assets (
+                canonical_id TEXT PRIMARY KEY,
+                network_family TEXT NOT NULL,
+                network_identity TEXT NOT NULL,
+                asset_reference TEXT NOT NULL,
+                symbol TEXT,
+                name TEXT,
+                decimals INTEGER,
+                UNIQUE(network_family, network_identity, asset_reference)
+            );
+            CREATE TABLE IF NOT EXISTS aliases (
+                network_family TEXT NOT NULL,
+                network_identity TEXT NOT NULL,
+                alias_type TEXT NOT NULL,
+                alias_value TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                canonical_id TEXT NOT NULL REFERENCES assets(canonical_id) ON DELETE CASCADE,
+                PRIMARY KEY(network_family, network_identity, alias_type, alias_value, source_id)
+            );
+            CREATE INDEX IF NOT EXISTS aliases_by_asset ON aliases(canonical_id);
+        """)
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise AssetIdentityError("asset registry is closed")
+
+    @staticmethod
+    def _record(row: tuple) -> AssetRecord:
+        identity = AssetIdentity(row[1], row[2], row[3])
+        return AssetRecord(identity, row[4], row[5], row[6])
 
     def register(self, identity: AssetIdentity, *, symbol: str | None = None, name: str | None = None, decimals: int | None = None, aliases: Iterable[AssetAlias] = ()) -> AssetRecord:
-        record = AssetRecord(identity, symbol, name, decimals)
+        identity.validate()
+        normalized_identity = AssetIdentity(
+            identity.network_family,
+            identity.network_identity,
+            identity.asset_reference.lower() if identity.network_family == "evm" and identity.asset_reference != "native" else identity.asset_reference,
+        )
+        record = AssetRecord(normalized_identity, symbol, name, decimals)
         record.validate()
         alias_items = list(aliases)
         if symbol is not None:
@@ -145,45 +188,79 @@ class AssetRegistry:
         if name is not None:
             alias_items.append(AssetAlias("name", name))
         prepared = [alias.normalized() for alias in alias_items]
-        canonical_id = identity.canonical_id
+        canonical_id = normalized_identity.canonical_id
         with self._lock:
-            existing = self._records.get(canonical_id)
-            if existing is not None and existing != record:
-                raise AssetIdentityError("canonical asset metadata conflict")
-            keys = [(identity.network_family, identity.network_identity, kind, value, source) for kind, value, source in prepared]
-            for key in keys:
-                mapped = self._aliases.get(key)
-                if mapped is not None and mapped != canonical_id:
-                    raise AmbiguousAssetAliasError(f"{key[2]} alias is already bound in this scope")
-            self._records.setdefault(canonical_id, record)
-            for key in keys:
-                self._aliases[key] = canonical_id
-            return self._records[canonical_id]
+            self._ensure_open()
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = self._db.execute(
+                    "SELECT canonical_id, network_family, network_identity, asset_reference, symbol, name, decimals FROM assets WHERE canonical_id=?",
+                    (canonical_id,),
+                ).fetchone()
+                if existing is not None and self._record(existing) != record:
+                    raise AssetIdentityError("canonical asset metadata conflict")
+                if existing is None:
+                    self._db.execute(
+                        "INSERT INTO assets VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (canonical_id, normalized_identity.network_family, normalized_identity.network_identity, normalized_identity.asset_reference, symbol, name, decimals),
+                    )
+                for alias_type, value, source_id in prepared:
+                    key = (normalized_identity.network_family, normalized_identity.network_identity, alias_type, value, source_id)
+                    mapped = self._db.execute(
+                        "SELECT canonical_id FROM aliases WHERE network_family=? AND network_identity=? AND alias_type=? AND alias_value=? AND source_id=?",
+                        key,
+                    ).fetchone()
+                    if mapped is not None and mapped[0] != canonical_id:
+                        raise AmbiguousAssetAliasError(f"{alias_type} alias is already bound in this scope")
+                    self._db.execute(
+                        "INSERT OR IGNORE INTO aliases VALUES (?, ?, ?, ?, ?, ?)",
+                        (*key, canonical_id),
+                    )
+                self._db.execute("COMMIT")
+                return record
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
 
     def add_alias(self, identity: AssetIdentity, alias: AssetAlias) -> None:
         identity.validate()
-        kind, value, source = alias.normalized()
+        alias_type, value, source_id = alias.normalized()
         canonical_id = identity.canonical_id
-        key = (identity.network_family, identity.network_identity, kind, value, source)
+        key = (identity.network_family, identity.network_identity, alias_type, value, source_id)
         with self._lock:
-            if canonical_id not in self._records:
-                raise AssetNotFoundError("asset must be registered before aliases are added")
-            mapped = self._aliases.get(key)
-            if mapped is not None and mapped != canonical_id:
-                raise AmbiguousAssetAliasError(f"{kind} alias is already bound in this scope")
-            self._aliases[key] = canonical_id
+            self._ensure_open()
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                exists = self._db.execute("SELECT 1 FROM assets WHERE canonical_id=?", (canonical_id,)).fetchone()
+                if exists is None:
+                    raise AssetNotFoundError("asset must be registered before aliases are added")
+                mapped = self._db.execute(
+                    "SELECT canonical_id FROM aliases WHERE network_family=? AND network_identity=? AND alias_type=? AND alias_value=? AND source_id=?",
+                    key,
+                ).fetchone()
+                if mapped is not None and mapped[0] != canonical_id:
+                    raise AmbiguousAssetAliasError(f"{alias_type} alias is already bound in this scope")
+                self._db.execute("INSERT OR IGNORE INTO aliases VALUES (?, ?, ?, ?, ?, ?)", (*key, canonical_id))
+                self._db.execute("COMMIT")
+            except Exception:
+                self._db.execute("ROLLBACK")
+                raise
 
     def get(self, identity: AssetIdentity) -> AssetRecord:
         canonical_id = identity.canonical_id
         with self._lock:
-            try:
-                return self._records[canonical_id]
-            except KeyError as exc:
-                raise AssetNotFoundError("canonical asset is not registered") from exc
+            self._ensure_open()
+            row = self._db.execute(
+                "SELECT canonical_id, network_family, network_identity, asset_reference, symbol, name, decimals FROM assets WHERE canonical_id=?",
+                (canonical_id,),
+            ).fetchone()
+            if row is None:
+                raise AssetNotFoundError("canonical asset is not registered")
+            return self._record(row)
 
     def resolve(self, *, network_family: Literal["evm", "solana"], network_identity: str, alias_type: Literal["symbol", "provider_id", "name"], value: str, source_id: str | None = None) -> AssetRecord:
         normalized = _normalize_alias(alias_type, value)
-        if network_family not in {"evm", "solana"}:
+        if not isinstance(network_family, str) or network_family not in {"evm", "solana"}:
             raise AssetIdentityError("unsupported network_family")
         if not isinstance(network_identity, str) or not _NETWORK_ID.fullmatch(network_identity):
             raise AssetIdentityError("network_identity must be a lowercase SHA-256 fingerprint")
@@ -192,23 +269,55 @@ class AssetRegistry:
         if alias_type == "provider_id" and source_id is None:
             raise AssetIdentityError("provider_id resolution requires a source_id")
         with self._lock:
-            keys = []
-            if source_id is not None:
-                keys.append((network_family, network_identity, alias_type, normalized, source_id))
-            keys.append((network_family, network_identity, alias_type, normalized, ""))
-            mapped = next((self._aliases[key] for key in keys if key in self._aliases), None)
-            if mapped is None:
-                raise AssetNotFoundError("no asset matches this network-scoped alias")
-            return self._records[mapped]
+            self._ensure_open()
+            keys = [source_id, ""] if source_id is not None else [""]
+            for scope in keys:
+                row = self._db.execute(
+                    """SELECT a.canonical_id, a.network_family, a.network_identity,
+                              a.asset_reference, a.symbol, a.name, a.decimals
+                       FROM aliases x JOIN assets a ON a.canonical_id=x.canonical_id
+                       WHERE x.network_family=? AND x.network_identity=?
+                         AND x.alias_type=? AND x.alias_value=? AND x.source_id=?""",
+                    (network_family, network_identity, alias_type, normalized, scope),
+                ).fetchone()
+                if row is not None:
+                    return self._record(row)
+        raise AssetNotFoundError("no asset matches this network-scoped alias")
 
     def list_assets(self, *, network_family: Literal["evm", "solana"] | None = None, network_identity: str | None = None) -> tuple[AssetRecord, ...]:
-        if network_family is not None and network_family not in {"evm", "solana"}:
+        if network_family is not None and (not isinstance(network_family, str) or network_family not in {"evm", "solana"}):
             raise AssetIdentityError("unsupported network_family")
-        if network_identity is not None and not _NETWORK_ID.fullmatch(network_identity):
+        if network_identity is not None and (not isinstance(network_identity, str) or not _NETWORK_ID.fullmatch(network_identity)):
             raise AssetIdentityError("network_identity must be a lowercase SHA-256 fingerprint")
+        query = "SELECT canonical_id, network_family, network_identity, asset_reference, symbol, name, decimals FROM assets"
+        clauses = []
+        params = []
+        if network_family is not None:
+            clauses.append("network_family=?")
+            params.append(network_family)
+        if network_identity is not None:
+            clauses.append("network_identity=?")
+            params.append(network_identity)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY canonical_id"
         with self._lock:
-            records = [record for record in self._records.values() if (network_family is None or record.identity.network_family == network_family) and (network_identity is None or record.identity.network_identity == network_identity)]
-            return tuple(sorted(records, key=lambda item: item.identity.canonical_id))
+            self._ensure_open()
+            rows = self._db.execute(query, params).fetchall()
+            return tuple(self._record(row) for row in rows)
+
+    def close(self) -> None:
+        with self._lock:
+            if not self._closed:
+                self._db.close()
+                self._closed = True
+
+    def __enter__(self) -> "AssetRegistry":
+        self._ensure_open()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
 
 
 __all__ = ["AmbiguousAssetAliasError", "AssetAlias", "AssetIdentity", "AssetIdentityError", "AssetNotFoundError", "AssetRecord", "AssetRegistry"]
