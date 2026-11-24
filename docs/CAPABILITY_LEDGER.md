@@ -172,3 +172,6 @@ This CI evidence verifies the repository test profile only; it does not establis
 | Discrete symplectic mining scheduler | Implemented in PR #42 branch; exact modular shear permutation, exhaustive finite-window coverage, HCCGN worker integration | Not merged; traversal-only, no hash-rate acceleration claim |
 | Pool nonce-range enforcement | Implemented in PR #42 branch; admission rejects proofs outside signed half-open job interval | Not merged; awaiting CI and independent review |
 | Pool canonical settlement gate | PR #42 branch requires GCF certificate plus exact durable ADAM commit match and optional sequence-anchor confirmation | Not merged; test authorities are not production authorities |
+
+| UnifiedMiningEngine schedule selector | Not yet exposed by the convenience router; HCCGN core API and pool worker support the symplectic schedule | Follow-up API integration after the pool/symplectic branch is merged |
+| Domain-specific Hamiltonian model | Generic separable Hamiltonian interface implemented; project-specific potential/gradient not supplied in source specification | Requires approved model and invariants |
