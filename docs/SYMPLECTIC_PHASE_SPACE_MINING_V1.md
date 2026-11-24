@@ -92,3 +92,8 @@ This is a correctness-first traversal permutation, not a hash-rate accelerator.
 The partial-tile filter adds bounded scheduling work. Performance must be
 measured against sequential traversal on the same hardware, job, target, and
 attempt count before any throughput claim is made.
+
+
+## Remaining API integration
+
+The HCCGN core miner exposes the schedule_profile argument and the pool worker selects the symplectic profile. The broader UnifiedMiningEngine wrapper is not yet wired to surface that optional selector; its HCCGN route therefore remains sequential by default. Exposing the selector through that wrapper is a follow-up integration, not a claim of completion in this change set. The generic Hamiltonian API also requires a caller-supplied separable potential, gradient, and masses; no project-specific physical Hamiltonian was present in the source specification.
