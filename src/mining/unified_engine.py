@@ -138,8 +138,10 @@ class UnifiedMiningEngine:
             )
         if profile_id == PROFILE_FOUR_LANE_SHA256:
             return self._mine_four_lane(
-                max_attempts=bound, **inputs,
+                max_attempts=bound, workers=min(worker_count, 4), **inputs,
             )
+        if worker_count != 1:
+            raise MiningEngineError("hccgn_work_v1_requires_single_worker")
         return self._mine_hccgn(
             max_attempts=bound, **inputs,
         )
@@ -193,12 +195,12 @@ class UnifiedMiningEngine:
 
     def _mine_four_lane(
         self, *, header: bytes, target: int, start_nonce: int = 0,
-        max_attempts: int,
+        max_attempts: int, workers: int,
     ) -> MiningReceipt:
         if isinstance(start_nonce, bool) or not isinstance(start_nonce, int) or start_nonce < 0:
             raise MiningEngineError("nonce_start_invalid")
         started = time.perf_counter()
-        result = mine_four_lane(header, start_nonce, max_attempts, target)
+        result = mine_four_lane(header, start_nonce, max_attempts, target, workers=workers)
         candidate = None
         valid = True
         verification: dict[str, Any] = {
@@ -213,7 +215,7 @@ class UnifiedMiningEngine:
                 }
         return _receipt(
             profile=PROFILE_FOUR_LANE_SHA256, started=started,
-            attempts=max_attempts, workers=4,
+            attempts=max_attempts, workers=workers,
             candidate=candidate, verified=valid,
             verification=verification,
             metrics={"nonce_start": start_nonce, "scheduled_ordinals": max_attempts},
