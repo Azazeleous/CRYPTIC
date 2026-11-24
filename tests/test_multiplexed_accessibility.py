@@ -123,7 +123,7 @@ class MultiplexedAccessibilityRuntimeTests(unittest.TestCase):
 
     def test_sos_mount_read_write_and_unmount(self):
         mounted = self.dispatch(self.command(
-            "sos.mount", "sos.mount.read",
+            "sos.mount", "sos.mount.write",
             {
                 "partition_id": "data", "mountpoint": "/workspace/data",
                 "mode": "rw", "lease_seconds": 60,
