@@ -343,6 +343,6 @@ def verify_lane_plan(plan: dict[str, Any], *, start: int, stop: int, seed: str) 
             failures.append("compute_ranges_not_contiguous")
         if lanes.get("L1", {}).get("start_nonce") != start or lanes.get("L3", {}).get("stop_nonce") != stop:
             failures.append("compute_ranges_do_not_cover_request")
-    except (KeyError, TypeError, ValueError) as exc:
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
         failures.append(f"verification_error:{type(exc).__name__}")
     return {"valid": not failures, "failures": failures, "lane_count": 4}
