@@ -7,31 +7,34 @@ PROFILE_INCREMENT = 1
 LANE_COUNT = 4
 
 
+def _require_integer(value: int, name: str, minimum: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise ValueError(f"{name} must be an integer >= {minimum}")
+
+
 def traversal_index(position: int) -> int:
     """Full-period affine traversal index over the 97,152-slot profile."""
-    if not isinstance(position, int) or position < 0:
-        raise ValueError("position must be a non-negative integer")
+    _require_integer(position, "position", 0)
     return (PROFILE_MULTIPLIER * (position % PROFILE_MODULUS) + PROFILE_INCREMENT) % PROFILE_MODULUS
 
 
 def nonce_for_ordinal(start_nonce: int, ordinal: int) -> int:
     """Map a global ordinal to a unique nonce using affine-window traversal."""
-    if not isinstance(start_nonce, int) or start_nonce < 0:
-        raise ValueError("start_nonce must be a non-negative integer")
-    if not isinstance(ordinal, int) or ordinal < 0:
-        raise ValueError("ordinal must be a non-negative integer")
+    _require_integer(start_nonce, "start_nonce", 0)
+    _require_integer(ordinal, "ordinal", 0)
     epoch, position = divmod(ordinal, PROFILE_MODULUS)
     return start_nonce + epoch * PROFILE_MODULUS + traversal_index(position)
 
 
 def lane_ordinals(lane_id: int, count: int, lane_count: int = LANE_COUNT, reverse: bool = False):
     """Yield a lane's disjoint ordinals, optionally in reverse order."""
-    if not isinstance(lane_count, int) or lane_count < 1:
-        raise ValueError("lane_count must be positive")
-    if not isinstance(lane_id, int) or not 0 <= lane_id < lane_count:
+    _require_integer(lane_count, "lane_count", 1)
+    _require_integer(lane_id, "lane_id", 0)
+    _require_integer(count, "count", 0)
+    if lane_id >= lane_count:
         raise ValueError("lane_id must be within lane_count")
-    if not isinstance(count, int) or count < 0:
-        raise ValueError("count must be non-negative")
+    if not isinstance(reverse, bool):
+        raise ValueError("reverse must be a boolean")
     positions = range(lane_id, count, lane_count)
     return reversed(positions) if reverse else positions
 

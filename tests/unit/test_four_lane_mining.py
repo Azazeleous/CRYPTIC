@@ -4,7 +4,7 @@ import unittest
 from mining.barrel_roll import (
     roll_frame, unroll_frame, rotl, rotr, deinterleave_lanes,
 )
-from mining.miner import candidate_digest, mine_four_lane, verify_candidate, _mine_lane
+from mining.miner import MiningResult, candidate_digest, mine_four_lane, verify_candidate, _mine_lane
 from mining.scheduler import PROFILE_MODULUS, lane_ordinals, nonce_for_ordinal, traversal_index
 
 
@@ -45,10 +45,45 @@ class SchedulerTests(unittest.TestCase):
         nonces = [nonce_for_ordinal(100, o) for o in ordinals]
         self.assertEqual(len(set(nonces)), count)
 
+    def test_scheduler_rejects_boolean_integer_arguments(self):
+        for call in (
+            lambda: traversal_index(True),
+            lambda: nonce_for_ordinal(True, 0),
+            lambda: nonce_for_ordinal(0, True),
+            lambda: lane_ordinals(True, 10),
+            lambda: lane_ordinals(0, True),
+            lambda: lane_ordinals(0, 10, lane_count=True),
+        ):
+            with self.assertRaises(ValueError):
+                call()
+        with self.assertRaisesRegex(ValueError, "reverse must be a boolean"):
+            list(lane_ordinals(0, 10, reverse=1))
+
 
 class MiningTests(unittest.TestCase):
     def test_candidate_hash_known_answer(self):
         self.assertEqual(candidate_digest(b"header", 7), hashlib.sha256(b"header" + (7).to_bytes(8, "big")).digest())
+
+    def test_boolean_nonce_and_numeric_inputs_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "uint64"):
+            candidate_digest(b"header", True)
+        for kwargs in (
+            {"start_nonce": True, "count": 1, "target": (1 << 256) - 1},
+            {"start_nonce": 0, "count": True, "target": (1 << 256) - 1},
+            {"start_nonce": 0, "count": 1, "target": True},
+        ):
+            with self.assertRaises(ValueError):
+                mine_four_lane(b"header", **kwargs)
+
+    def test_verifier_rejects_boolean_target_and_invalid_metadata(self):
+        result = mine_four_lane(b"header", 0, 1, (1 << 256) - 1)
+        self.assertIsNotNone(result)
+        self.assertFalse(verify_candidate(b"header", result, True))
+        self.assertFalse(verify_candidate(
+            b"header",
+            MiningResult(result.nonce, result.digest, True, result.ordinal, result.attempts),
+            (1 << 256) - 1,
+        ))
 
     def test_easy_target_mines_and_verifies(self):
         result = mine_four_lane(b"test-header", 0, 32, (1 << 256) - 1)
