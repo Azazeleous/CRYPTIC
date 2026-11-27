@@ -50,6 +50,27 @@ class MiningTests(unittest.TestCase):
     def test_candidate_hash_known_answer(self):
         self.assertEqual(candidate_digest(b"header", 7), hashlib.sha256(b"header" + (7).to_bytes(8, "big")).digest())
 
+    def test_boolean_nonce_and_numeric_inputs_are_rejected(self):
+        with self.assertRaisesRegex(ValueError, "uint64"):
+            candidate_digest(b"header", True)
+        for kwargs in (
+            {"start_nonce": True, "count": 1, "target": (1 << 256) - 1},
+            {"start_nonce": 0, "count": True, "target": (1 << 256) - 1},
+            {"start_nonce": 0, "count": 1, "target": True},
+        ):
+            with self.assertRaises(ValueError):
+                mine_four_lane(b"header", **kwargs)
+
+    def test_verifier_rejects_boolean_target_and_invalid_metadata(self):
+        result = mine_four_lane(b"header", 0, 1, (1 << 256) - 1)
+        self.assertIsNotNone(result)
+        self.assertFalse(verify_candidate(b"header", result, True))
+        self.assertFalse(verify_candidate(
+            b"header",
+            MiningResult(result.nonce, result.digest, True, result.ordinal, result.attempts),
+            (1 << 256) - 1,
+        ))
+
     def test_easy_target_mines_and_verifies(self):
         result = mine_four_lane(b"test-header", 0, 32, (1 << 256) - 1)
         self.assertIsNotNone(result)
