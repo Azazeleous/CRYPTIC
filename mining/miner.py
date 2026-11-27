@@ -27,25 +27,40 @@ class MiningResult:
 def candidate_digest(header: bytes, nonce: int) -> bytes:
     if not isinstance(header, bytes):
         raise TypeError("header must be bytes")
-    if not isinstance(nonce, int) or not 0 <= nonce <= MAX_NONCE:
+    if isinstance(nonce, bool) or not isinstance(nonce, int) or not 0 <= nonce <= MAX_NONCE:
         raise ValueError("nonce must fit uint64")
     return hashlib.sha256(header + nonce.to_bytes(8, "big")).digest()
 
 
 def verify_candidate(header: bytes, result: MiningResult, target: int) -> bool:
-    if not isinstance(result, MiningResult) or not isinstance(target, int) or not 0 <= target <= MAX_TARGET:
+    if not isinstance(result, MiningResult):
+        return False
+    if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target <= MAX_TARGET:
+        return False
+    if (isinstance(result.lane_id, bool) or not isinstance(result.lane_id, int)
+            or not 0 <= result.lane_id < LANE_COUNT):
+        return False
+    if (isinstance(result.ordinal, bool) or not isinstance(result.ordinal, int)
+            or result.ordinal < 0):
+        return False
+    if (isinstance(result.attempts, bool) or not isinstance(result.attempts, int)
+            or result.attempts < 1):
         return False
     try:
         digest = candidate_digest(header, result.nonce)
     except (TypeError, ValueError):
         return False
-    return digest.hex() == result.digest and int.from_bytes(digest, "big") <= target
+    return (
+        isinstance(result.digest, str)
+        and digest.hex() == result.digest
+        and int.from_bytes(digest, "big") <= target
+    )
 
 
 def _mine_lane(header: bytes, start_nonce: int, count: int, target: int, lane_id: int):
     best_hit = None
     attempts = 0
-    # Lanes 2 and 3 traverse their disjoint assignments in reverse order.
+    # Lanes 1 and 2 traverse their disjoint assignments in reverse order.
     # Keep only the lowest-ordinal hit: memory stays O(1) per lane even when
     # every candidate qualifies under a permissive target.
     for ordinal in lane_ordinals(lane_id, count, LANE_COUNT, reverse=lane_id in (1, 2)):
@@ -72,22 +87,27 @@ def mine_four_lane(
     """
     if not isinstance(header, bytes):
         raise TypeError("header must be bytes")
-    if not isinstance(start_nonce, int) or start_nonce < 0:
-        raise ValueError("start_nonce must be non-negative")
-    if not isinstance(count, int) or count < 0:
-        raise ValueError("count must be non-negative")
-    if not isinstance(target, int) or not 0 <= target <= MAX_TARGET:
+    if isinstance(start_nonce, bool) or not isinstance(start_nonce, int) or start_nonce < 0:
+        raise ValueError("start_nonce must be a non-negative integer")
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError("count must be a non-negative integer")
+    if isinstance(target, bool) or not isinstance(target, int) or not 0 <= target <= MAX_TARGET:
         raise ValueError("target must be a 256-bit unsigned integer")
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError("workers must be a positive integer")
     if count == 0:
         return None
     with ThreadPoolExecutor(max_workers=min(workers, LANE_COUNT)) as pool:
-        futures = [pool.submit(_mine_lane, header, start_nonce, count, target, lane) for lane in range(LANE_COUNT)]
+        futures = [
+            pool.submit(_mine_lane, header, start_nonce, count, target, lane)
+            for lane in range(LANE_COUNT)
+        ]
         lane_results = [future.result() for future in futures]
     hits = [hit for hit, _ in lane_results if hit is not None]
     if not hits:
         return None
     winner = min(hits, key=lambda item: item.ordinal)
     total_attempts = sum(attempts for _, attempts in lane_results)
-    return MiningResult(winner.nonce, winner.digest, winner.lane_id, winner.ordinal, total_attempts)
+    return MiningResult(
+        winner.nonce, winner.digest, winner.lane_id, winner.ordinal, total_attempts
+    )
