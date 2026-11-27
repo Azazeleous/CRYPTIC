@@ -56,7 +56,7 @@ class SchedulerTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 call()
-        with self.assertRaisesRegex(ValueError, "reverse_must_be_a_boolean"):
+        with self.assertRaisesRegex(ValueError, "reverse must be a boolean"):
             list(lane_ordinals(0, 10, reverse=1))
 
 
