@@ -45,6 +45,20 @@ class SchedulerTests(unittest.TestCase):
         nonces = [nonce_for_ordinal(100, o) for o in ordinals]
         self.assertEqual(len(set(nonces)), count)
 
+    def test_scheduler_rejects_boolean_integer_arguments(self):
+        for call in (
+            lambda: traversal_index(True),
+            lambda: nonce_for_ordinal(True, 0),
+            lambda: nonce_for_ordinal(0, True),
+            lambda: lane_ordinals(True, 10),
+            lambda: lane_ordinals(0, True),
+            lambda: lane_ordinals(0, 10, lane_count=True),
+        ):
+            with self.assertRaises(ValueError):
+                call()
+        with self.assertRaisesRegex(ValueError, "reverse_must_be_a_boolean"):
+            list(lane_ordinals(0, 10, reverse=1))
+
 
 class MiningTests(unittest.TestCase):
     def test_candidate_hash_known_answer(self):
