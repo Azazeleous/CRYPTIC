@@ -4,7 +4,7 @@ import unittest
 from mining.barrel_roll import (
     roll_frame, unroll_frame, rotl, rotr, deinterleave_lanes,
 )
-from mining.miner import candidate_digest, mine_four_lane, verify_candidate, _mine_lane
+from mining.miner import MiningResult, candidate_digest, mine_four_lane, verify_candidate, _mine_lane
 from mining.scheduler import PROFILE_MODULUS, lane_ordinals, nonce_for_ordinal, traversal_index
 
 
