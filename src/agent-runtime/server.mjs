@@ -5,6 +5,7 @@
 import http from "node:http";
 import { createChatCompletion, listModels, providerConfig } from "./provider.mjs";
 import { buildRepositoryManifest, ingestFile, ingestText, ingestionStatus } from "./ingestion.mjs";
+import { githubRepositoryManifest, ingestGithubFile } from "./github-ingest.mjs";
 
 const host = process.env.CRYPTIC_BIND_HOST || "127.0.0.1";
 const port = Number(process.env.CRYPTIC_PORT || 8765);
@@ -46,8 +47,28 @@ const tools = [
   },
   {
     name: "build_repository_manifest",
-    description: "Build a bounded, hash-verified inventory of allowlisted repository files under CRYPTIC_INGEST_ROOT. Does not ingest file contents or follow symlinks.",
+    description: "Build a bounded, hash-verified inventory of allowlisted local repository files under CRYPTIC_INGEST_ROOT. Does not ingest file contents or follow symlinks.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "github_repository_manifest",
+    description: "Read a GitHub repository tree using a read-only token and explicit repository allowlist. Returns bounded file metadata, not file contents.",
+    inputSchema: {
+      type: "object",
+      properties: { repo: { type: "string" }, ref: { type: "string" } },
+      required: ["repo"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "github_ingest_file",
+    description: "Ingest one selected allowlisted GitHub text/code file with SHA-256 provenance. Requires explicit repository allowlisting and a read-only GitHub token.",
+    inputSchema: {
+      type: "object",
+      properties: { repo: { type: "string" }, ref: { type: "string" }, path: { type: "string" } },
+      required: ["repo", "path"],
+      additionalProperties: false
+    }
   }
 ];
 
@@ -89,6 +110,12 @@ async function handleTool(name, args = {}) {
   }
   if (name === "build_repository_manifest") {
     return buildRepositoryManifest();
+  }
+  if (name === "github_repository_manifest") {
+    return githubRepositoryManifest({ repo: args.repo, ref: args.ref || "main" });
+  }
+  if (name === "github_ingest_file") {
+    return ingestGithubFile({ repo: args.repo, ref: args.ref || "main", filePath: args.path });
   }
   throw new Error(`Unknown tool: ${name}`);
 }
