@@ -130,6 +130,8 @@ function rpcError(id, code, message) {
 }
 
 async function handleTool(name, args = {}) {
+  if (name === "capability_registry") return listCapabilities();
+  if (name === "plan_workflow") return buildWorkflowPlan(args);
   if (name === "cryptic_status") {
     return { runtime: "cryptic-agent-runtime", version: "0.1.0", provider: providerConfig(), ingestion: await ingestionStatus() };
   }
