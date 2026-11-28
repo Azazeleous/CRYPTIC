@@ -4,7 +4,7 @@
 
 import http from "node:http";
 import { createChatCompletion, listModels, providerConfig } from "./provider.mjs";
-import { ingestFile, ingestText, ingestionStatus } from "./ingestion.mjs";
+import { buildRepositoryManifest, ingestFile, ingestText, ingestionStatus } from "./ingestion.mjs";
 
 const host = process.env.CRYPTIC_BIND_HOST || "127.0.0.1";
 const port = Number(process.env.CRYPTIC_PORT || 8765);
@@ -43,6 +43,11 @@ const tools = [
       required: ["relative_path"],
       additionalProperties: false
     }
+  },
+  {
+    name: "build_repository_manifest",
+    description: "Build a bounded, hash-verified inventory of allowlisted repository files under CRYPTIC_INGEST_ROOT. Does not ingest file contents or follow symlinks.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
   }
 ];
 
@@ -81,6 +86,9 @@ async function handleTool(name, args = {}) {
   }
   if (name === "ingest_file") {
     return ingestFile({ relativePath: args.relative_path });
+  }
+  if (name === "build_repository_manifest") {
+    return buildRepositoryManifest();
   }
   throw new Error(`Unknown tool: ${name}`);
 }
