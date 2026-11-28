@@ -49,8 +49,20 @@ Golem compatibility client
 - `src/agent-runtime/provider.mjs`: OpenAI-compatible provider adapter; defaults to Ollama at `127.0.0.1:11434/v1` and `llama3.2:1b`.
 - `src/agent-runtime/ingestion.mjs`: bounded local repository manifest generation, text and allowlisted source-file ingestion; SHA-256 source digests; chunk records; append-only JSONL observations.\n- `src/agent-runtime/github-ingest.mjs`: read-only GitHub tree manifests and selected-file ingestion, gated by a repository allowlist and a fine-grained read-only token.
 - `src/agent-runtime/server.mjs`: local HTTP server exposing `/healthz`, `/v1/models`, `/v1/chat/completions`, and `POST /mcp`.
+- `src/agent-runtime/workflow.mjs`: typed capability registry and dependency-graph planner; validates unknown capabilities, missing dependencies, duplicate IDs and cycles. Planning is intentionally non-executing.
+- `src/agent-runtime/workflow.test.mjs`: Node test cases for registry, topological order, approval flags and invalid graphs.
 
-The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools are `cryptic_status`, `build_repository_manifest`, `github_repository_manifest`, `github_ingest_file` (requires the manifest path and `expected_blob_sha`), `ingest_file`, and `ingest_text`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
+The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools include `capability_registry` and `plan_workflow` in addition to `cryptic_status`, `build_repository_manifest`, `github_repository_manifest`, `github_ingest_file` (requires the manifest path and `expected_blob_sha`), `ingest_file`, and `ingest_text`. `plan_workflow` accepts a bounded typed DAG and returns a dependency-resolved execution order with risk/approval annotations; it does not execute any stage. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
+
+## Workflow planner checks
+
+Run the deterministic planner tests with Node.js 20 or newer:
+
+```bash
+node --test src/agent-runtime/workflow.test.mjs
+```
+
+The planner is plan-only. A future executor must separately implement adapter isolation, per-stage authorization, timeouts, idempotency, output-schema checks, checkpointing and recovery before any planned action is executable.
 
 ## Start locally
 
