@@ -47,10 +47,10 @@ Golem compatibility client
 ## Implemented in this branch
 
 - `src/agent-runtime/provider.mjs`: OpenAI-compatible provider adapter; defaults to Ollama at `127.0.0.1:11434/v1` and `llama3.2:1b`.
-- `src/agent-runtime/ingestion.mjs`: text and allowlisted source-file ingestion; SHA-256 source digest; chunk records; append-only JSONL observations.
+- `src/agent-runtime/ingestion.mjs`: bounded repository manifest generation, text and allowlisted source-file ingestion; SHA-256 source digests; chunk records; append-only JSONL observations.
 - `src/agent-runtime/server.mjs`: local HTTP server exposing `/healthz`, `/v1/models`, `/v1/chat/completions`, and `POST /mcp`.
 
-The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
+The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools are `cryptic_status`, `build_repository_manifest`, `ingest_file`, and `ingest_text`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
 
 ## Start locally
 
@@ -103,7 +103,7 @@ curl -fsS http://127.0.0.1:8765/mcp \
 
 ## Golem ingestion contract
 
-The Golem should first inspect repository structure and generate a source manifest. It may then request ingestion of individual files through `ingest_file` or submit explicitly selected text through `ingest_text`.
+The Golem should first call `build_repository_manifest`. The tool walks only the configured `CRYPTIC_INGEST_ROOT`, ignores excluded directories and secret-like names, skips symlinks and unsupported file types, enforces per-file and total-size limits, and writes a SHA-256 manifest under the local ingestion store. The returned preview exposes file paths, sizes, extensions, and digests without returning file contents. The Golem may then request ingestion of selected files through `ingest_file` or submit explicitly selected text through `ingest_text`.
 
 Each accepted source is represented by:
 - source label or repository-relative path;
