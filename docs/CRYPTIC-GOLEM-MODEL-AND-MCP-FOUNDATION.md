@@ -47,10 +47,10 @@ Golem compatibility client
 ## Implemented in this branch
 
 - `src/agent-runtime/provider.mjs`: OpenAI-compatible provider adapter; defaults to Ollama at `127.0.0.1:11434/v1` and `llama3.2:1b`.
-- `src/agent-runtime/ingestion.mjs`: bounded repository manifest generation, text and allowlisted source-file ingestion; SHA-256 source digests; chunk records; append-only JSONL observations.
+- `src/agent-runtime/ingestion.mjs`: bounded local repository manifest generation, text and allowlisted source-file ingestion; SHA-256 source digests; chunk records; append-only JSONL observations.\n- `src/agent-runtime/github-ingest.mjs`: read-only GitHub tree manifests and selected-file ingestion, gated by a repository allowlist and a fine-grained read-only token.
 - `src/agent-runtime/server.mjs`: local HTTP server exposing `/healthz`, `/v1/models`, `/v1/chat/completions`, and `POST /mcp`.
 
-The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools are `cryptic_status`, `build_repository_manifest`, `ingest_file`, and `ingest_text`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
+The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools are `cryptic_status`, `build_repository_manifest`, `github_repository_manifest`, `github_ingest_file`, `ingest_file`, and `ingest_text`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
 
 ## Start locally
 
@@ -75,7 +75,7 @@ Optional environment variables:
 | `CRYPTIC_PROVIDER_API_KEY` | empty | Provider credential, supplied only through environment |
 | `CRYPTIC_MODEL` | `llama3.2:1b` | Default model identifier |
 | `CRYPTIC_INGEST_ROOT` | current working directory | Root allowed for relative file ingestion |
-| `CRYPTIC_INGEST_DIR` | `./var/cryptic-ingest` | Local provenance ledger directory |
+| `CRYPTIC_INGEST_DIR` | `./var/cryptic-ingest` | Local provenance ledger directory |\n| `CRYPTIC_GITHUB_TOKEN` | empty | Fine-grained GitHub token with Contents: Read-only on selected repositories |\n| `CRYPTIC_GITHUB_ALLOWED_REPOS` | empty | Comma-separated exact `owner/repo` allowlist; empty means GitHub ingestion is disabled |\n| `CRYPTIC_GITHUB_MAX_FILE_BYTES` | `1048576` | Maximum selected GitHub file size |\n| `CRYPTIC_GITHUB_MANIFEST_MAX_FILES` | `2000` | Maximum manifest entries returned |
 
 Do not expose this service directly to the public internet. For remote device access, place it behind an authenticated encrypted overlay and retain application-level authorization. Do not put credentials in Git.
 
@@ -103,7 +103,7 @@ curl -fsS http://127.0.0.1:8765/mcp \
 
 ## Golem ingestion contract
 
-The Golem should first call `build_repository_manifest`. The tool walks only the configured `CRYPTIC_INGEST_ROOT`, ignores excluded directories and secret-like names, skips symlinks and unsupported file types, enforces per-file and total-size limits, and writes a SHA-256 manifest under the local ingestion store. The returned preview exposes file paths, sizes, extensions, and digests without returning file contents. The Golem may then request ingestion of selected files through `ingest_file` or submit explicitly selected text through `ingest_text`.
+The Golem should first call `github_repository_manifest` for an explicitly allowlisted GitHub repository (or `build_repository_manifest` for a local checkout). The GitHub tool reads repository tree metadata only and returns a bounded manifest with file paths, sizes, extensions, Git blob identifiers, and a manifest digest. It does not download file contents. The Golem may then request individual selected files through `github_ingest_file`; their contents are hashed and recorded through the same provenance ledger. For local checkouts, the local manifest tool skips symlinks and excluded directories. Both paths support selected-source ingestion through `ingest_file` or `ingest_text`.
 
 Each accepted source is represented by:
 - source label or repository-relative path;
@@ -113,13 +113,13 @@ Each accepted source is represented by:
 - metadata supplied by the caller;
 - exact text chunk stored in the local append-only JSONL ledger.
 
-The first version intentionally does not crawl remote repositories, execute ingested code, create embeddings, fine-tune weights, or grant permissions. Repository acquisition, indexing, embedding, training, and tool authorization are separate stages with separate evidence.
+The first version does not automatically crawl or ingest every remote repository. It can inspect an explicitly allowlisted GitHub tree, then ingest only individually selected files. It does not execute ingested code, create embeddings, fine-tune weights, or grant permissions. Repository acquisition, indexing, embedding, training, and tool authorization are separate stages with separate evidence.
 
 ## Security and trust boundaries
 
 - Default bind is loopback only.
 - Non-loopback binding is refused unless `CRYPTIC_MCP_TOKEN` is set.
-- Provider credentials are read from environment variables, never source files.
+- Provider credentials and the GitHub read token are read from environment variables, never source files.\n- GitHub ingestion is disabled unless both `CRYPTIC_GITHUB_TOKEN` and an exact `CRYPTIC_GITHUB_ALLOWED_REPOS` allowlist are configured. Use a fine-grained token with Contents: Read-only only.
 - No arbitrary shell, browser, network-fetch, or unrestricted filesystem tool is exposed.
 - File ingestion is relative to an explicit root, extension-allowlisted, size-limited, and rejects secret-like names, excluded directories, and symlink escapes.
 - Ingestion records are data, not executable instructions. Prompt injection found in source material must remain untrusted input.
@@ -129,7 +129,7 @@ The first version intentionally does not crawl remote repositories, execute inge
 ## Evolution plan
 
 1. **V1 — Runtime/API/MCP:** local model adapter, tool endpoint, provenance ingestion (this branch).
-2. **V2 — Golem repository reader:** bounded GitHub/repository manifest ingestion, revision pinning, ignore rules, and resumable checkpoints.
+2. **V2 — Golem repository reader:** bounded GitHub tree manifests and selected-file ingestion are scaffolded here; add revision-pinned resumable checkpoints, `.gitignore` parity, and signed acquisition receipts.
 3. **V3 — Knowledge index:** chunk deduplication, embedding adapter, vector/hybrid search, source citations.
 4. **V4 — Agent execution:** typed tools, policy scopes, human approval, task ledger, and recovery.
 5. **V5 — Multi-node fabric:** Termux and GAIA's Window adapters, authenticated transport, signed sync receipts.
