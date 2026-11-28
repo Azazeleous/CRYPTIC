@@ -65,8 +65,8 @@ const tools = [
     description: "Ingest one selected allowlisted GitHub text/code file with SHA-256 provenance. Requires explicit repository allowlisting and a read-only GitHub token.",
     inputSchema: {
       type: "object",
-      properties: { repo: { type: "string" }, ref: { type: "string" }, path: { type: "string" } },
-      required: ["repo", "path"],
+      properties: { repo: { type: "string" }, ref: { type: "string" }, path: { type: "string" }, expected_blob_sha: { type: "string", pattern: "^[a-fA-F0-9]{40}$" } },
+      required: ["repo", "path", "expected_blob_sha"],
       additionalProperties: false
     }
   }
@@ -115,7 +115,7 @@ async function handleTool(name, args = {}) {
     return githubRepositoryManifest({ repo: args.repo, ref: args.ref || "main" });
   }
   if (name === "github_ingest_file") {
-    return ingestGithubFile({ repo: args.repo, ref: args.ref || "main", filePath: args.path });
+    return ingestGithubFile({ repo: args.repo, ref: args.ref || "main", filePath: args.path, expectedBlobSha: args.expected_blob_sha });
   }
   throw new Error(`Unknown tool: ${name}`);
 }
