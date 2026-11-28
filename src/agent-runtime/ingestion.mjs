@@ -2,7 +2,7 @@
 // This records source material; it does NOT train or fine-tune a model.
 
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, realpath, stat, readdir, lstat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const allowedExtensions = new Set([
@@ -12,7 +12,7 @@ const allowedExtensions = new Set([
 ]);
 const blockedSegments = new Set([
   ".git", "node_modules", ".venv", "venv", ".next", "dist",
-  "secrets", "credentials", "private", "vendor"
+  "secrets", "credentials", "private", "vendor", "cryptic-ingest"
 ]);
 const blockedNames = /(^\.env($|\.)|(^|\.)id_rsa$|\.pem$|\.p12$|\.pfx$|\.key$|secret|credential|token|password)/i;
 const maxFileBytes = Number(process.env.CRYPTIC_INGEST_MAX_FILE_BYTES || 1048576);
@@ -107,6 +107,105 @@ export async function ingestFile({ relativePath }) {
     mediaType: extension,
     metadata: { relative_path: actualRelative.split(path.sep).join("/"), bytes: info.size }
   });
+}
+
+
+export async function buildRepositoryManifest({ maxFiles = 5000, maxTotalBytes = 104857600 } = {}) {
+  const root = await realpath(rootPath());
+  const entries = [];
+  const skipped = { excluded_path: 0, unsupported_type: 0, unsupported_extension: 0, oversized: 0, unreadable: 0 };
+  let totalBytes = 0;
+  let truncated = false;
+
+  async function walk(directory) {
+    if (entries.length >= maxFiles || totalBytes >= maxTotalBytes) {
+      truncated = true;
+      return;
+    }
+    let children;
+    try { children = await readdir(directory, { withFileTypes: true }); }
+    catch { skipped.unreadable++; return; }
+
+    children.sort((a, b) => a.name.localeCompare(b.name));
+    for (const child of children) {
+      if (entries.length >= maxFiles || totalBytes >= maxTotalBytes) {
+        truncated = true;
+        break;
+      }
+      if (blockedSegments.has(child.name.toLowerCase()) || blockedNames.test(child.name)) {
+        skipped.excluded_path++;
+        continue;
+      }
+      const absolute = path.join(directory, child.name);
+      let info;
+      try { info = await lstat(absolute); }
+      catch { skipped.unreadable++; continue; }
+      if (info.isSymbolicLink()) {
+        skipped.excluded_path++;
+        continue;
+      }
+      if (info.isDirectory()) {
+        await walk(absolute);
+        continue;
+      }
+      if (!info.isFile()) {
+        skipped.unsupported_type++;
+        continue;
+      }
+      const extension = path.extname(child.name).toLowerCase();
+      if (!allowedExtensions.has(extension)) {
+        skipped.unsupported_extension++;
+        continue;
+      }
+      if (info.size > maxFileBytes || totalBytes + info.size > maxTotalBytes) {
+        skipped.oversized++;
+        continue;
+      }
+      try {
+        const content = await readFile(absolute);
+        const relativePath = path.relative(root, absolute).split(path.sep).join("/");
+        entries.push({
+          path: relativePath,
+          bytes: info.size,
+          sha256: createHash("sha256").update(content).digest("hex"),
+          extension,
+          modified_at: info.mtime.toISOString()
+        });
+        totalBytes += info.size;
+      } catch {
+        skipped.unreadable++;
+      }
+    }
+  }
+
+  await walk(root);
+  entries.sort((a, b) => a.path.localeCompare(b.path));
+  const createdAt = new Date().toISOString();
+  const canonical = JSON.stringify(entries);
+  const manifest = {
+    schema: "cryptic.repository-manifest.v1",
+    created_at: createdAt,
+    root_label: path.basename(root),
+    file_count: entries.length,
+    total_bytes: totalBytes,
+    truncated,
+    skipped,
+    entries,
+    manifest_sha256: digest(canonical)
+  };
+  await mkdir(storePath(), { recursive: true });
+  const destination = path.join(storePath(), "repository-manifest.json");
+  await writeFile(destination, JSON.stringify(manifest, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  return {
+    created: true,
+    manifest: destination,
+    manifest_sha256: manifest.manifest_sha256,
+    file_count: manifest.file_count,
+    total_bytes: manifest.total_bytes,
+    truncated: manifest.truncated,
+    skipped: manifest.skipped,
+    preview: entries.slice(0, 20)
+  };
 }
 
 export async function ingestionStatus() {
