@@ -1,0 +1,30 @@
+name: CRYPTIC Golem Planner Tests
+on:
+  push:
+    branches: ["feat/golem-mcp-runtime-v1"]
+    paths:
+      - "src/agent-runtime/**"
+      - "docs/CRYPTIC-GOLEM-MODEL-AND-MCP-FOUNDATION.md"
+      - ".github/workflows/golem-planner-tests.yml"
+  pull_request:
+    paths:
+      - "src/agent-runtime/**"
+      - ".github/workflows/golem-planner-tests.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  planner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Syntax check
+        run: |
+          node --check src/agent-runtime/workflow.mjs
+          node --check src/agent-runtime/server.mjs
+      - name: Planner tests
+        run: node --test src/agent-runtime/workflow.test.mjs
