@@ -75,8 +75,11 @@ async function githubRequest(url, accept = "application/vnd.github+json") {
 export async function githubRepositoryManifest({ repo, ref = "main" }) {
   repo = validateRepo(repo);
   if (typeof ref !== "string" || !ref.trim() || ref.length > 200) throw new Error("ref is invalid");
-  const url = `https://api.github.com/repos/${repo}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
-  const response = await githubRequest(url);
+  const commitResponse = await githubRequest(`https://api.github.com/repos/${repo}/commits/${encodeURIComponent(ref)}`);
+  const commit = await commitResponse.json();
+  const treeSha = commit.commit?.tree?.sha;
+  if (!treeSha) throw new Error("GitHub commit response did not include a tree SHA");
+  const response = await githubRequest(`https://api.github.com/repos/${repo}/git/trees/${treeSha}?recursive=1`);
   const tree = await response.json();
   const entries = [];
   const skipped = { excluded_path: 0, unsupported_type: 0, unsupported_extension: 0, oversized: 0 };
@@ -94,7 +97,7 @@ export async function githubRepositoryManifest({ repo, ref = "main" }) {
     if (entries.length >= maxFiles) break;
   }
   entries.sort((a, b) => a.path.localeCompare(b.path));
-  const canonical = JSON.stringify({ repo, ref, tree_sha: tree.sha, entries });
+  const canonical = JSON.stringify({ repo, ref, commit_sha: commit.sha, tree_sha: tree.sha, entries });
   return {
     schema: "cryptic.github-repository-manifest.v1",
     repo,
