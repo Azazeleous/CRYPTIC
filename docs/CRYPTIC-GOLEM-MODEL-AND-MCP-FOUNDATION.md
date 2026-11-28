@@ -50,7 +50,7 @@ Golem compatibility client
 - `src/agent-runtime/ingestion.mjs`: bounded local repository manifest generation, text and allowlisted source-file ingestion; SHA-256 source digests; chunk records; append-only JSONL observations.\n- `src/agent-runtime/github-ingest.mjs`: read-only GitHub tree manifests and selected-file ingestion, gated by a repository allowlist and a fine-grained read-only token.
 - `src/agent-runtime/server.mjs`: local HTTP server exposing `/healthz`, `/v1/models`, `/v1/chat/completions`, and `POST /mcp`.
 
-The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools are `cryptic_status`, `build_repository_manifest`, `github_repository_manifest`, `github_ingest_file`, `ingest_file`, and `ingest_text`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
+The MCP endpoint implements a deliberately small stateless JSON-RPC tool profile: `initialize`, `ping`, `tools/list`, and `tools/call`. Its tools are `cryptic_status`, `build_repository_manifest`, `github_repository_manifest`, `github_ingest_file` (requires the manifest path and `expected_blob_sha`), `ingest_file`, and `ingest_text`. It does not claim support for MCP resources, prompts, SSE streaming, session resumption, or the complete SDK feature set. Adopt the official MCP SDK when those features become requirements.
 
 ## Start locally
 
@@ -103,7 +103,7 @@ curl -fsS http://127.0.0.1:8765/mcp \
 
 ## Golem ingestion contract
 
-The Golem should first call `github_repository_manifest` for an explicitly allowlisted GitHub repository (or `build_repository_manifest` for a local checkout). The GitHub tool reads repository tree metadata only and returns a bounded manifest with file paths, sizes, extensions, Git blob identifiers, and a manifest digest. It does not download file contents. The Golem may then request individual selected files through `github_ingest_file`; their contents are hashed and recorded through the same provenance ledger. For local checkouts, the local manifest tool skips symlinks and excluded directories. Both paths support selected-source ingestion through `ingest_file` or `ingest_text`.
+The Golem should first call `github_repository_manifest` for an explicitly allowlisted GitHub repository (or `build_repository_manifest` for a local checkout). The GitHub tool reads repository tree metadata only and returns a bounded manifest with file paths, sizes, extensions, Git blob identifiers, and a manifest digest. It does not download file contents. The Golem may then request individual selected files through `github_ingest_file`, passing the `git_blob_sha` returned by the manifest. The adapter fetches that immutable Git blob, independently verifies its Git SHA-1 object identifier, then computes the SHA-256 content digest in the shared provenance ledger. This prevents a branch moving between manifest creation and file retrieval from silently changing the selected source. For local checkouts, the local manifest tool skips symlinks and excluded directories. Both paths support selected-source ingestion through `ingest_file` or `ingest_text`.
 
 Each accepted source is represented by:
 - source label or repository-relative path;
