@@ -109,18 +109,33 @@ export async function githubRepositoryManifest({ repo, ref = "main" }) {
   };
 }
 
-export async function ingestGithubFile({ repo, ref = "main", filePath }) {
+export async function ingestGithubFile({ repo, ref = "main", filePath, expectedBlobSha }) {
   repo = validateRepo(repo);
   const safePath = validatePath(filePath);
   if (typeof ref !== "string" || !ref.trim() || ref.length > 200) throw new Error("ref is invalid");
-  const encodedPath = safePath.split("/").map(encodeURIComponent).join("/");
-  const url = `https://api.github.com/repos/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
-  const response = await githubRequest(url, "application/vnd.github.raw");
-  const content = await response.text();
-  if (Buffer.byteLength(content, "utf8") > maxFileBytes) throw new Error("GitHub source exceeds configured ingestion size limit");
+  if (typeof expectedBlobSha !== "string" || !/^[a-f0-9]{40}$/i.test(expectedBlobSha)) {
+    throw new Error("expected_blob_sha from github_repository_manifest is required");
+  }
+
+  // Fetch by immutable Git blob SHA, not by a moving branch path.
+  const url = `https://api.github.com/repos/${repo}/git/blobs/${expectedBlobSha}`;
+  const response = await githubRequest(url);
+  const blob = await response.json();
+  if (blob.encoding !== "base64" || typeof blob.content !== "string") {
+    throw new Error("GitHub returned an unsupported blob encoding");
+  }
+  const bytes = Buffer.from(blob.content.replace(/\\s/g, ""), "base64");
+  if (bytes.length > maxFileBytes) throw new Error("GitHub source exceeds configured ingestion size limit");
+  const gitBlobSha = createHash("sha1")
+    .update(Buffer.concat([Buffer.from(`blob ${bytes.length}\\0`), bytes]))
+    .digest("hex");
+  if (gitBlobSha.toLowerCase() !== expectedBlobSha.toLowerCase()) {
+    throw new Error("Git blob integrity check failed");
+  }
+  const content = bytes.toString("utf8");
   return ingestText({
     text: content,
-    source: `github:${repo}@${ref}:${safePath}`,
-    metadata: { repository: repo, ref, path: safePath, source: "github-contents-api" }
+    source: `github:${repo}@blob:${gitBlobSha}:${safePath}`,
+    metadata: { repository: repo, ref, path: safePath, git_blob_sha: gitBlobSha, source: "github-git-blobs-api", integrity_verified: true }
   });
 }
