@@ -6,6 +6,7 @@ import http from "node:http";
 import { createChatCompletion, listModels, providerConfig } from "./provider.mjs";
 import { buildRepositoryManifest, ingestFile, ingestText, ingestionStatus } from "./ingestion.mjs";
 import { githubRepositoryManifest, ingestGithubFile } from "./github-ingest.mjs";
+import { buildWorkflowPlan, listCapabilities } from "./workflow.mjs";
 
 const host = process.env.CRYPTIC_BIND_HOST || "127.0.0.1";
 const port = Number(process.env.CRYPTIC_PORT || 8765);
@@ -16,6 +17,36 @@ if (!isLoopback && !token) {
 }
 
 const tools = [
+  {
+    name: "capability_registry",
+    description: "List registered Golem capabilities and their risk classes. This does not execute them.",
+    inputSchema: { type: "object", properties: {}, additionalProperties: false }
+  },
+  {
+    name: "plan_workflow",
+    description: "Validate a bounded typed workflow DAG, resolve dependencies, and return an execution order. Planning only; no stages are executed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        steps: {
+          type: "array", minItems: 1, maxItems: 64,
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string", minLength: 1, maxLength: 64 },
+              capability: { type: "string", minLength: 1, maxLength: 100 },
+              depends_on: { type: "array", items: { type: "string" }, maxItems: 64 },
+              inputs: { type: "object" }
+            },
+            required: ["id", "capability"],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ["steps"],
+      additionalProperties: false
+    }
+  },
   {
     name: "cryptic_status",
     description: "Return runtime/provider configuration and local ingestion ledger status. Does not expose secrets.",
